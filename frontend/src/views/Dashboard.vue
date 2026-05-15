@@ -1,77 +1,82 @@
 <template>
-  <div class="page-container">
-    <div class="summary-cards">
-      <div class="glass-card stat-card" v-for="card in summaryCards" :key="card.label">
-        <div class="stat-icon" :style="{ background: card.bgColor }">
-          <el-icon :size="24" :color="card.color"><component :is="card.icon" /></el-icon>
-        </div>
-        <div class="stat-info">
-          <div class="stat-value" :style="{ color: card.color }">{{ card.value }}</div>
-          <div class="stat-label">{{ card.label }}</div>
-        </div>
-      </div>
-    </div>
+  <div class="page-container dashboard">
+    <header class="page-head rise rise-1">
+      <h1>今日盘面</h1>
+      <p class="dek">综合评分、北向资金与板块轮动一览</p>
+    </header>
 
-    <div class="main-grid">
-      <div class="glass-card top-stocks-card">
-        <div class="card-header">
-          <h3>Top 10 高分股票</h3>
-          <el-button text type="primary" @click="$router.push('/screener')">查看全部</el-button>
-        </div>
-        <el-table :data="topStocks" stripe style="width: 100%" @row-click="goStock"
-          :row-style="{ cursor: 'pointer' }" size="small">
-          <el-table-column type="index" label="#" width="50" />
-          <el-table-column prop="name" label="名称" width="100">
-            <template #default="{ row }">
-              <span class="stock-name">{{ row.name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="code" label="代码" width="80" />
-          <el-table-column prop="industry" label="行业" width="100" />
-          <el-table-column prop="price" label="最新价" width="80" align="right">
-            <template #default="{ row }">
-              <span :class="row.change >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="changePercent" label="涨跌幅" width="80" align="right">
-            <template #default="{ row }">
-              <span :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
-                {{ row.changePercent >= 0 ? '+' : '' }}{{ row.changePercent }}%
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="compositeScore" label="综合分" width="80" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.compositeScore >= 80 ? 'success' : row.compositeScore >= 60 ? 'warning' : 'danger'" size="small" effect="dark">
-                {{ row.compositeScore }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="信号" width="70" align="center">
-            <template #default="{ row }">
-              <span v-if="row.signal === 'bullish'" class="signal bullish">看多</span>
-              <span v-else-if="row.signal === 'bearish'" class="signal bearish">看空</span>
-              <span v-else class="signal neutral">中性</span>
-            </template>
-          </el-table-column>
-        </el-table>
+    <section class="stats rise rise-2">
+      <div class="stat-card" v-for="card in summaryCards" :key="card.label">
+        <div class="stat-label">{{ card.label }}</div>
+        <div class="stat-value num" :class="card.cls">{{ card.value }}</div>
+        <div class="stat-foot">{{ card.foot }}</div>
       </div>
+    </section>
 
-      <div class="side-charts">
-        <div class="glass-card chart-card">
-          <div class="card-header">
-            <h3>北向资金流向</h3>
+    <section class="main-grid">
+      <article class="card top-card rise rise-3">
+        <header class="card-head">
+          <div>
+            <h3>高分股票</h3>
+            <p class="card-sub">综合评分排名前列</p>
           </div>
-          <div ref="northboundChartRef" style="height: 220px;"></div>
+          <button class="link-btn" @click="$router.push('/screener')">查看全部 →</button>
+        </header>
+
+        <div class="table-wrap">
+          <table class="t-table">
+            <thead>
+              <tr>
+                <th class="t-rank">#</th>
+                <th>名称</th>
+                <th>代码</th>
+                <th>行业</th>
+                <th class="t-right">最新价</th>
+                <th class="t-right">涨跌幅</th>
+                <th class="t-center">评分</th>
+                <th class="t-center">信号</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in topStocks" :key="row.code" class="row" @click="goStock(row)">
+                <td class="t-rank num">{{ i + 1 }}</td>
+                <td><span class="stock-name">{{ row.name }}</span></td>
+                <td class="mono dim">{{ row.code }}</td>
+                <td class="dim">{{ row.industry }}</td>
+                <td class="t-right num" :class="row.change >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
+                <td class="t-right num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
+                  {{ row.changePercent >= 0 ? '+' : '' }}{{ row.changePercent }}%
+                </td>
+                <td class="t-center">
+                  <span class="score-pill" :class="scoreCls(row.compositeScore)">{{ row.compositeScore }}</span>
+                </td>
+                <td class="t-center">
+                  <span class="sig" :class="row.signal">{{ sigText(row.signal) }}</span>
+                </td>
+              </tr>
+              <tr v-if="!topStocks.length">
+                <td colspan="8" class="empty">暂无数据 · 请确认后端服务已启动</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <div class="glass-card chart-card">
-          <div class="card-header">
-            <h3>板块轮动</h3>
-          </div>
-          <div ref="sectorChartRef" style="height: 220px;"></div>
+      </article>
+
+      <aside class="side-stack">
+        <div class="card chart-card rise rise-3">
+          <header class="card-head compact">
+            <h3>北向资金</h3>
+          </header>
+          <div ref="northboundChartRef" style="height: 200px;"></div>
         </div>
-      </div>
-    </div>
+        <div class="card chart-card rise rise-4">
+          <header class="card-head compact">
+            <h3>板块涨跌</h3>
+          </header>
+          <div ref="sectorChartRef" style="height: 240px;"></div>
+        </div>
+      </aside>
+    </section>
   </div>
 </template>
 
@@ -86,41 +91,70 @@ const marketStore = useMarketStore()
 
 const northboundChartRef = ref<HTMLElement>()
 const sectorChartRef = ref<HTMLElement>()
-
 const topStocks = computed(() => marketStore.topStocks || [])
 
 const summaryCards = computed(() => {
-  const s = marketStore.summary
+  const s: any = marketStore.summary
   return [
-    { label: '上涨', value: s?.upCount ?? '--', icon: 'Top', color: '#FF4757', bgColor: 'rgba(255,71,87,0.1)' },
-    { label: '下跌', value: s?.downCount ?? '--', icon: 'Bottom', color: '#2AE8A4', bgColor: 'rgba(42,232,164,0.1)' },
-    { label: '北向净流入', value: s ? (s.northboundFlow / 10000).toFixed(1) + '亿' : '--', icon: 'Guide', color: '#00D4FF', bgColor: 'rgba(0,212,255,0.1)' },
-    { label: '热门板块', value: s?.hotSectors?.[0]?.name ?? '--', icon: 'TrendCharts', color: '#FFC312', bgColor: 'rgba(255,195,18,0.1)' },
+    { label: '上涨家数', foot: '相对前一交易日', value: s?.upCount ?? '—', cls: 'price-up' },
+    { label: '下跌家数', foot: '相对前一交易日', value: s?.downCount ?? '—', cls: 'price-down' },
+    { label: '北向净流入 (亿)', foot: '当日合计',
+      value: s ? (s.northboundFlow / 10000).toFixed(1) : '—',
+      cls: s && s.northboundFlow >= 0 ? 'price-up' : 'price-down' },
+    { label: '领涨板块', foot: '日涨幅第一', value: s?.hotSectors?.[0]?.name ?? '—', cls: '' },
   ]
 })
 
-function goStock(row: any) {
-  router.push(`/stock/${row.code}`)
+function goStock(row: any) { router.push(`/stock/${row.code}`) }
+function sigText(s: string) {
+  return s === 'bullish' ? '看多' : s === 'bearish' ? '看空' : '中性'
+}
+function scoreCls(s: number) {
+  if (s >= 80) return 'high'
+  if (s >= 60) return 'mid'
+  return 'low'
+}
+
+function chartTokens() {
+  const cs = getComputedStyle(document.documentElement)
+  return {
+    text: cs.getPropertyValue('--text').trim(),
+    text3: cs.getPropertyValue('--text-3').trim(),
+    line: cs.getPropertyValue('--line').trim(),
+    up: cs.getPropertyValue('--up').trim(),
+    down: cs.getPropertyValue('--down').trim(),
+    bg: cs.getPropertyValue('--surface').trim(),
+  }
 }
 
 onMounted(async () => {
   await marketStore.fetchAll()
   nextTick(() => {
+    const t = chartTokens()
     if (northboundChartRef.value && marketStore.northboundFlow.length) {
       const chart = echarts.init(northboundChartRef.value)
       chart.setOption({
         backgroundColor: 'transparent',
-        grid: { left: 50, right: 20, top: 20, bottom: 30 },
-        xAxis: { type: 'category', data: marketStore.northboundFlow.map((d: any) => d.date), axisLabel: { color: '#8892A4', fontSize: 10 }, axisLine: { lineStyle: { color: '#2A3A4A' } } },
-        yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(42,58,74,0.3)' } }, axisLabel: { color: '#8892A4', fontSize: 10 } },
+        textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
+        grid: { left: 48, right: 12, top: 12, bottom: 24 },
+        xAxis: { type: 'category', data: marketStore.northboundFlow.map((d: any) => d.date),
+          axisLabel: { color: t.text3, fontSize: 10 },
+          axisLine: { lineStyle: { color: t.line } },
+          axisTick: { show: false } },
+        yAxis: { type: 'value',
+          splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
+          axisLabel: { color: t.text3, fontSize: 10 },
+          axisLine: { show: false }, axisTick: { show: false } },
         series: [{
           type: 'bar',
           data: marketStore.northboundFlow.map((d: any) => ({
             value: d.netFlow,
-            itemStyle: { color: d.netFlow >= 0 ? '#FF4757' : '#2AE8A4' },
+            itemStyle: { color: d.netFlow >= 0 ? t.up : t.down, borderRadius: [3, 3, 0, 0] },
           })),
+          barWidth: '60%',
         }],
-        tooltip: { trigger: 'axis', backgroundColor: 'rgba(15,32,53,0.95)', borderColor: 'rgba(0,212,255,0.2)', textStyle: { color: '#E8EDF3' } },
+        tooltip: { trigger: 'axis', backgroundColor: t.bg,
+          borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
       })
     }
     if (sectorChartRef.value && marketStore.sectors.length) {
@@ -128,21 +162,29 @@ onMounted(async () => {
       const sorted = [...marketStore.sectors].sort((a, b) => b.change - a.change).slice(0, 10)
       chart.setOption({
         backgroundColor: 'transparent',
-        grid: { left: 80, right: 30, top: 10, bottom: 20 },
-        xAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(42,58,74,0.3)' } }, axisLabel: { color: '#8892A4', fontSize: 10 } },
-        yAxis: { type: 'category', data: sorted.map(s => s.name).reverse(), axisLabel: { color: '#8892A4', fontSize: 11 } },
+        textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
+        grid: { left: 80, right: 24, top: 8, bottom: 16 },
+        xAxis: { type: 'value',
+          splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
+          axisLabel: { color: t.text3, fontSize: 10 },
+          axisLine: { show: false }, axisTick: { show: false } },
+        yAxis: { type: 'category', data: sorted.map(s => s.name).reverse(),
+          axisLabel: { color: t.text, fontSize: 12 },
+          axisLine: { show: false }, axisTick: { show: false } },
         series: [{
           type: 'bar',
           data: sorted.map(s => s.change).reverse(),
           itemStyle: {
             color: (params: any) => {
               const val = sorted[sorted.length - 1 - params.dataIndex]?.change || 0
-              return val >= 0 ? '#FF4757' : '#2AE8A4'
+              return val >= 0 ? t.up : t.down
             },
+            borderRadius: [0, 3, 3, 0],
           },
-          barWidth: 14,
+          barWidth: 12,
         }],
-        tooltip: { trigger: 'axis', backgroundColor: 'rgba(15,32,53,0.95)', borderColor: 'rgba(0,212,255,0.2)', textStyle: { color: '#E8EDF3' } },
+        tooltip: { trigger: 'axis', backgroundColor: t.bg,
+          borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
       })
     }
   })
@@ -150,79 +192,133 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.summary-cards {
+.page-head { margin-bottom: 18px; }
+.page-head h1 { font-size: 22px; font-weight: 600; }
+.page-head .dek { margin-top: 4px; color: var(--text-3); font-size: 13px; }
+
+.stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 .stat-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 20px;
-}
-.stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
 }
 .stat-label {
   font-size: 13px;
-  color: var(--text-muted);
-  margin-top: 2px;
+  color: var(--text-3);
 }
+.stat-value {
+  font-size: 26px;
+  font-weight: 600;
+  margin-top: 6px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.stat-foot {
+  font-size: 12px;
+  color: var(--text-4);
+  margin-top: 4px;
+}
+
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: 1fr 340px;
   gap: 16px;
 }
-.top-stocks-card {
-  padding: 20px;
+
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px 8px;
 }
-.card-header {
+.card-head {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
 }
-.card-header h3 {
-  font-size: 16px;
-  color: var(--text-primary);
-  margin: 0;
+.card-head.compact { margin-bottom: 8px; }
+.card-head h3 { font-size: 16px; font-weight: 600; }
+.card-sub { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+
+.link-btn {
+  background: transparent;
+  border: 0;
+  color: var(--brand);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
 }
-.stock-name {
-  font-weight: 600;
-  color: var(--text-primary);
+.link-btn:hover { color: var(--brand-press); }
+
+.table-wrap { margin: 0 -8px; }
+.t-table {
+  width: 100%;
+  border-collapse: collapse;
 }
-.signal {
+.t-table th {
+  text-align: left;
+  font-weight: 500;
   font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 600;
+  color: var(--text-3);
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
 }
-.signal.bullish { background: rgba(255,71,87,0.15); color: #FF4757; }
-.signal.bearish { background: rgba(42,232,164,0.15); color: #2AE8A4; }
-.signal.neutral { background: rgba(136,146,164,0.15); color: #8892A4; }
-.side-charts {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.t-table td {
+  padding: 13px 8px;
+  font-size: 14px;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--line);
 }
-.chart-card {
-  padding: 16px;
+.t-table tbody tr:last-child td { border-bottom: 0; }
+.row { cursor: pointer; transition: background 0.15s ease; }
+.row:hover { background: var(--surface-hover); }
+.t-rank { width: 28px; color: var(--text-4); }
+.t-right { text-align: right; }
+.t-center { text-align: center; }
+.stock-name { font-weight: 500; color: var(--text); }
+.dim { color: var(--text-3); font-size: 13px; }
+
+.score-pill {
+  display: inline-block;
+  font-size: 12px; font-weight: 600;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
 }
-@media (max-width: 1200px) {
+.score-pill.high { background: var(--brand-soft); color: var(--brand); }
+.score-pill.mid  { background: var(--warn-soft); color: #B88800; }
+.score-pill.low  { background: var(--up-soft); color: var(--up); }
+
+.sig {
+  font-size: 12px; font-weight: 500;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+}
+.sig.bullish { background: var(--up-soft); color: var(--up); }
+.sig.bearish { background: var(--down-soft); color: var(--down); }
+.sig.neutral { background: var(--surface-2); color: var(--text-3); }
+
+.empty {
+  text-align: center; padding: 60px 0 !important;
+  color: var(--text-4) !important;
+  font-size: 13px;
+}
+
+.side-stack { display: flex; flex-direction: column; gap: 16px; }
+.chart-card { padding: 16px 18px; }
+
+@media (max-width: 1100px) {
   .main-grid { grid-template-columns: 1fr; }
-  .summary-cards { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 700px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

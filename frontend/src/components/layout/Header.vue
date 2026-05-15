@@ -1,53 +1,53 @@
 <template>
-  <div class="app-header">
-    <div class="header-left">
-      <el-button class="collapse-btn" text @click="$emit('toggle-sidebar')">
-        <el-icon :size="20"><Fold /></el-icon>
-      </el-button>
+  <header class="app-header">
+    <div class="left">
+      <button class="ghost-btn" @click="$emit('toggle-sidebar')" aria-label="toggle">
+        <el-icon :size="18"><Fold /></el-icon>
+      </button>
 
       <el-autocomplete
         v-model="searchText"
         :fetch-suggestions="querySearch"
-        placeholder="搜索股票代码或名称..."
+        placeholder="搜索股票代码或名称"
         class="search-input"
         @select="handleSelect"
         clearable
       >
-        <template #prefix>
-          <el-icon><Search /></el-icon>
-        </template>
+        <template #prefix><el-icon><Search /></el-icon></template>
       </el-autocomplete>
     </div>
 
-    <div class="header-right">
-      <div class="market-indicator" v-if="marketStore.summary">
-        <span class="indicator-item">
-          <span class="label">涨</span>
-          <span class="value price-up">{{ marketStore.summary.upCount }}</span>
+    <div class="right">
+      <div class="market-pill" v-if="marketStore.summary">
+        <span class="pill-item">
+          <span class="pill-dot up"></span>
+          <span class="pill-label">涨</span>
+          <span class="pill-val num">{{ marketStore.summary.upCount }}</span>
         </span>
-        <span class="indicator-item">
-          <span class="label">跌</span>
-          <span class="value price-down">{{ marketStore.summary.downCount }}</span>
+        <span class="pill-sep"></span>
+        <span class="pill-item">
+          <span class="pill-dot down"></span>
+          <span class="pill-label">跌</span>
+          <span class="pill-val num">{{ marketStore.summary.downCount }}</span>
         </span>
-        <span class="indicator-item">
-          <span class="label">北向</span>
-          <span class="value" :class="marketStore.summary.northboundFlow >= 0 ? 'price-up' : 'price-down'">
+        <span class="pill-sep"></span>
+        <span class="pill-item">
+          <span class="pill-label">北向</span>
+          <span class="pill-val num" :class="marketStore.summary.northboundFlow >= 0 ? 'price-up' : 'price-down'">
             {{ formatFlow(marketStore.summary.northboundFlow) }}
           </span>
         </span>
       </div>
 
-      <el-tooltip content="刷新数据" placement="bottom">
-        <el-button class="action-btn" text :loading="refreshing" @click="refreshData">
-          <el-icon :size="18"><Refresh /></el-icon>
-        </el-button>
+      <el-tooltip content="刷新" placement="bottom">
+        <button class="ghost-btn" :disabled="refreshing" @click="refreshData">
+          <el-icon :size="16" :class="{ spinning: refreshing }"><Refresh /></el-icon>
+        </button>
       </el-tooltip>
 
       <el-dropdown trigger="click" v-if="userStore.isLoggedIn">
-        <div class="user-avatar">
-          <el-avatar :size="32" :src="userStore.userInfo?.avatar">
-            {{ userStore.userInfo?.nickname?.[0] || 'U' }}
-          </el-avatar>
+        <div class="user-chip">
+          <div class="avatar">{{ userStore.userInfo?.nickname?.[0] || 'U' }}</div>
         </div>
         <template #dropdown>
           <el-dropdown-menu>
@@ -62,7 +62,7 @@
       </el-dropdown>
       <el-button v-else type="primary" size="small" @click="$router.push('/login')">登录</el-button>
     </div>
-  </div>
+  </header>
 </template>
 
 <script setup lang="ts">
@@ -82,35 +82,20 @@ const searchText = ref('')
 const refreshing = ref(false)
 
 async function querySearch(query: string, cb: Function) {
-  if (!query || query.length < 1) {
-    cb([])
-    return
-  }
+  if (!query || query.length < 1) { cb([]); return }
   try {
     const results = await searchStock(query)
-    cb(results.map((r: any) => ({
-      value: `${r.code} ${r.name}`,
-      code: r.code,
-    })))
-  } catch {
-    cb([])
-  }
+    cb(results.map((r: any) => ({ value: `${r.code} ${r.name}`, code: r.code })))
+  } catch { cb([]) }
 }
 
 function handleSelect(item: any) {
-  if (item.code) {
-    router.push(`/stock/${item.code}`)
-    searchText.value = ''
-  }
+  if (item.code) { router.push(`/stock/${item.code}`); searchText.value = '' }
 }
 
 async function refreshData() {
   refreshing.value = true
-  try {
-    await marketStore.fetchAll()
-  } finally {
-    refreshing.value = false
-  }
+  try { await marketStore.fetchAll() } finally { refreshing.value = false }
 }
 
 function handleLogout() {
@@ -127,69 +112,70 @@ function formatFlow(val: number) {
 <style scoped>
 .app-header {
   height: var(--header-height);
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--glass-border);
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
+  gap: 16px;
   flex-shrink: 0;
 }
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+.search-input { width: 320px; max-width: 100%; }
+
+.right { display: flex; align-items: center; gap: 12px; }
+
+.market-pill {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-2);
 }
-.collapse-btn {
-  color: var(--text-secondary);
+.pill-item { display: flex; align-items: center; gap: 6px; }
+.pill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
 }
-.collapse-btn:hover {
-  color: var(--accent-cyan);
+.pill-dot.up { background: var(--up); }
+.pill-dot.down { background: var(--down); }
+.pill-label { color: var(--text-3); font-size: 12px; }
+.pill-val { font-weight: 600; }
+.pill-sep {
+  width: 1px; height: 12px;
+  background: var(--line-strong);
 }
-.search-input {
-  width: 320px;
-}
-.search-input :deep(.el-input__wrapper) {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--glass-border);
+
+.ghost-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  width: 32px; height: 32px;
   border-radius: 8px;
-  box-shadow: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.search-input :deep(.el-input__wrapper:hover),
-.search-input :deep(.el-input__wrapper.is-focus) {
-  border-color: var(--accent-cyan-dim);
-}
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.market-indicator {
-  display: flex;
-  gap: 16px;
+.ghost-btn:hover { color: var(--text); background: var(--surface-hover); }
+.ghost-btn:disabled { opacity: 0.5; cursor: wait; }
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.user-chip { cursor: pointer; }
+.avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #FFFFFF;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600;
   font-size: 13px;
 }
-.indicator-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.indicator-item .label {
-  color: var(--text-muted);
-}
-.indicator-item .value {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.action-btn {
-  color: var(--text-secondary);
-}
-.action-btn:hover {
-  color: var(--accent-cyan);
-}
-.user-avatar {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
+
+@media (max-width: 900px) {
+  .market-pill { display: none; }
+  .search-input { width: 180px; }
 }
 </style>

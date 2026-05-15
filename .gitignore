@@ -47,3 +47,6 @@ data-service/data-service.log
 # Docker
 mysql_data/
 redis_data/
+
+# Claude Code
+.claude/

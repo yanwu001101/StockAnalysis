@@ -1,128 +1,351 @@
-/* Deep Tech Blue Theme */
-:root {
-  --bg-primary: #0A1628;
-  --bg-secondary: #0F2035;
-  --bg-tertiary: #152A42;
-  --bg-card: rgba(15, 32, 53, 0.85);
-  --bg-card-hover: rgba(20, 40, 65, 0.95);
+/* =====================================================================
+   微信简约风 · WeChat-style minimal
+   - Soft neutral surfaces, gentle rounded corners
+   - WeChat green accent (#07C160), single committed color
+   - Light & dark via prefers-color-scheme; manual override via
+     <html data-theme="light|dark|auto"> (default auto)
+   - System font stack — no decorative web fonts
+   ===================================================================== */
 
-  --accent-cyan: #00D4FF;
-  --accent-cyan-dim: rgba(0, 212, 255, 0.6);
-  --accent-green: #2AE8A4;
-  --accent-green-dim: rgba(42, 232, 164, 0.6);
-  --accent-red: #FF4757;
-  --accent-red-dim: rgba(255, 71, 87, 0.6);
-  --accent-yellow: #FFC312;
-  --accent-purple: #A78BFA;
-  --accent-orange: #FF9F43;
+:root, :root[data-theme="light"] {
+  /* — Surface — */
+  --bg:           #EDEDED;   /* WeChat chat-list bg */
+  --bg-2:         #F7F7F7;
+  --surface:      #FFFFFF;
+  --surface-2:    #FAFAFA;
+  --surface-hover:#F3F3F3;
 
-  --text-primary: #E8EDF3;
-  --text-secondary: #8892A4;
-  --text-muted: #5A6577;
+  /* — Text — */
+  --text:         #191919;
+  --text-2:       #353535;
+  --text-3:       #888888;
+  --text-4:       #B2B2B2;
 
-  --glass-border: rgba(0, 212, 255, 0.12);
-  --glass-border-hover: rgba(0, 212, 255, 0.25);
+  /* — Lines — */
+  --line:         #E5E5E5;
+  --line-strong:  #D9D9D9;
 
-  --glow-cyan: 0 0 20px rgba(0, 212, 255, 0.15);
-  --glow-cyan-strong: 0 0 30px rgba(0, 212, 255, 0.3);
-  --glow-green: 0 0 15px rgba(42, 232, 164, 0.15);
-  --glow-red: 0 0 15px rgba(255, 71, 87, 0.15);
+  /* — Accent (WeChat green) — */
+  --brand:        #07C160;
+  --brand-press:  #06AD56;
+  --brand-soft:   rgba(7, 193, 96, 0.12);
 
+  /* — Semantic — */
+  --up:           #FA5151;   /* A-share: red up */
+  --up-soft:      rgba(250, 81, 81, 0.10);
+  --down:         #07C160;   /* A-share: green down (same as brand visually) */
+  --down-soft:    rgba(7, 193, 96, 0.10);
+  --warn:         #FFC300;
+  --warn-soft:    rgba(255, 195, 0, 0.14);
+
+  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-pop:   0 6px 24px rgba(0, 0, 0, 0.08);
+
+  /* — Geometry — */
   --sidebar-width: 220px;
   --sidebar-collapsed-width: 64px;
   --header-height: 56px;
-  --border-radius: 12px;
-  --border-radius-sm: 8px;
-  --border-radius-xs: 6px;
+  --radius-lg:    14px;
+  --radius:       10px;
+  --radius-sm:    6px;
+  --radius-pill:  999px;
 
-  /* Element Plus dark overrides */
-  --el-bg-color: #0F2035;
-  --el-bg-color-overlay: #152A42;
-  --el-bg-color-page: #0A1628;
-  --el-text-color-primary: #E8EDF3;
-  --el-text-color-regular: #C0C8D4;
-  --el-text-color-secondary: #8892A4;
-  --el-text-color-placeholder: #5A6577;
-  --el-border-color: rgba(0, 212, 255, 0.12);
-  --el-border-color-light: rgba(0, 212, 255, 0.08);
-  --el-color-primary: #00D4FF;
-  --el-color-success: #2AE8A4;
-  --el-color-danger: #FF4757;
-  --el-color-warning: #FFC312;
-  --el-fill-color-blank: #0F2035;
-  --el-fill-color-light: #152A42;
+  /* — Font — */
+  --font-sans:    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+                  "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-num:     "SF Mono", "JetBrains Mono", "PingFang SC", Menlo, Consolas, monospace;
 }
 
-/* Global scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--accent-cyan-dim);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-cyan);
+/* — Dark theme — */
+:root[data-theme="dark"] {
+  --bg:           #111111;
+  --bg-2:         #1A1A1A;
+  --surface:      #1F1F1F;
+  --surface-2:    #232323;
+  --surface-hover:#2A2A2A;
+
+  --text:         #ECECEC;
+  --text-2:       #C9C9C9;
+  --text-3:       #8A8A8A;
+  --text-4:       #5C5C5C;
+
+  --line:         #2A2A2A;
+  --line-strong:  #353535;
+
+  --brand:        #2DD27C;
+  --brand-press:  #26B96E;
+  --brand-soft:   rgba(45, 210, 124, 0.16);
+
+  --up:           #F66767;
+  --up-soft:      rgba(246, 103, 103, 0.16);
+  --down:         #2DD27C;
+  --down-soft:    rgba(45, 210, 124, 0.16);
+  --warn:         #FFD43B;
+  --warn-soft:    rgba(255, 212, 59, 0.14);
+
+  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-pop:   0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
-/* Glass card base */
-.glass-card {
-  background: var(--bg-card);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--border-radius);
-  box-shadow: var(--glow-cyan);
-  transition: all 0.3s ease;
-}
-.glass-card:hover {
-  border-color: var(--glass-border-hover);
-  box-shadow: var(--glow-cyan-strong);
-}
-
-/* Glow text */
-.glow-text {
-  color: var(--accent-cyan);
-  text-shadow: 0 0 10px rgba(0, 212, 255, 0.4);
-}
-
-/* Score colors */
-.score-high { color: var(--accent-green); }
-.score-medium { color: var(--accent-yellow); }
-.score-low { color: var(--accent-red); }
-
-/* Price colors (A-share: red up, green down) */
-.price-up { color: var(--accent-red) !important; }
-.price-down { color: var(--accent-green) !important; }
-.price-flat { color: var(--text-secondary) !important; }
-
-/* Animations */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: var(--glow-cyan); }
-  50% { box-shadow: var(--glow-cyan-strong); }
-}
-.animate-fade-in {
-  animation: fadeIn 0.4s ease forwards;
-}
-
-/* Page container */
-.page-container {
-  padding: 20px;
-  min-height: calc(100vh - var(--header-height));
-  background: var(--bg-primary);
-  color: var(--text-primary);
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  :root {
-    --sidebar-width: 0px;
+/* — Follow OS when data-theme is unset or "auto" — */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:           #111111;
+    --bg-2:         #1A1A1A;
+    --surface:      #1F1F1F;
+    --surface-2:    #232323;
+    --surface-hover:#2A2A2A;
+    --text:         #ECECEC;
+    --text-2:       #C9C9C9;
+    --text-3:       #8A8A8A;
+    --text-4:       #5C5C5C;
+    --line:         #2A2A2A;
+    --line-strong:  #353535;
+    --brand:        #2DD27C;
+    --brand-press:  #26B96E;
+    --brand-soft:   rgba(45, 210, 124, 0.16);
+    --up:           #F66767;
+    --up-soft:      rgba(246, 103, 103, 0.16);
+    --down:         #2DD27C;
+    --down-soft:    rgba(45, 210, 124, 0.16);
+    --warn:         #FFD43B;
+    --warn-soft:    rgba(255, 212, 59, 0.14);
+    --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-pop:   0 6px 24px rgba(0, 0, 0, 0.45);
   }
+}
+
+/* — Element Plus token mapping — */
+:root, :root[data-theme="light"], :root[data-theme="dark"] {
+  --el-color-primary: var(--brand);
+  --el-color-primary-light-3: var(--brand);
+  --el-color-primary-light-5: var(--brand);
+  --el-color-primary-light-7: var(--brand-soft);
+  --el-color-primary-light-9: var(--brand-soft);
+  --el-color-primary-dark-2: var(--brand-press);
+  --el-color-success: var(--brand);
+  --el-color-danger: var(--up);
+  --el-color-warning: var(--warn);
+  --el-bg-color: var(--surface);
+  --el-bg-color-page: var(--bg);
+  --el-bg-color-overlay: var(--surface);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-2);
+  --el-text-color-secondary: var(--text-3);
+  --el-text-color-placeholder: var(--text-4);
+  --el-border-color: var(--line);
+  --el-border-color-light: var(--line);
+  --el-border-color-lighter: var(--line);
+  --el-fill-color: var(--surface-2);
+  --el-fill-color-blank: var(--surface);
+  --el-fill-color-light: var(--surface-2);
+  --el-fill-color-lighter: var(--surface-2);
+
+  /* — Back-compat aliases for views still using legacy var names — */
+  --bg-primary:   var(--bg);
+  --bg-secondary: var(--bg-2);
+  --bg-tertiary:  var(--surface-2);
+  --bg-card:      var(--surface);
+  --bg-card-hover:var(--surface-hover);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-2);
+  --text-muted:   var(--text-3);
+  --accent-cyan:  var(--brand);
+  --accent-cyan-dim: var(--brand-soft);
+  --accent-green: var(--down);
+  --accent-green-dim: var(--down-soft);
+  --accent-red:   var(--up);
+  --accent-red-dim: var(--up-soft);
+  --accent-yellow:var(--warn);
+  --accent-purple:var(--brand);
+  --accent-orange:var(--warn);
+  --glass-border: var(--line);
+  --glass-border-hover: var(--line-strong);
+  --glow-cyan:    none;
+  --glow-cyan-strong: none;
+  --glow-green:   none;
+  --glow-red:     none;
+  --border-radius: var(--radius-lg);
+  --border-radius-sm: var(--radius);
+  --border-radius-xs: var(--radius-sm);
+}
+
+/* — Reset — */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #app { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+h1 { font-size: 22px; }
+h2 { font-size: 18px; }
+h3 { font-size: 16px; }
+h4 { font-size: 15px; }
+
+.num, .mono {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* — Card primitive — */
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* legacy compat — flatten any glass usages */
+.glass-card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  border: 0;
+  backdrop-filter: none;
+}
+.glass-card:hover { box-shadow: var(--shadow-card); }
+
+/* — Price colors (A-share) — */
+.price-up   { color: var(--up) !important; }
+.price-down { color: var(--down) !important; }
+.price-flat { color: var(--text-3) !important; }
+.score-high   { color: var(--brand); }
+.score-medium { color: var(--warn); }
+.score-low    { color: var(--up); }
+
+/* — Scrollbar — */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
+
+/* — Page container — */
+.page-container {
+  padding: 20px 24px 32px;
+  min-height: calc(100vh - var(--header-height));
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* — Animations — */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in, .rise { animation: rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.rise-1 { animation-delay: 0.02s; }
+.rise-2 { animation-delay: 0.06s; }
+.rise-3 { animation-delay: 0.12s; }
+.rise-4 { animation-delay: 0.20s; }
+
+/* — Element Plus polish — */
+.el-button {
+  border-radius: var(--radius) !important;
+  font-weight: 500;
+  border: 1px solid var(--line) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.el-button:hover { background: var(--surface-hover) !important; }
+.el-button--primary {
+  background: var(--brand) !important;
+  border-color: var(--brand) !important;
+  color: #FFFFFF !important;
+}
+.el-button--primary:hover {
+  background: var(--brand-press) !important;
+  border-color: var(--brand-press) !important;
+}
+.el-button.is-text {
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--brand) !important;
+}
+
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--radius) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
+  background: var(--surface) !important;
+  padding: 4px 12px !important;
+}
+.el-input__wrapper:hover { box-shadow: 0 0 0 1px var(--line-strong) inset !important; }
+.el-input__wrapper.is-focus { box-shadow: 0 0 0 2px var(--brand-soft), 0 0 0 1px var(--brand) inset !important; }
+.el-input__inner { color: var(--text) !important; }
+.el-input__inner::placeholder { color: var(--text-4) !important; }
+
+.el-select-dropdown,
+.el-popper {
+  border-radius: var(--radius) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-pop) !important;
+}
+
+.el-table {
+  --el-table-border-color: var(--line);
+  --el-table-row-hover-bg-color: var(--surface-hover);
+  --el-table-header-bg-color: var(--surface-2);
+  --el-table-bg-color: var(--surface);
+  background: var(--surface) !important;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.el-table th.el-table__cell {
+  background: var(--surface-2) !important;
+  color: var(--text-3) !important;
+  font-weight: 500;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line) !important;
+}
+.el-table td.el-table__cell {
+  border-bottom: 1px solid var(--line) !important;
+  color: var(--text-2) !important;
+}
+.el-table tr { background: var(--surface) !important; }
+
+.el-tag {
+  border-radius: var(--radius-pill) !important;
+  font-weight: 500;
+  border: 0 !important;
+  padding: 0 10px !important;
+  height: 22px !important;
+  line-height: 22px !important;
+}
+.el-tag--success { background: var(--brand-soft) !important; color: var(--brand) !important; }
+.el-tag--warning { background: var(--warn-soft) !important; color: #B88800 !important; }
+.el-tag--danger  { background: var(--up-soft) !important; color: var(--up) !important; }
+
+.el-slider__runway { background: var(--surface-2); height: 4px; border-radius: 2px; }
+.el-slider__bar { background: var(--brand); height: 4px; }
+.el-slider__button {
+  border: 2px solid var(--brand); background: #FFF;
+  width: 16px; height: 16px;
+}
+
+.el-empty { color: var(--text-3); }
+.el-empty__description p { color: var(--text-3); }
+
+.el-message {
+  border-radius: var(--radius) !important;
+  border: 0 !important;
+  box-shadow: var(--shadow-pop) !important;
+}
+
+/* — Responsive — */
+@media (max-width: 768px) {
+  :root { --sidebar-width: 0px; }
+  .page-container { padding: 16px; }
 }

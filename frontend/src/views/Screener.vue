@@ -1,92 +1,110 @@
 <template>
-  <div class="page-container">
-    <div class="filter-panel glass-card">
-      <div class="filter-header">
+  <div class="page-container screener">
+    <header class="page-head rise rise-1">
+      <h1>智能选股</h1>
+      <p class="dek">设定财务与技术参数，按综合评分输出候选名单。</p>
+    </header>
+
+    <section class="card filter-card rise rise-2">
+      <header class="card-head">
         <h3>筛选条件</h3>
-        <div class="filter-actions">
-          <el-button size="small" @click="resetFilters">重置</el-button>
-          <el-button type="primary" size="small" :loading="loading" @click="runFilter">
-            <el-icon><Search /></el-icon>开始选股
+        <div class="actions">
+          <el-button @click="resetFilters">重 置</el-button>
+          <el-button type="primary" :loading="loading" @click="runFilter">
+            <el-icon style="margin-right: 6px;"><Search /></el-icon>开 始 选 股
           </el-button>
         </div>
-      </div>
+      </header>
+
       <div class="filter-grid">
-        <div class="filter-item">
-          <span class="filter-label">最低综合分</span>
+        <div class="field">
+          <span class="field-label">最低综合分</span>
           <el-slider v-model="filters.minScore" :min="0" :max="100" :step="5" show-input input-size="small" />
         </div>
-        <div class="filter-item">
-          <span class="filter-label">最低ROE (%)</span>
+        <div class="field">
+          <span class="field-label">最低 ROE (%)</span>
           <el-slider v-model="filters.minRoe" :min="0" :max="40" :step="1" show-input input-size="small" />
         </div>
-        <div class="filter-item">
-          <span class="filter-label">最高负债率 (%)</span>
+        <div class="field">
+          <span class="field-label">最高负债率 (%)</span>
           <el-slider v-model="filters.maxDebtRatio" :min="10" :max="90" :step="5" show-input input-size="small" />
         </div>
-        <div class="filter-item">
-          <span class="filter-label">最低市值 (亿)</span>
+        <div class="field">
+          <span class="field-label">最低市值 (亿)</span>
           <el-input-number v-model="filters.minMarketCap" :min="0" :step="50" size="small" />
         </div>
-        <div class="filter-item">
-          <span class="filter-label">行业筛选</span>
+        <div class="field">
+          <span class="field-label">行业筛选</span>
           <el-select v-model="filters.industries" multiple collapse-tags placeholder="全部行业" size="small" style="width: 100%;">
             <el-option v-for="ind in industryOptions" :key="ind" :label="ind" :value="ind" />
           </el-select>
         </div>
-        <div class="filter-item">
-          <span class="filter-label">输出数量</span>
+        <div class="field">
+          <span class="field-label">输出数量</span>
           <el-input-number v-model="filters.limit" :min="10" :max="200" :step="10" size="small" />
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="result-area">
-      <div class="glass-card result-card" v-if="results.length">
-        <div class="card-header">
-          <h3>筛选结果 ({{ results.length }}只)</h3>
-          <el-button size="small" type="primary" plain @click="exportResults">
-            <el-icon><Download /></el-icon>导出
+    <section class="results-area" v-if="results.length">
+      <article class="card result-card rise rise-3">
+        <header class="card-head">
+          <div>
+            <h3>筛选结果 <span class="count num">{{ results.length }}</span></h3>
+            <p class="card-sub">点击行查看个股详情</p>
+          </div>
+          <el-button @click="exportResults">
+            <el-icon style="margin-right: 6px;"><Download /></el-icon>导 出
           </el-button>
+        </header>
+
+        <div class="table-wrap">
+          <table class="t-table">
+            <thead>
+              <tr>
+                <th class="t-rank">#</th>
+                <th>名称</th>
+                <th>代码</th>
+                <th>行业</th>
+                <th class="t-right">最新价</th>
+                <th class="t-center">评分</th>
+                <th class="t-right">ROE</th>
+                <th class="t-right">负债率</th>
+                <th class="t-right">市值</th>
+                <th class="t-center">信号</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in results" :key="row.code" class="row" @click="goStock(row)">
+                <td class="t-rank num">{{ i + 1 }}</td>
+                <td><span class="stock-name">{{ row.name }}</span></td>
+                <td class="mono dim">{{ row.code }}</td>
+                <td class="dim">{{ row.industry }}</td>
+                <td class="t-right num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
+                <td class="t-center">
+                  <span class="score-pill" :class="scoreCls(row.compositeScore)">{{ row.compositeScore }}</span>
+                </td>
+                <td class="t-right num">{{ row.roe }}%</td>
+                <td class="t-right num">{{ row.debtRatio }}%</td>
+                <td class="t-right num">{{ row.marketCap?.toFixed(0) }}</td>
+                <td class="t-center">
+                  <span class="sig" :class="row.signal">{{ sigText(row.signal) }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <el-table :data="results" stripe @row-click="goStock" :row-style="{ cursor: 'pointer' }" size="small" max-height="600">
-          <el-table-column type="index" label="排名" width="60" />
-          <el-table-column prop="name" label="名称" width="100">
-            <template #default="{ row }"><span class="stock-name">{{ row.name }}</span></template>
-          </el-table-column>
-          <el-table-column prop="code" label="代码" width="80" />
-          <el-table-column prop="industry" label="行业" width="100" />
-          <el-table-column prop="price" label="最新价" width="80" align="right">
-            <template #default="{ row }">
-              <span :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="compositeScore" label="综合分" width="80" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.compositeScore >= 80 ? 'success' : row.compositeScore >= 60 ? 'warning' : 'danger'" size="small" effect="dark">{{ row.compositeScore }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="roe" label="ROE%" width="80" align="right" />
-          <el-table-column prop="debtRatio" label="负债率%" width="80" align="right" />
-          <el-table-column prop="marketCap" label="市值(亿)" width="100" align="right">
-            <template #default="{ row }">{{ row.marketCap?.toFixed(0) }}</template>
-          </el-table-column>
-          <el-table-column prop="signal" label="信号" width="70" align="center">
-            <template #default="{ row }">
-              <span v-if="row.signal === 'bullish'" class="signal bullish">看多</span>
-              <span v-else-if="row.signal === 'bearish'" class="signal bearish">看空</span>
-              <span v-else class="signal neutral">中性</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+      </article>
 
-      <div class="glass-card dist-card" v-if="results.length">
-        <h3>评分分布</h3>
-        <div ref="distChartRef" style="height: 300px;"></div>
-      </div>
+      <aside class="card dist-card rise rise-4">
+        <header class="card-head compact"><h3>评分分布</h3></header>
+        <div ref="distChartRef" style="height: 280px;"></div>
+      </aside>
+    </section>
+
+    <div v-if="!loading && !results.length" class="empty-state rise rise-2">
+      <p>设置筛选条件后点击「开始选股」</p>
     </div>
-
-    <el-empty v-if="!loading && !results.length" description="设置筛选条件后点击「开始选股」" />
   </div>
 </template>
 
@@ -138,7 +156,7 @@ async function runFilter() {
       },
       limit: filters.limit,
     })
-    ElMessage.success(`筛选完成，共 ${results.value.length} 只股票`)
+    ElMessage.success(`筛选完成，共 ${results.value.length} 只`)
     nextTick(renderDistChart)
   } catch {
     ElMessage.error('筛选失败，请稍后重试')
@@ -147,8 +165,31 @@ async function runFilter() {
   }
 }
 
+function sigText(s: string) {
+  return s === 'bullish' ? '看多' : s === 'bearish' ? '看空' : '中性'
+}
+function scoreCls(s: number) {
+  if (s >= 80) return 'high'
+  if (s >= 60) return 'mid'
+  return 'low'
+}
+
+function chartTokens() {
+  const cs = getComputedStyle(document.documentElement)
+  return {
+    text: cs.getPropertyValue('--text').trim(),
+    text3: cs.getPropertyValue('--text-3').trim(),
+    line: cs.getPropertyValue('--line').trim(),
+    up: cs.getPropertyValue('--up').trim(),
+    down: cs.getPropertyValue('--down').trim(),
+    warn: cs.getPropertyValue('--warn').trim(),
+    bg: cs.getPropertyValue('--surface').trim(),
+  }
+}
+
 function renderDistChart() {
   if (!distChartRef.value || !results.value.length) return
+  const t = chartTokens()
   const chart = echarts.init(distChartRef.value)
   const ranges = ['0-20', '20-40', '40-60', '60-70', '70-80', '80-90', '90-100']
   const counts = [0, 0, 0, 0, 0, 0, 0]
@@ -164,15 +205,29 @@ function renderDistChart() {
   })
   chart.setOption({
     backgroundColor: 'transparent',
-    grid: { left: 40, right: 20, top: 20, bottom: 30 },
-    xAxis: { type: 'category', data: ranges, axisLabel: { color: '#8892A4', fontSize: 10 }, axisLine: { lineStyle: { color: '#2A3A4A' } } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(42,58,74,0.3)' } }, axisLabel: { color: '#8892A4' } },
+    textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
+    grid: { left: 36, right: 12, top: 16, bottom: 28 },
+    xAxis: { type: 'category', data: ranges,
+      axisLabel: { color: t.text3, fontSize: 10 },
+      axisLine: { lineStyle: { color: t.line } },
+      axisTick: { show: false } },
+    yAxis: { type: 'value',
+      splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
+      axisLabel: { color: t.text3, fontSize: 10 },
+      axisLine: { show: false }, axisTick: { show: false } },
     series: [{
       type: 'bar',
-      data: counts.map((v, i) => ({ value: v, itemStyle: { color: ['#FF4757','#FF4757','#FFC312','#FFC312','#2AE8A4','#2AE8A4','#00D4FF'][i] } })),
-      barWidth: '60%',
+      data: counts.map((v, i) => ({
+        value: v,
+        itemStyle: {
+          color: [t.up, t.up, t.warn, t.warn, t.down, t.down, t.down][i],
+          borderRadius: [4, 4, 0, 0],
+        },
+      })),
+      barWidth: '58%',
     }],
-    tooltip: { trigger: 'axis', backgroundColor: 'rgba(15,32,53,0.95)', borderColor: 'rgba(0,212,255,0.2)', textStyle: { color: '#E8EDF3' } },
+    tooltip: { trigger: 'axis', backgroundColor: t.bg,
+      borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
   })
 }
 
@@ -183,23 +238,110 @@ onMounted(() => strategyStore.loadFromStorage())
 </script>
 
 <style scoped>
-.filter-panel { padding: 20px; margin-bottom: 16px; }
-.filter-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.filter-header h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
-.filter-actions { display: flex; gap: 8px; }
-.filter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-.filter-item { display: flex; flex-direction: column; gap: 6px; }
-.filter-label { font-size: 13px; color: var(--text-secondary); }
-.result-area { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
-.result-card { padding: 20px; }
-.dist-card { padding: 20px; }
-.dist-card h3 { font-size: 15px; color: var(--text-primary); margin: 0 0 12px 0; }
-.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.card-header h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
-.stock-name { font-weight: 600; color: var(--text-primary); }
-.signal { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
-.signal.bullish { background: rgba(255,71,87,0.15); color: #FF4757; }
-.signal.bearish { background: rgba(42,232,164,0.15); color: #2AE8A4; }
-.signal.neutral { background: rgba(136,146,164,0.15); color: #8892A4; }
-@media (max-width: 1200px) { .result-area { grid-template-columns: 1fr; } .filter-grid { grid-template-columns: repeat(2, 1fr); } }
+.page-head { margin-bottom: 18px; }
+.page-head h1 { font-size: 22px; font-weight: 600; }
+.page-head .dek { margin-top: 4px; color: var(--text-3); font-size: 13px; }
+
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px 16px;
+}
+.filter-card { margin-bottom: 16px; }
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.card-head.compact { margin-bottom: 8px; }
+.card-head h3 { font-size: 16px; font-weight: 600; }
+.card-sub { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+.count {
+  color: var(--brand);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.actions { display: flex; gap: 8px; }
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px 24px;
+}
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 12px; color: var(--text-3); }
+
+.results-area {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+}
+
+.table-wrap { margin: 0 -8px; max-height: 600px; overflow-y: auto; }
+.t-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.t-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.t-table td {
+  padding: 12px 8px;
+  font-size: 14px;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--line);
+}
+.t-table tbody tr:last-child td { border-bottom: 0; }
+.row { cursor: pointer; transition: background 0.15s ease; }
+.row:hover { background: var(--surface-hover); }
+.t-rank { width: 36px; color: var(--text-4); }
+.t-right { text-align: right; }
+.t-center { text-align: center; }
+.stock-name { font-weight: 500; color: var(--text); }
+.dim { color: var(--text-3); font-size: 13px; }
+
+.score-pill {
+  display: inline-block;
+  font-size: 12px; font-weight: 600;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
+}
+.score-pill.high { background: var(--brand-soft); color: var(--brand); }
+.score-pill.mid  { background: var(--warn-soft); color: #B88800; }
+.score-pill.low  { background: var(--up-soft); color: var(--up); }
+
+.sig {
+  font-size: 12px; font-weight: 500;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+}
+.sig.bullish { background: var(--up-soft); color: var(--up); }
+.sig.bearish { background: var(--down-soft); color: var(--down); }
+.sig.neutral { background: var(--surface-2); color: var(--text-3); }
+
+.empty-state {
+  text-align: center; padding: 80px 20px;
+  color: var(--text-3);
+}
+
+@media (max-width: 1100px) {
+  .results-area { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .filter-grid { grid-template-columns: 1fr; }
+}
 </style>

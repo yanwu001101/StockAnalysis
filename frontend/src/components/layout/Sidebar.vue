@@ -1,140 +1,174 @@
 <template>
-  <div class="sidebar" :class="{ collapsed }">
-    <div class="sidebar-header">
-      <div class="logo-area">
-        <div class="logo-icon">
-          <el-icon :size="28" color="#00D4FF"><TrendCharts /></el-icon>
-        </div>
-        <transition name="fade">
-          <span v-if="!collapsed" class="logo-text">智能选股</span>
-        </transition>
+  <aside class="sidebar" :class="{ collapsed }">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 17 9 11 13 15 21 7"></polyline>
+          <polyline points="14 7 21 7 21 14"></polyline>
+        </svg>
       </div>
+      <transition name="fade">
+        <span v-if="!collapsed" class="brand-name">智能选股</span>
+      </transition>
     </div>
 
-    <el-menu
-      :default-active="currentRoute"
-      :collapse="collapsed"
-      class="sidebar-menu"
-      background-color="transparent"
-      text-color="#8892A4"
-      active-text-color="#00D4FF"
-      router
-    >
-      <template v-for="route in menuRoutes" :key="route.path">
-        <el-menu-item :index="route.path">
-          <el-icon><component :is="route.meta?.icon" /></el-icon>
-          <template #title>{{ route.meta?.title }}</template>
-        </el-menu-item>
-      </template>
-    </el-menu>
+    <nav class="nav">
+      <router-link
+        v-for="route in menuRoutes"
+        :key="route.path"
+        :to="route.path"
+        class="nav-item"
+        :class="{ active: currentRoute === route.path || currentRoute.startsWith(route.path + '/') }"
+      >
+        <el-icon class="nav-icon" :size="18"><component :is="route.meta?.icon" /></el-icon>
+        <transition name="fade"><span v-if="!collapsed" class="nav-label">{{ route.meta?.title }}</span></transition>
+      </router-link>
+    </nav>
 
     <div class="sidebar-footer">
-      <div class="version-info" v-if="!collapsed">
-        <span class="version-tag">v1.0.0</span>
-      </div>
+      <button class="theme-btn" @click="cycleTheme" :title="`主题：${themeLabel}`">
+        <el-icon :size="16">
+          <component :is="themeIcon" />
+        </el-icon>
+        <transition name="fade">
+          <span v-if="!collapsed" class="theme-label">{{ themeLabel }}</span>
+        </transition>
+      </button>
     </div>
-  </div>
+  </aside>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Sunny, Moon, MagicStick } from '@element-plus/icons-vue'
 
 defineProps<{ collapsed: boolean }>()
 defineEmits(['toggle'])
 
 const route = useRoute()
 const router = useRouter()
-
 const currentRoute = computed(() => route.path)
 
 const menuRoutes = computed(() => {
   const mainRoute = router.options.routes.find(r => r.path === '/')
   return mainRoute?.children?.filter(r => !r.meta?.hidden) || []
 })
+
+type Theme = 'auto' | 'light' | 'dark'
+const theme = ref<Theme>('auto')
+
+function applyTheme(t: Theme) {
+  const root = document.documentElement
+  if (t === 'auto') root.removeAttribute('data-theme')
+  else root.setAttribute('data-theme', t)
+  localStorage.setItem('theme', t)
+  theme.value = t
+}
+function cycleTheme() {
+  const order: Theme[] = ['auto', 'light', 'dark']
+  const next = order[(order.indexOf(theme.value) + 1) % order.length]
+  applyTheme(next)
+}
+const themeLabel = computed(() =>
+  theme.value === 'auto' ? '跟随系统' : theme.value === 'light' ? '浅色' : '深色'
+)
+const themeIcon = computed(() =>
+  theme.value === 'auto' ? MagicStick : theme.value === 'light' ? Sunny : Moon
+)
+
+onMounted(() => {
+  const saved = (localStorage.getItem('theme') as Theme) || 'auto'
+  applyTheme(saved)
+})
 </script>
 
 <style scoped>
 .sidebar {
   position: fixed;
-  left: 0;
-  top: 0;
-  bottom: 0;
+  left: 0; top: 0; bottom: 0;
   width: var(--sidebar-width);
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--glass-border);
-  display: flex;
-  flex-direction: column;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column;
   z-index: 100;
-  transition: width 0.3s ease;
+  transition: width 0.25s ease;
   overflow: hidden;
 }
-.sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
-}
-.sidebar-header {
+.sidebar.collapsed { width: var(--sidebar-collapsed-width); }
+
+.brand {
   height: var(--header-height);
-  display: flex;
-  align-items: center;
+  display: flex; align-items: center; gap: 10px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
 }
-.logo-area {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  overflow: hidden;
+.brand-mark {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: var(--brand);
+  color: #FFFFFF;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.brand-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
-.logo-icon {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+
+.nav {
+  flex: 1;
+  padding: 8px 8px 16px;
+  display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto;
+}
+.nav-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: rgba(0, 212, 255, 0.1);
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
   border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-2);
+  font-size: 14px;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.logo-text {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--accent-cyan);
-  text-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+.nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
-.sidebar-menu {
-  flex: 1;
-  border: none !important;
-  padding: 8px;
+.nav-item.active {
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-weight: 500;
 }
-.sidebar-menu .el-menu-item {
-  border-radius: 8px;
-  margin-bottom: 4px;
-  height: 44px;
-  line-height: 44px;
-}
-.sidebar-menu .el-menu-item:hover {
-  background: rgba(0, 212, 255, 0.08) !important;
-}
-.sidebar-menu .el-menu-item.is-active {
-  background: rgba(0, 212, 255, 0.12) !important;
-  color: #00D4FF !important;
-}
+.nav-icon { flex-shrink: 0; }
+.nav-label { flex: 1; overflow: hidden; }
+
 .sidebar-footer {
-  padding: 12px 16px;
-  border-top: 1px solid var(--glass-border);
+  padding: 8px 12px 14px;
+  border-top: 1px solid var(--line);
 }
-.version-tag {
-  font-size: 11px;
-  color: var(--text-muted);
-  background: rgba(0, 212, 255, 0.06);
-  padding: 2px 8px;
-  border-radius: 4px;
+.theme-btn {
+  width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.fade-enter-active, .fade-leave-active {
-  transition: opacity 0.2s;
-}
-.fade-enter-from, .fade-leave-to {
-  opacity: 0;
-}
+.theme-btn:hover { background: var(--surface-hover); color: var(--text); }
+.theme-label { white-space: nowrap; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.18s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

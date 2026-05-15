@@ -3,13 +3,13 @@
     <Sidebar :collapsed="sidebarCollapsed" @toggle="sidebarCollapsed = !sidebarCollapsed" />
     <div class="main-area" :class="{ collapsed: sidebarCollapsed }">
       <Header @toggle-sidebar="sidebarCollapsed = !sidebarCollapsed" />
-      <div class="content-area">
+      <main class="content-area">
         <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
+          <transition name="page" mode="out-in">
             <component :is="Component" />
           </transition>
         </router-view>
-      </div>
+      </main>
     </div>
   </div>
 </template>
@@ -26,32 +26,25 @@ const sidebarCollapsed = ref(false)
 .app-layout {
   display: flex;
   height: 100vh;
-  background: var(--bg-primary);
+  background: var(--bg);
   overflow: hidden;
 }
 .main-area {
   flex: 1;
   margin-left: var(--sidebar-width);
-  transition: margin-left 0.3s ease;
+  transition: margin-left 0.25s ease;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.main-area.collapsed {
-  margin-left: var(--sidebar-collapsed-width);
-}
+.main-area.collapsed { margin-left: var(--sidebar-collapsed-width); }
 .content-area {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--bg-primary);
+  background: var(--bg);
 }
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
+.page-enter-active, .page-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.page-enter-from { opacity: 0; transform: translateY(4px); }
+.page-leave-to { opacity: 0; }
 </style>

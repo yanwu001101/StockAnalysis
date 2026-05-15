@@ -56,7 +56,7 @@
         </el-table-column>
         <el-table-column prop="signal" label="信号" width="70" align="center">
           <template #default="{ row }">
-            <span :class="['signal', row.signal]">{{ { bullish: '看多', bearish: '看空', neutral: '中性' }[row.signal] }}</span>
+            <span :class="['signal', row.signal]">{{ ({ bullish: '看多', bearish: '看空', neutral: '中性' } as Record<string, string>)[row.signal] }}</span>
           </template>
         </el-table-column>
       </el-table>

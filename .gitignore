@@ -1,6 +1,49 @@
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
 venv/
-筛选测试.xlsx
+*.egg-info/
+
+# Java
+backend/target/
+*.class
+*.jar
+*.log
+.idea/
+*.iml
+
+# Node
+frontend/node_modules/
+frontend/dist/
+.npm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+backend/backend.log
+backend/backend-err.log
+data-service/data-service.log
+
+# Data
+*.xlsx
+*.csv
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Docker
+mysql_data/
+redis_data/

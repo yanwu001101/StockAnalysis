@@ -1,64 +1,97 @@
-# A股优质股票指标筛选器
+# A股智能选股平台
 
-这个工具按你给出的思路筛选 A 股：
+全栈量化选股平台，支持十大策略评分、用户自定义策略、自选股管理、策略回测。
 
-- 年化 ROE >= 15%
-- 单期原始 ROE >= 3%，避免一季报年化后虚高
-- 经营性现金流为正
-- 资产负债率 <= 50%
-- 总市值 >= 200 亿
-- 综合分 >= 60
-- 政策方向粗分：新质生产力、央国企改革、内需消费升级
-- 可选周线趋势验证：现价是否在周线 MA60 之上
+## 技术栈
 
-## 安装
+| 层 | 技术 |
+|---|------|
+| **前端** | Vue 3 + TypeScript + Element Plus + ECharts + Pinia |
+| **后端** | Java 17 + Spring Boot 3 + MyBatis-Plus |
+| **数据服务** | Python + Flask + akshare |
+| **数据库** | MySQL 8 + Redis |
+| **部署** | Docker Compose + Nginx |
 
-```powershell
+## 十大策略
+
+| # | 策略 | 权重 |
+|---|------|------|
+| 1 | MACD + 均线趋势共振 | 12% |
+| 2 | 多因子价值投资 | 25% |
+| 3 | 动量突破策略 | 10% |
+| 4 | RSI 超卖反弹 | 8% |
+| 5 | 布林带收口突破 | 8% |
+| 6 | 筹码集中 + 机构增持 | 10% |
+| 7 | 股息率 + 分红稳定性 | 8% |
+| 8 | 北向资金流入 | 7% |
+| 9 | 行业轮动策略 | 7% |
+| 10 | KDJ + RSI 双指标共振 | 5% |
+
+## 快速启动
+
+### Docker 一键部署（推荐）
+
+```bash
+# 克隆项目
+git clone <repo-url>
+cd 股票分析
+
+# 启动所有服务
+docker-compose up -d
+
+# 访问 http://localhost
+```
+
+### 本地开发
+
+```bash
+# 1. 启动数据服务
+cd data-service
 pip install -r requirements.txt
+python app.py
+
+# 2. 启动后端
+cd backend
+mvn spring-boot:run
+
+# 3. 启动前端
+cd frontend
+npm install
+npm run dev
+# 访问 http://localhost:3000
 ```
 
-## 运行
+## 项目结构
 
-```powershell
-python .\stock_screener.py
+```
+stock-screener/
+├── frontend/          # Vue 3 前端
+├── backend/           # Java Spring Boot 后端
+├── data-service/      # Python 数据采集服务
+├── docker-compose.yml # Docker 编排
+└── stock_screener.py  # 原始 CLI 筛选器（保留）
 ```
 
-运行后会生成：
+## 功能
 
-```text
-优质股票筛选结果.xlsx
-```
+- **智能选股**: 十大策略综合评分，一键筛选优质股票
+- **个股详情**: K线图、策略雷达图、财务指标一览
+- **策略实验室**: 自定义策略权重，打造专属选股模型
+- **自选股**: 分组管理自选股，实时跟踪评分变化
+- **策略回测**: 历史数据验证策略有效性
 
-## 常用参数
+## 环境变量
 
-```powershell
-# 更严格：ROE 20%、负债率 45%、市值 500 亿以上
-python .\stock_screener.py --roe 20 --raw-roe 5 --debt 45 --cap 500 --min-score 70
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| DB_PASSWORD | Stock@2024 | MySQL 密码 |
+| REDIS_HOST | localhost | Redis 地址 |
+| JWT_SECRET | (内置) | JWT 签名密钥 |
+| DATA_SERVICE_URL | http://localhost:5000 | 数据服务地址 |
 
-# 跳过周线 MA60 验证，运行更快
-python .\stock_screener.py --no-trend
+---
 
-# 输出前 150 只
-python .\stock_screener.py --limit 150
-
-# 放宽条件，适合先找候选池
-python .\stock_screener.py --roe 12 --raw-roe 2 --debt 60 --min-score 50
-```
-
-## 综合分逻辑
-
-综合分更偏“质量优先”：
-
-- 盈利能力：年化 ROE + 单期原始 ROE
-- 现金流：每股经营现金流越高越好
-- 偿债能力：资产负债率越低越好
-- 成长质量：营收同比、净利润同比、销售毛利率
-- 稳定性：总市值越大适度加分
-- 技术面：周线站上 MA60 加分，跌破 MA60 小幅扣分
-- 政策面：政策方向只作为辅助加分，不让题材盖过基本面
-
-## 说明
-
-机构持仓、北向资金、主力资金流向通常依赖商业终端或不稳定网页接口，所以没有作为硬性条件。建议把本工具筛出的股票作为第一层候选池，再到同花顺、东方财富、慧博投研里逐只验证机构持仓和研报逻辑。
-
-本工具只用于研究和复盘，不构成投资建议。
+> 原始 CLI 筛选器 (`stock_screener.py`) 保留不动，可独立使用：
+> ```powershell
+> python .\stock_screener.py --roe 20 --min-score 70
+> ```

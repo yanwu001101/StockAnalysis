@@ -101,3 +101,34 @@ CREATE TABLE IF NOT EXISTS `stock_info` (
     UNIQUE INDEX `idx_code` (`code`),
     INDEX `idx_industry` (`industry`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------- K 线 / 财务历史持久化（Phase 2 添加） ----------
+
+CREATE TABLE IF NOT EXISTS `stock_kline_daily` (
+    `code` VARCHAR(10) NOT NULL,
+    `trade_date` DATE NOT NULL,
+    `open` DECIMAL(10,3),
+    `close` DECIMAL(10,3),
+    `high` DECIMAL(10,3),
+    `low` DECIMAL(10,3),
+    `volume` BIGINT,
+    `amount` DECIMAL(20,2),
+    `pct_change` DECIMAL(8,4),
+    `turnover` DECIMAL(8,4),
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`, `trade_date`),
+    INDEX `idx_kdaily_date` (`trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `stock_kline_weekly` (
+    `code` VARCHAR(10) NOT NULL,
+    `trade_date` DATE NOT NULL,
+    `open` DECIMAL(10,3),
+    `close` DECIMAL(10,3),
+    `high` DECIMAL(10,3),
+    `low` DECIMAL(10,3),
+    `volume` BIGINT,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`, `trade_date`),
+    INDEX `idx_kweekly_date` (`trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

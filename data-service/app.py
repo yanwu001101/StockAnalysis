@@ -1,17 +1,20 @@
-"""Flask data service - wraps akshare for the Java backend."""
+"""Flask data service - Eastmoney push2 + asyncio + Redis-cached."""
 from __future__ import annotations
 import datetime as dt
 import math
 import re
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import akshare as ak
 import pandas as pd
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+import cache
+import eastmoney
+import kline_repo
+import scheduler
 from strategies import (
     score_macd_ma, score_multi_factor, score_momentum_breakout,
     score_rsi_rebound, score_bollinger_squeeze, score_chip_concentration,
@@ -21,6 +24,12 @@ from strategies import (
 
 app = Flask(__name__)
 CORS(app)
+
+# Start background scheduler (warmup + periodic refresh). 1-worker gunicorn keeps it singleton.
+try:
+    scheduler.start()
+except Exception as _e:
+    print(f'[data-service] scheduler.start failed: {_e}')
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,30 +69,34 @@ def first_existing(columns, candidates):
 
 
 # ---------------------------------------------------------------------------
-# Data fetching (cached in memory with TTL)
+# Data fetching (Redis-backed, see cache.py)
 # ---------------------------------------------------------------------------
-
-_cache: dict = {}
 
 
 def cached(key: str, ttl: int, fetcher):
-    now = time.time()
-    if key in _cache:
-        val, ts = _cache[key]
-        if now - ts < ttl:
-            return val
-    val = fetcher()
-    _cache[key] = (val, now)
-    return val
+    return cache.get_or_fetch(key, ttl, fetcher)
 
+
+SPOT_MIN_ROWS = 4000
 
 def fetch_spot() -> pd.DataFrame:
     def _fetch():
-        print("[data-service] Fetching market spot data...")
+        print("[data-service] Fetching market spot (eastmoney push2)...")
         try:
-            df = retry_call(ak.stock_zh_a_spot_em, retries=4, wait=2)
+            df = eastmoney.fetch_all_spot()
+            n = 0 if df is None else len(df)
+            if df is not None and "代码" in df.columns and n >= SPOT_MIN_ROWS:
+                df["代码"] = df["代码"].map(normalize_code)
+                if "涨跌幅" in df.columns:
+                    df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
+                return df
+            print(f"[data-service] eastmoney spot incomplete ({n} rows); falling back to akshare")
+        except Exception as e:
+            print(f"[data-service] eastmoney spot failed, fallback to akshare: {e}")
+        try:
+            df = retry_call(ak.stock_zh_a_spot_em, retries=2, wait=2)
         except Exception:
-            df = retry_call(ak.stock_zh_a_spot, retries=3, wait=2)
+            df = retry_call(ak.stock_zh_a_spot, retries=2, wait=2)
         df = df.copy()
         code_col = first_existing(df.columns, ["代码", "证券代码"])
         name_col = first_existing(df.columns, ["名称", "证券简称"])
@@ -91,14 +104,12 @@ def fetch_spot() -> pd.DataFrame:
         price_col = first_existing(df.columns, ["最新价", "收盘"])
         cap_col = first_existing(df.columns, ["总市值"])
         change_col = first_existing(df.columns, ["涨跌幅"])
-
         keep = [code_col, name_col]
         rename = {code_col: "代码", name_col: "名称"}
         if industry_col: keep.append(industry_col); rename[industry_col] = "行业"
         if price_col: keep.append(price_col); rename[price_col] = "最新价"
         if cap_col: keep.append(cap_col); rename[cap_col] = "总市值"
         if change_col: keep.append(change_col); rename[change_col] = "涨跌幅"
-
         out = df[keep].copy().rename(columns=rename)
         out["代码"] = out["代码"].map(normalize_code)
         if "总市值" in out:
@@ -188,9 +199,15 @@ def fetch_financial() -> pd.DataFrame:
 def fetch_stock_daily(code: str, days: int = 250) -> pd.DataFrame:
     key = f"daily:{code}:{days}"
     def _fetch():
-        end = dt.date.today()
-        start = end - dt.timedelta(days=int(days * 1.5))
         try:
+            df = kline_repo.get_daily(code, days)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            print(f"[data-service] kline_repo daily {code} failed: {e}")
+        try:
+            end = dt.date.today()
+            start = end - dt.timedelta(days=int(days * 1.5))
             df = ak.stock_zh_a_hist(
                 symbol=code, period="daily",
                 start_date=start.strftime("%Y%m%d"),
@@ -199,15 +216,22 @@ def fetch_stock_daily(code: str, days: int = 250) -> pd.DataFrame:
             return df.tail(days) if df is not None and not df.empty else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
-    return cached(key, 600, _fetch)
+    return cached(key, 120, _fetch)
 
 
 def fetch_stock_weekly(code: str, days: int = 900) -> pd.DataFrame:
     key = f"weekly:{code}:{days}"
     def _fetch():
-        end = dt.date.today()
-        start = end - dt.timedelta(days=days)
+        weeks = max(int(days / 7) + 4, 60)
         try:
+            df = kline_repo.get_weekly(code, weeks)
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            print(f"[data-service] kline_repo weekly {code} failed: {e}")
+        try:
+            end = dt.date.today()
+            start = end - dt.timedelta(days=days)
             df = ak.stock_zh_a_hist(
                 symbol=code, period="weekly",
                 start_date=start.strftime("%Y%m%d"),
@@ -216,7 +240,7 @@ def fetch_stock_weekly(code: str, days: int = 900) -> pd.DataFrame:
             return df if df is not None else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
-    return cached(key, 600, _fetch)
+    return cached(key, 300, _fetch)
 
 
 def fetch_weekly_trend(code: str) -> dict:
@@ -226,6 +250,24 @@ def fetch_weekly_trend(code: str) -> dict:
     close = to_number(df["收盘"])
     if len(close) < 60:
         return {"周线收盘": float(close.iloc[-1]), "周线MA60": None, "MA60之上": False}
+    ma60 = close.rolling(60).mean()
+    latest_close = float(close.iloc[-1])
+    latest_ma60 = float(ma60.iloc[-1])
+    return {
+        "周线收盘": round(latest_close, 3),
+        "周线MA60": round(latest_ma60, 3),
+        "MA60之上": bool(pd.notna(latest_close) and pd.notna(latest_ma60) and latest_close >= latest_ma60),
+    }
+
+
+def compute_weekly_trend(df: pd.DataFrame) -> dict:
+    # MA60 trend from pre-fetched weekly DataFrame.
+    if df is None or df.empty or "收盘" not in df:
+        return {"周线收盘": None, "周线MA60": None, "MA60之上": False}
+    close = to_number(df["收盘"])
+    if len(close) < 60:
+        last = float(close.iloc[-1]) if len(close) else None
+        return {"周线收盘": last, "周线MA60": None, "MA60之上": False}
     ma60 = close.rolling(60).mean()
     latest_close = float(close.iloc[-1])
     latest_ma60 = float(ma60.iloc[-1])
@@ -299,7 +341,9 @@ def market_summary():
         # Hot sectors
         hot_sectors = []
         if "行业" in merged.columns and change_col:
-            sector_avg = merged.groupby("行业")[change_col].mean().sort_values(ascending=False)
+            df_sec = merged[merged["行业"].astype(str).str.strip().replace("-", pd.NA).notna()]
+            df_sec = df_sec[pd.to_numeric(df_sec[change_col], errors="coerce").notna()]
+            sector_avg = df_sec.groupby("行业")[change_col].mean().sort_values(ascending=False).dropna()
             for name, chg in sector_avg.head(5).items():
                 hot_sectors.append({"name": str(name), "change": round(float(chg), 2), "flow": 0, "momentum": 0, "rank": 0})
 
@@ -327,27 +371,34 @@ def top_stocks():
         financial = fetch_financial()
         merged = spot.merge(financial, on="代码", how="left")
 
-        # Score each stock with multi-factor strategy
-        results = []
+        # Pre-score everyone (sync)
+        prelim = []
         for _, row in merged.iterrows():
             if pd.isna(row.get("净资产收益率")):
                 continue
             mf = score_multi_factor(row=row)
-            # Add policy bonus
-            policy, policy_score = policy_bucket(str(row.get("名称", "")), str(row.get("行业", "")))
-            total = mf["score"] + policy_score
+            _, policy_score = policy_bucket(str(row.get("名称", "")), str(row.get("行业", "")))
+            prelim.append((row, mf["score"] + policy_score))
 
-            # Get weekly trend
-            trend = {"MA60之上": False}
-            if total >= 50:
-                try:
-                    trend = fetch_weekly_trend(str(row["代码"]))
-                except Exception:
-                    pass
-            if trend.get("MA60之上"):
-                total += 12
-            elif trend.get("周线MA60") is not None:
-                total -= 5
+        # Batch-fetch weekly via MySQL-first repo (hits cache for warmed-up codes)
+        codes_need_trend = [str(r["代码"]) for r, b in prelim if b >= 50]
+        weekly_map: dict = {}
+        if codes_need_trend:
+            try:
+                weekly_map = kline_repo.batch_get_weekly(codes_need_trend, weeks=200)
+            except Exception as e:
+                print(f"[data-service] batch_get_weekly failed: {e}")
+
+        results = []
+        for row, total in prelim:
+            code = str(row.get("代码", ""))
+            wk_df = weekly_map.get(code)
+            if wk_df is not None:
+                trend = compute_weekly_trend(wk_df)
+                if trend.get("MA60之上"):
+                    total += 12
+                elif trend.get("周线MA60") is not None:
+                    total -= 5
 
             results.append({
                 "code": str(row.get("代码", "")),
@@ -377,6 +428,14 @@ def stock_detail(code):
         financial = fetch_financial()
         row = spot[spot["代码"] == code]
         fin = financial[financial["代码"] == code]
+
+        if row.empty:
+            try:
+                single = eastmoney.fetch_single_quote(code)
+                if single is not None and not single.empty:
+                    row = single
+            except Exception as _e:
+                print(f"[data-service] single quote {code} failed: {_e}")
 
         if row.empty:
             return jsonify({"error": "Stock not found"}), 404
@@ -569,10 +628,14 @@ def sector_rotation():
         if "行业" not in spot.columns or "涨跌幅" not in spot.columns:
             return jsonify([])
 
-        sector_avg = spot.groupby("行业").agg(
+        df = spot[spot["行业"].astype(str).str.strip().replace("-", pd.NA).notna()]
+        df = df[pd.to_numeric(df["涨跌幅"], errors="coerce").notna()]
+
+        sector_avg = df.groupby("行业").agg(
             avg_change=("涨跌幅", "mean"),
             count=("代码", "count"),
         ).sort_values("avg_change", ascending=False)
+        sector_avg = sector_avg[sector_avg["avg_change"].notna()]
 
         result = []
         for i, (name, row) in enumerate(sector_avg.iterrows()):

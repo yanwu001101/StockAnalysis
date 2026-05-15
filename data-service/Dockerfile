@@ -6,5 +6,5 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 
 COPY . .
 
-EXPOSE 5000
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]
+EXPOSE 5001
+CMD ["gunicorn", "-w", "1", "--threads", "8", "-b", "0.0.0.0:5001", "--timeout", "120", "app:app"]

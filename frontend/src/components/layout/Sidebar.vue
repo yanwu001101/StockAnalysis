@@ -16,9 +16,9 @@
       <router-link
         v-for="route in menuRoutes"
         :key="route.path"
-        :to="route.path"
+        :to="'/' + route.path"
         class="nav-item"
-        :class="{ active: currentRoute === route.path || currentRoute.startsWith(route.path + '/') }"
+        :class="{ active: currentRoute === '/' + route.path || currentRoute.startsWith('/' + route.path + '/') }"
       >
         <el-icon class="nav-icon" :size="18"><component :is="route.meta?.icon" /></el-icon>
         <transition name="fade"><span v-if="!collapsed" class="nav-label">{{ route.meta?.title }}</span></transition>

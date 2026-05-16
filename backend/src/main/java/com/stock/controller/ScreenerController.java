@@ -31,19 +31,19 @@ public class ScreenerController {
 
     @GetMapping("/strategies")
     public ApiResponse<?> strategies() {
-        // Return the 10 built-in strategy definitions
+        // Ten quantitative strategies — see data-service/strategies/__init__.py
         JSONArray strategies = new JSONArray();
         String[][] defs = {
-            {"macd_ma", "MACD+均线趋势共振", "MACD金叉配合均线多头排列", "12", "#00D4FF"},
-            {"multi_factor", "多因子价值投资", "ROE+负债率+现金流+成长性综合打分", "25", "#2AE8A4"},
-            {"momentum_breakout", "动量突破策略", "股价突破N日新高+成交量放大确认", "10", "#FF9F43"},
-            {"rsi_rebound", "RSI超卖反弹", "RSI从超卖区回升，捕捉反弹机会", "8", "#A78BFA"},
-            {"bollinger_squeeze", "布林带收口突破", "布林带收窄后放量突破上轨", "8", "#FFC312"},
-            {"chip_concentration", "筹码集中+机构增持", "股东户数减少+机构持仓增加", "10", "#FF6B81"},
-            {"dividend_stability", "股息率+分红稳定性", "高股息+连续多年稳定分红", "8", "#FECA57"},
-            {"northbound_flow", "北向资金流入", "外资持续买入的标的", "7", "#48DBFB"},
-            {"sector_rotation", "行业轮动策略", "根据动量切换热门行业", "7", "#FF9FF3"},
-            {"kdj_rsi_resonance", "KDJ+RSI双指标共振", "两个超买超卖指标同时发出信号", "5", "#54A0FF"},
+            {"piotroski_f", "Piotroski F-Score", "9项基本面打分筛优质低估股 (Piotroski 2000)", "12", "#2AE8A4"},
+            {"magic_formula", "神奇公式 Magic Formula", "ROC + 盈利收益率双排名 (Greenblatt)", "10", "#FFC312"},
+            {"quality_factor", "质量因子 Quality", "稳定高ROE+现金流质量+低杠杆", "18", "#00D4FF"},
+            {"momentum_12_1", "12-1月动量", "过去12月剔近1月的累计收益 (Jegadeesh-Titman)", "10", "#FF9F43"},
+            {"low_volatility", "低波动异象", "60日波动率最低分位+正趋势确认 (BAB)", "8", "#A78BFA"},
+            {"pead", "PEAD 盈余惊喜后漂移", "财报YoY增速跳变+近期公告事件触发", "10", "#FF6B81"},
+            {"northbound_smart_money", "北向资金追踪", "外资5/10/20日加仓+持股比例提升", "8", "#48DBFB"},
+            {"lhb_followup", "龙虎榜机构跟随", "机构席位净买+买入主导比", "8", "#FECA57"},
+            {"sector_rotation", "行业动量轮动", "行业排名前20%+个股相对强势", "8", "#FF9FF3"},
+            {"technical_resonance", "技术共振", "MACD金叉+均线多头+量价+北向5日加仓", "10", "#54A0FF"},
         };
         for (String[] d : defs) {
             JSONObject s = new JSONObject();
@@ -55,5 +55,65 @@ public class ScreenerController {
             strategies.add(s);
         }
         return ApiResponse.ok(strategies);
+    }
+
+    @GetMapping("/strategies-meta")
+    public ApiResponse<?> strategiesMeta() {
+        // Forward to data-service /api/v2/strategies which returns
+        // {id, name, weight, params:[{name, label, default, min, max, step, desc}]}
+        try {
+            return ApiResponse.ok(dataService.getStrategiesMeta());
+        } catch (Exception e) {
+            return ApiResponse.error("加载策略参数失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/condition-fields")
+    public ApiResponse<?> conditionFields() {
+        try {
+            return ApiResponse.ok(dataService.getConditionFields());
+        } catch (Exception e) {
+            return ApiResponse.error("加载字段失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/screen/conditions")
+    public ApiResponse<?> screenConditions(@RequestBody java.util.Map<String, Object> body) {
+        try {
+            JSONObject json = new JSONObject(body);
+            return ApiResponse.ok(dataService.runConditionScreener(json));
+        } catch (Exception e) {
+            return ApiResponse.error("条件选股失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/expression/help")
+    public ApiResponse<?> expressionHelp() {
+        try {
+            return ApiResponse.ok(dataService.getExpressionHelp());
+        } catch (Exception e) {
+            return ApiResponse.error("加载帮助失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/screen/expression")
+    public ApiResponse<?> screenExpression(@RequestBody java.util.Map<String, Object> body) {
+        try {
+            JSONObject json = new JSONObject(body);
+            Object data = dataService.runExpressionScreener(json);
+            return ApiResponse.ok(data);
+        } catch (Exception e) {
+            return ApiResponse.error("表达式选股失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/screen/expression/validate")
+    public ApiResponse<?> validateExpression(@RequestBody java.util.Map<String, Object> body) {
+        try {
+            JSONObject json = new JSONObject(body);
+            return ApiResponse.ok(dataService.validateExpression(json));
+        } catch (Exception e) {
+            return ApiResponse.error("校验失败: " + e.getMessage());
+        }
     }
 }

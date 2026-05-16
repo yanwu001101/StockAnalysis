@@ -24,13 +24,31 @@
               <span class="strategy-desc">{{ s.description }}</span>
             </div>
           </div>
-          <div class="strategy-weight">
+          <div class="strategy-actions">
             <span class="weight-label">权重</span>
             <span class="weight-value" :style="{ color: s.color }">{{ s.weight }}%</span>
+            <el-button v-if="paramsOf(s.id).length" link size="small"
+                       @click="toggleExpand(s.id)">
+              {{ expanded[s.id] ? '收起' : '调参' }}
+              <el-icon><component :is="expanded[s.id] ? 'ArrowUp' : 'ArrowDown'" /></el-icon>
+            </el-button>
           </div>
         </div>
         <div class="weight-slider">
           <el-slider v-model="s.weight" :min="0" :max="50" :step="1" :disabled="!s.enabled" @change="(v: number) => strategyStore.updateWeight(s.id, v)" />
+        </div>
+        <div class="params-grid" v-if="expanded[s.id]">
+          <div class="param-row" v-for="p in paramsOf(s.id)" :key="p.name">
+            <div class="param-head">
+              <span class="param-label">{{ p.label }}</span>
+              <span class="param-value">{{ getParam(s.id, p.name) ?? p.default }}</span>
+            </div>
+            <el-slider :model-value="getParam(s.id, p.name) ?? p.default"
+                       @update:model-value="(v: any) => setParam(s.id, p.name, v)"
+                       :min="p.min" :max="p.max" :step="p.step"
+                       :disabled="!s.enabled" size="small" />
+            <span class="param-desc" v-if="p.desc">{{ p.desc }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -73,15 +91,44 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useStrategyStore } from '@/stores/strategy'
 import { runScreener } from '@/api/strategy'
+import request from '@/api/request'
 
 const strategyStore = useStrategyStore()
 const previewData = ref<any[]>([])
 const showSaveDialog = ref(false)
 const saveName = ref('')
+
+// Per-strategy params spec (loaded from backend)
+const paramSpecs = ref<Record<string, any[]>>({})
+const strategyParams = reactive<Record<string, Record<string, any>>>({})
+const expanded = reactive<Record<string, boolean>>({})
+
+function paramsOf(id: string) { return paramSpecs.value[id] || [] }
+function toggleExpand(id: string) { expanded[id] = !expanded[id] }
+function getParam(sid: string, name: string) {
+  return strategyParams[sid]?.[name]
+}
+function setParam(sid: string, name: string, v: any) {
+  if (!strategyParams[sid]) strategyParams[sid] = {}
+  strategyParams[sid][name] = v
+}
+
+async function loadParamSpecs() {
+  try {
+    const list: any = await request.get('/strategies-meta')
+    if (Array.isArray(list)) {
+      const map: Record<string, any[]> = {}
+      for (const s of list) {
+        if (s.params?.length) map[s.id] = s.params
+      }
+      paramSpecs.value = map
+    }
+  } catch {}
+}
 
 const totalWeight = computed(() =>
   strategyStore.strategies.filter(s => s.enabled).reduce((sum, s) => sum + s.weight, 0)
@@ -91,9 +138,10 @@ async function previewResults() {
   try {
     previewData.value = await runScreener({
       strategies: strategyStore.getConfigMap(),
-      filters: { minScore: 50, minMarketCap: 100, maxDebtRatio: 60, minRoe: 10, industries: [] },
+      strategyParams: strategyParams,
+      filters: { minScore: 30, minMarketCap: 100, maxDebtRatio: 60, minRoe: 10, industries: [] },
       limit: 20,
-    })
+    } as any)
     ElMessage.success(`预览完成，共 ${previewData.value.length} 只`)
   } catch {
     ElMessage.error('预览失败')
@@ -110,6 +158,8 @@ function doSave() {
   saveName.value = ''
   ElMessage.success('方案已保存')
 }
+
+onMounted(loadParamSpecs)
 </script>
 
 <style scoped>
@@ -154,6 +204,20 @@ function doSave() {
 .weight-label { font-size: 12px; color: var(--text-muted); display: block; }
 .weight-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .weight-slider { padding: 0 4px; }
+.strategy-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+.params-grid {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.param-row { display: flex; flex-direction: column; gap: 2px; }
+.param-head { display: flex; justify-content: space-between; }
+.param-label { font-size: 12px; color: var(--text-3); }
+.param-value { font-size: 12px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.param-desc { font-size: 11px; color: var(--text-4); }
 .total-weight-card {
   padding: 16px 24px;
   margin-bottom: 16px;

@@ -5,6 +5,19 @@
       <p class="dek">综合评分、北向资金与板块轮动一览</p>
     </header>
 
+    <section class="indices rise rise-1" v-if="indices.length">
+      <div class="index-card" v-for="idx in indices" :key="idx.code">
+        <div class="index-name">{{ idx.name }}</div>
+        <div class="index-price num" :class="idx.changePercent >= 0 ? 'price-up' : 'price-down'">
+          {{ idx.price.toFixed(2) }}
+        </div>
+        <div class="index-change num" :class="idx.changePercent >= 0 ? 'price-up' : 'price-down'">
+          {{ idx.changePercent >= 0 ? '+' : '' }}{{ idx.change.toFixed(2) }}
+          ({{ idx.changePercent >= 0 ? '+' : '' }}{{ idx.changePercent.toFixed(2) }}%)
+        </div>
+      </div>
+    </section>
+
     <section class="stats rise rise-2">
       <div class="stat-card" v-for="card in summaryCards" :key="card.label">
         <div class="stat-label">{{ card.label }}</div>
@@ -63,6 +76,27 @@
       </article>
 
       <aside class="side-stack">
+        <div class="card rise rise-3">
+          <header class="card-head compact">
+            <h3>市场涨跌榜</h3>
+            <el-radio-group v-model="activeRank" size="small">
+              <el-radio-button value="gainers">涨幅</el-radio-button>
+              <el-radio-button value="losers">跌幅</el-radio-button>
+              <el-radio-button value="active">活跃</el-radio-button>
+            </el-radio-group>
+          </header>
+          <div class="rank-list">
+            <div v-for="(r, i) in currentRank.slice(0, 10)" :key="r.code" class="rank-row" @click="goStock(r)">
+              <span class="rank-i num">{{ i + 1 }}</span>
+              <span class="rank-name">{{ r.name }}</span>
+              <span class="rank-code mono dim">{{ r.code }}</span>
+              <span class="rank-change num" :class="r.changePercent >= 0 ? 'price-up' : 'price-down'">
+                {{ r.changePercent >= 0 ? '+' : '' }}{{ r.changePercent }}%
+              </span>
+            </div>
+            <div v-if="!currentRank.length" class="empty">暂无数据</div>
+          </div>
+        </div>
         <div class="card chart-card rise rise-3">
           <header class="card-head compact">
             <h3>北向资金</h3>
@@ -81,26 +115,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMarketStore } from '@/stores/market'
+import { useSettingsStore } from '@/stores/settings'
 import * as echarts from 'echarts'
 
 const router = useRouter()
 const marketStore = useMarketStore()
+const settings = useSettingsStore()
 
 const northboundChartRef = ref<HTMLElement>()
 const sectorChartRef = ref<HTMLElement>()
 const topStocks = computed(() => marketStore.topStocks || [])
+const indices = computed(() => marketStore.indices || [])
+const activeRank = ref<'gainers' | 'losers' | 'active'>('gainers')
+const currentRank = computed(() => {
+  if (activeRank.value === 'gainers') return marketStore.gainers || []
+  if (activeRank.value === 'losers') return marketStore.losers || []
+  return marketStore.mostActive || []
+})
 
 const summaryCards = computed(() => {
   const s: any = marketStore.summary
   return [
-    { label: '上涨家数', foot: '相对前一交易日', value: s?.upCount ?? '—', cls: 'price-up' },
-    { label: '下跌家数', foot: '相对前一交易日', value: s?.downCount ?? '—', cls: 'price-down' },
-    { label: '北向净流入 (亿)', foot: '当日合计',
-      value: s ? (s.northboundFlow / 10000).toFixed(1) : '—',
-      cls: s && s.northboundFlow >= 0 ? 'price-up' : 'price-down' },
+    { label: '上涨家数', foot: `下跌 ${s?.downCount ?? '—'}`, value: s?.upCount ?? '—', cls: 'price-up' },
+    { label: '涨停家数', foot: `跌停 ${s?.downLimit ?? '—'}`, value: s?.upLimit ?? '—', cls: 'price-up' },
+    { label: '平均涨跌', foot: '全市场算术平均',
+      value: s ? ((s.avgChange >= 0 ? '+' : '') + s.avgChange + '%') : '—',
+      cls: s && s.avgChange >= 0 ? 'price-up' : 'price-down' },
     { label: '领涨板块', foot: '日涨幅第一', value: s?.hotSectors?.[0]?.name ?? '—', cls: '' },
   ]
 })
@@ -127,8 +170,11 @@ function chartTokens() {
   }
 }
 
+let refreshTimer: number | null = null
+
 onMounted(async () => {
   await marketStore.fetchAll()
+  refreshTimer = window.setInterval(() => marketStore.fetchAll(), settings.refreshInterval * 1000)
   nextTick(() => {
     const t = chartTokens()
     if (northboundChartRef.value && marketStore.northboundFlow.length) {
@@ -188,6 +234,13 @@ onMounted(async () => {
       })
     }
   })
+})
+
+onBeforeUnmount(() => {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
 
@@ -315,10 +368,46 @@ onMounted(async () => {
 .side-stack { display: flex; flex-direction: column; gap: 16px; }
 .chart-card { padding: 16px 18px; }
 
+.indices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.index-card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+}
+.index-name { font-size: 12px; color: var(--text-3); }
+.index-price { font-size: 18px; font-weight: 600; margin-top: 4px; letter-spacing: -0.01em; }
+.index-change { font-size: 12px; margin-top: 2px; }
+
+.rank-list { display: flex; flex-direction: column; }
+.rank-row {
+  display: grid;
+  grid-template-columns: 22px 1fr 50px 60px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 4px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+}
+.rank-row:last-child { border-bottom: 0; }
+.rank-row:hover { background: var(--surface-hover); }
+.rank-i { color: var(--text-4); font-size: 12px; }
+.rank-name { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-code { font-size: 11px; }
+.rank-change { text-align: right; font-weight: 500; }
+.rank-list .empty { padding: 30px 0; text-align: center; color: var(--text-4); font-size: 12px; }
+
 @media (max-width: 1100px) {
   .main-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 700px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
+  .indices { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

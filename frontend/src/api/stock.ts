@@ -1,16 +1,20 @@
 import request from './request'
 import type { StockDetail, KLineData, CompositeScore } from '@/types'
 
-export function getStockDetail(code: string): Promise<StockDetail> {
-  return request.get(`/stock/${code}`)
+export function getStockDetail(code: string, signal?: AbortSignal): Promise<StockDetail> {
+  return request.get(`/stock/${code}`, { signal })
 }
 
-export function getStockKLine(code: string, period: string = 'daily', days: number = 250): Promise<KLineData[]> {
-  return request.get(`/stock/${code}/kline`, { params: { period, days } })
+export function getStockKLine(code: string, period: string = 'daily', days: number = 250, signal?: AbortSignal): Promise<KLineData[]> {
+  return request.get(`/stock/${code}/kline`, { params: { period, days }, signal })
 }
 
-export function getStockStrategies(code: string): Promise<CompositeScore> {
-  return request.get(`/stock/${code}/strategies`)
+export function getStockStrategies(code: string, signal?: AbortSignal): Promise<CompositeScore> {
+  return request.get(`/stock/${code}/strategies`, { signal })
+}
+
+export function getStockF10(code: string, signal?: AbortSignal): Promise<any> {
+  return request.get(`/stock/${code}/f10`, { signal })
 }
 
 export function searchStock(keyword: string): Promise<any[]> {

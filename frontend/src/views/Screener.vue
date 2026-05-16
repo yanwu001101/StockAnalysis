@@ -114,10 +114,12 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { runScreener } from '@/api/strategy'
 import { useStrategyStore } from '@/stores/strategy'
+import { useSettingsStore } from '@/stores/settings'
 import * as echarts from 'echarts'
 
 const router = useRouter()
 const strategyStore = useStrategyStore()
+const settings = useSettingsStore()
 
 const loading = ref(false)
 const results = ref<any[]>([])
@@ -130,7 +132,7 @@ const filters = reactive({
   maxDebtRatio: 50,
   minMarketCap: 200,
   industries: [] as string[],
-  limit: 80,
+  limit: settings.defaultLimit,
 })
 
 function resetFilters() {
@@ -139,7 +141,7 @@ function resetFilters() {
   filters.maxDebtRatio = 50
   filters.minMarketCap = 200
   filters.industries = []
-  filters.limit = 80
+  filters.limit = settings.defaultLimit
 }
 
 async function runFilter() {

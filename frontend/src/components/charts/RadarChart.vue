@@ -14,19 +14,26 @@ const props = withDefaults(defineProps<{
   height?: number
 }>(), {
   color: '#00D4FF',
-  height: 300,
+  height: 420,
 })
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 
 function buildOption() {
+  const indicatorsWithBreak = props.indicators.map(it => ({
+    ...it,
+    name: it.name.length > 6 ? it.name.replace(/(.{6})/, '$1\n') : it.name,
+  }))
   return {
     backgroundColor: 'transparent',
     radar: {
-      indicator: props.indicators,
+      indicator: indicatorsWithBreak,
       shape: 'polygon',
-      axisName: { color: '#8892A4', fontSize: 11 },
+      center: ['50%', '54%'],
+      radius: '68%',
+      nameGap: 10,
+      axisName: { color: '#8892A4', fontSize: 12, lineHeight: 15, padding: [3, 3] },
       splitArea: { areaStyle: { color: ['rgba(0,212,255,0.02)', 'rgba(0,212,255,0.04)'] } },
       splitLine: { lineStyle: { color: 'rgba(0,212,255,0.1)' } },
       axisLine: { lineStyle: { color: 'rgba(0,212,255,0.15)' } },
@@ -40,7 +47,7 @@ function buildOption() {
         lineStyle: { color: props.color, width: 2 },
         itemStyle: { color: props.color },
         symbol: 'circle',
-        symbolSize: 5,
+        symbolSize: 6,
       }],
     }],
   }

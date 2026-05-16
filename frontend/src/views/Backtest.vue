@@ -9,6 +9,16 @@
       <div class="glass-card config-card">
         <h3>回测参数</h3>
         <el-form label-position="top" size="small">
+          <el-form-item label="股票代码 (留空=组合回测)">
+            <el-input v-model="config.stockCode" placeholder="例如 600519，留空跑十大策略组合" clearable>
+              <template #append v-if="config.stockCode">单股择时</template>
+            </el-input>
+          </el-form-item>
+          <el-form-item label="策略">
+            <el-select v-model="config.strategyId" style="width: 100%;">
+              <el-option v-for="s in strategyStore.strategies" :key="s.id" :label="s.name" :value="s.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="开始日期">
             <el-date-picker v-model="config.startDate" type="date" format="YYYY-MM-DD" value-format="YYYY-MM-DD" style="width: 100%;" />
           </el-form-item>
@@ -18,13 +28,8 @@
           <el-form-item label="初始资金 (万元)">
             <el-input-number v-model="config.initialCapital" :min="10" :max="10000" :step="10" style="width: 100%;" />
           </el-form-item>
-          <el-form-item label="每期选股数量">
+          <el-form-item label="每期选股数量" v-if="!config.stockCode">
             <el-input-number v-model="config.topN" :min="1" :max="50" :step="1" style="width: 100%;" />
-          </el-form-item>
-          <el-form-item label="使用策略">
-            <div class="strategy-checks">
-              <el-checkbox v-for="s in strategyStore.strategies" :key="s.id" v-model="s.enabled" :label="s.name" />
-            </div>
           </el-form-item>
           <el-button type="primary" :loading="loading" @click="runTest" style="width: 100%;">
             <el-icon><TrendCharts /></el-icon>开始回测
@@ -67,6 +72,17 @@
           </div>
         </div>
 
+        <div class="glass-card picks-card" v-if="(result as any).picks?.length">
+          <h3>本次回测选股（按策略综合分排名）</h3>
+          <div class="picks-grid">
+            <span v-for="(code, idx) in (result as any).picks" :key="code" class="pick-chip"
+                  @click="$router.push(`/stock/${code}`)">
+              <span class="pick-rank">{{ idx + 1 }}</span>
+              <span class="pick-code">{{ code }}</span>
+            </span>
+          </div>
+        </div>
+
         <div class="glass-card curve-card">
           <h3>收益曲线</h3>
           <div ref="curveChartRef" style="height: 350px;"></div>
@@ -92,7 +108,9 @@ const result = ref<BacktestResult | null>(null)
 const curveChartRef = ref<HTMLElement>()
 
 const config = reactive({
-  startDate: '2024-01-01',
+  stockCode: '',
+  strategyId: 'quality_factor',
+  startDate: '2025-01-01',
   endDate: '2025-12-31',
   initialCapital: 100,
   topN: 10,
@@ -101,14 +119,20 @@ const config = reactive({
 async function runTest() {
   loading.value = true
   try {
-    result.value = await runBacktest({
-      strategyConfig: strategyStore.getConfigMap(),
+    const body: any = {
+      strategyId: config.strategyId,
       startDate: config.startDate,
       endDate: config.endDate,
-      initialCapital: config.initialCapital,
-      topN: config.topN,
-    })
-    ElMessage.success('回测完成')
+      initialCapital: config.initialCapital * 10000,    // 万元 -> 元
+    }
+    if (config.stockCode.trim()) {
+      body.stockCode = config.stockCode.trim().padStart(6, '0')
+    } else {
+      body.topN = config.topN
+      body.strategyConfig = strategyStore.getConfigMap()
+    }
+    result.value = await runBacktest(body)
+    ElMessage.success(config.stockCode ? `${config.stockCode} 择时回测完成` : '组合回测完成')
     nextTick(renderCurve)
   } catch {
     ElMessage.error('回测失败')
@@ -159,5 +183,30 @@ function renderCurve() {
 .metric-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .curve-card { padding: 20px; }
 .curve-card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text-primary); }
+.picks-card { padding: 20px; }
+.picks-card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text-primary); }
+.picks-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.pick-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 16px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pick-chip:hover { background: rgba(0, 212, 255, 0.16); }
+.pick-rank {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 212, 255, 0.4);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+.pick-code { font-variant-numeric: tabular-nums; }
 @media (max-width: 1000px) { .config-grid { grid-template-columns: 1fr; } }
 </style>

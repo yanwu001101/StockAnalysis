@@ -3,16 +3,16 @@ import { ref } from 'vue'
 import type { StrategyConfig } from '@/types'
 
 const DEFAULT_STRATEGIES: StrategyConfig[] = [
-  { id: 'macd_ma', name: 'MACD+均线趋势共振', nameEn: 'MACD+MA', description: 'MACD金叉配合均线多头排列，趋势确认效果最强', enabled: true, weight: 12, icon: 'TrendCharts', color: '#00D4FF' },
-  { id: 'multi_factor', name: '多因子价值投资', nameEn: 'Multi-Factor', description: 'ROE+负债率+现金流+成长性综合打分', enabled: true, weight: 25, icon: 'DataAnalysis', color: '#2AE8A4' },
-  { id: 'momentum_breakout', name: '动量突破策略', nameEn: 'Momentum', description: '股价突破N日新高+成交量放大确认', enabled: true, weight: 10, icon: 'Top', color: '#FF9F43' },
-  { id: 'rsi_rebound', name: 'RSI超卖反弹', nameEn: 'RSI Rebound', description: 'RSI从超卖区回升，捕捉反弹机会', enabled: true, weight: 8, icon: 'Bottom', color: '#A78BFA' },
-  { id: 'bollinger_squeeze', name: '布林带收口突破', nameEn: 'Bollinger', description: '布林带收窄后放量突破上轨', enabled: true, weight: 8, icon: 'Minus', color: '#FFC312' },
-  { id: 'chip_concentration', name: '筹码集中+机构增持', nameEn: 'Chip+', description: '股东户数减少+机构持仓增加', enabled: true, weight: 10, icon: 'User', color: '#FF6B81' },
-  { id: 'dividend_stability', name: '股息率+分红稳定性', nameEn: 'Dividend', description: '高股息+连续多年稳定分红', enabled: true, weight: 8, icon: 'Coin', color: '#FECA57' },
-  { id: 'northbound_flow', name: '北向资金流入', nameEn: 'Northbound', description: '外资持续买入的标的', enabled: true, weight: 7, icon: 'Guide', color: '#48DBFB' },
-  { id: 'sector_rotation', name: '行业轮动策略', nameEn: 'Rotation', description: '根据动量切换热门行业', enabled: true, weight: 7, icon: 'Refresh', color: '#FF9FF3' },
-  { id: 'kdj_rsi_resonance', name: 'KDJ+RSI双指标共振', nameEn: 'KDJ+RSI', description: '两个超买超卖指标同时发出信号', enabled: true, weight: 5, icon: 'Aim', color: '#54A0FF' },
+  { id: 'piotroski_f', name: 'Piotroski F-Score', nameEn: 'Piotroski', description: '9项基本面打分筛优质低估股 (Piotroski 2000)', enabled: true, weight: 12, icon: 'DataAnalysis', color: '#2AE8A4' },
+  { id: 'magic_formula', name: '神奇公式 Magic Formula', nameEn: 'Magic Formula', description: 'ROC + 盈利收益率双排名 (Greenblatt)', enabled: true, weight: 10, icon: 'Coin', color: '#FFC312' },
+  { id: 'quality_factor', name: '质量因子 Quality', nameEn: 'Quality', description: '稳定高ROE + 现金流质量 + 低杠杆', enabled: true, weight: 18, icon: 'Medal', color: '#00D4FF' },
+  { id: 'momentum_12_1', name: '12-1月动量', nameEn: 'Momentum 12-1', description: '过去12月剔近1月累计收益 (Jegadeesh-Titman)', enabled: true, weight: 10, icon: 'Top', color: '#FF9F43' },
+  { id: 'low_volatility', name: '低波动异象', nameEn: 'Low Volatility', description: '60日波动率最低分位 + 正趋势确认 (BAB)', enabled: true, weight: 8, icon: 'Minus', color: '#A78BFA' },
+  { id: 'pead', name: 'PEAD 盈余惊喜后漂移', nameEn: 'PEAD', description: '财报YoY增速跳变 + 近期公告事件触发', enabled: true, weight: 10, icon: 'Bell', color: '#FF6B81' },
+  { id: 'northbound_smart_money', name: '北向资金追踪', nameEn: 'Northbound', description: '外资 5/10/20 日加仓 + 持股比例提升', enabled: true, weight: 8, icon: 'Guide', color: '#48DBFB' },
+  { id: 'lhb_followup', name: '龙虎榜机构跟随', nameEn: 'LHB Followup', description: '机构席位净买 + 买入主导比', enabled: true, weight: 8, icon: 'User', color: '#FECA57' },
+  { id: 'sector_rotation', name: '行业动量轮动', nameEn: 'Rotation', description: '行业排名前 20% + 个股相对强势', enabled: true, weight: 8, icon: 'Refresh', color: '#FF9FF3' },
+  { id: 'technical_resonance', name: '技术共振', nameEn: 'Resonance', description: 'MACD金叉 + 均线多头 + 量价 + 北向5日加仓', enabled: true, weight: 10, icon: 'TrendCharts', color: '#54A0FF' },
 ]
 
 export const useStrategyStore = defineStore('strategy', () => {

@@ -20,6 +20,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '智能选股', icon: 'Search' },
       },
       {
+        path: 'conditions',
+        name: 'ConditionScreener',
+        component: () => import('@/views/ConditionScreener.vue'),
+        meta: { title: '条件选股', icon: 'Filter' },
+      },
+      {
+        path: 'expression',
+        name: 'ExpressionScreener',
+        component: () => import('@/views/ExpressionScreener.vue'),
+        meta: { title: '表达式选股', icon: 'EditPen' },
+      },
+      {
         path: 'stock/:code',
         name: 'StockDetail',
         component: () => import('@/views/StockDetail.vue'),
@@ -42,6 +54,18 @@ const routes: RouteRecordRaw[] = [
         name: 'Backtest',
         component: () => import('@/views/Backtest.vue'),
         meta: { title: '策略回测', icon: 'TrendCharts' },
+      },
+      {
+        path: 'lhb',
+        name: 'Lhb',
+        component: () => import('@/views/Lhb.vue'),
+        meta: { title: '龙虎榜', icon: 'Trophy' },
+      },
+      {
+        path: 'moneyflow',
+        name: 'MoneyFlow',
+        component: () => import('@/views/MoneyFlow.vue'),
+        meta: { title: '资金流', icon: 'Money' },
       },
       {
         path: 'settings',

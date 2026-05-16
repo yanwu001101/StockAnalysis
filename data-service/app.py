@@ -314,12 +314,18 @@ def market_summary():
 
         change_col = "涨跌幅" if "涨跌幅" in merged.columns else None
         if change_col:
-            up = int((merged[change_col] > 0).sum())
-            down = int((merged[change_col] < 0).sum())
-            flat = int((merged[change_col] == 0).sum())
-            avg_change = round(float(merged[change_col].mean()), 2)
+            chg = pd.to_numeric(merged[change_col], errors="coerce")
+            up = int((chg > 0).sum())
+            down = int((chg < 0).sum())
+            flat = int((chg == 0).sum())
+            avg_change = round(float(chg.mean()), 2)
+            # A-share daily limit: 主板 ±10% (历史允许 9.95+ 即涨停), 创业/科创 ±20%
+            code_series = merged["代码"].astype(str)
+            is_chinext = code_series.str.startswith(("30", "68"))
+            up_limit = int(((chg >= 19.5) & is_chinext).sum() + ((chg >= 9.7) & ~is_chinext).sum())
+            down_limit = int(((chg <= -19.5) & is_chinext).sum() + ((chg <= -9.7) & ~is_chinext).sum())
         else:
-            up = down = flat = 0
+            up = down = flat = up_limit = down_limit = 0
             avg_change = 0
 
         # Top gainers
@@ -344,14 +350,16 @@ def market_summary():
             df_sec = merged[merged["行业"].astype(str).str.strip().replace("-", pd.NA).notna()]
             df_sec = df_sec[pd.to_numeric(df_sec[change_col], errors="coerce").notna()]
             sector_avg = df_sec.groupby("行业")[change_col].mean().sort_values(ascending=False).dropna()
-            for name, chg in sector_avg.head(5).items():
-                hot_sectors.append({"name": str(name), "change": round(float(chg), 2), "flow": 0, "momentum": 0, "rank": 0})
+            for name, chg_v in sector_avg.head(5).items():
+                hot_sectors.append({"name": str(name), "change": round(float(chg_v), 2), "flow": 0, "momentum": 0, "rank": 0})
 
         return jsonify({
             "totalStocks": len(spot),
             "upCount": up,
             "downCount": down,
             "flatCount": flat,
+            "upLimit": up_limit,
+            "downLimit": down_limit,
             "avgChange": avg_change,
             "northboundFlow": 0,
             "topGainers": top_list,
@@ -662,6 +670,129 @@ def northbound_flow():
         return jsonify({"error": str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# New market endpoints (Phase B): indices, gainers, losers, most-active
+# ---------------------------------------------------------------------------
+
+_INDEX_LABELS = {
+    "000001": "上证指数",
+    "399001": "深证成指",
+    "399006": "创业板指",
+    "000300": "沪深300",
+    "000688": "科创50",
+    "000016": "上证50",
+    "000905": "中证500",
+}
+
+
+@app.route("/api/market/indices")
+def market_indices():
+    """Realtime quotes for major A-share indices."""
+    try:
+        import akshare as ak
+        # Sina is more stable than EM for this query right now. Hit it first
+        # without going through retry_call to avoid kwarg shadowing.
+        df = None
+        try:
+            df = ak.stock_zh_index_spot_sina()
+        except Exception:
+            df = None
+        if df is None or df.empty:
+            try:
+                df = ak.stock_zh_index_spot_em(symbol="上证系列指数")
+            except Exception:
+                df = None
+        if df is None or df.empty:
+            return jsonify([])
+
+        # Normalise column names — akshare keeps changing them
+        rename = {
+            "代码": "code", "名称": "name", "最新价": "price",
+            "涨跌幅": "changePercent", "涨跌额": "change",
+            "成交额": "amount", "成交量": "volume",
+            "最高": "high", "最低": "low", "今开": "open", "昨收": "prevClose",
+        }
+        df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+        if "code" not in df.columns:
+            return jsonify([])
+        df["code"] = df["code"].astype(str).str.replace("sh", "", regex=False).str.replace("sz", "", regex=False).str.zfill(6)
+        df = df[df["code"].isin(_INDEX_LABELS.keys())]
+        for col in ("price", "changePercent", "change", "open", "high", "low", "prevClose", "amount", "volume"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        result = []
+        for _, r in df.iterrows():
+            result.append({
+                "code": r["code"],
+                "name": _INDEX_LABELS.get(r["code"], str(r.get("name", ""))),
+                "price": round(float(r.get("price") or 0), 2),
+                "changePercent": round(float(r.get("changePercent") or 0), 2),
+                "change": round(float(r.get("change") or 0), 2),
+                "open": round(float(r.get("open") or 0), 2),
+                "high": round(float(r.get("high") or 0), 2),
+                "low": round(float(r.get("low") or 0), 2),
+                "prevClose": round(float(r.get("prevClose") or 0), 2),
+            })
+        order = ["000001", "399001", "399006", "000300", "000688", "000016", "000905"]
+        result.sort(key=lambda x: order.index(x["code"]) if x["code"] in order else 99)
+        return jsonify(result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+def _spot_sorted_list(ascending: bool, limit: int, key_col: str = "涨跌幅") -> list:
+    spot = fetch_spot()
+    if spot is None or spot.empty or key_col not in spot.columns:
+        return []
+    df = spot.copy()
+    df[key_col] = pd.to_numeric(df[key_col], errors="coerce")
+    df = df.dropna(subset=[key_col])
+    df = df.sort_values(key_col, ascending=ascending).head(limit)
+    out = []
+    for _, r in df.iterrows():
+        out.append({
+            "code": str(r.get("代码", "")),
+            "name": str(r.get("名称", "")),
+            "industry": str(r.get("行业", "")),
+            "price": round(float(r.get("最新价", 0) or 0), 2),
+            "changePercent": round(float(r.get("涨跌幅", 0) or 0), 2),
+            "volume": int(r.get("成交量", 0) or 0),
+            "amount": round(float(r.get("成交额", 0) or 0) / 1e8, 2),  # 亿元
+            "turnover": round(float(r.get("换手率", 0) or 0), 2),
+            "marketCap": round(float(r.get("总市值_亿", 0) or 0), 0),
+        })
+    return out
+
+
+@app.route("/api/market/gainers")
+def market_gainers():
+    try:
+        limit = int(request.args.get("limit", 20))
+        return jsonify(_spot_sorted_list(ascending=False, limit=limit, key_col="涨跌幅"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/market/losers")
+def market_losers():
+    try:
+        limit = int(request.args.get("limit", 20))
+        return jsonify(_spot_sorted_list(ascending=True, limit=limit, key_col="涨跌幅"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/market/most-active")
+def market_most_active():
+    try:
+        limit = int(request.args.get("limit", 20))
+        key_col = "成交额" if "成交额" in fetch_spot().columns else "成交量"
+        return jsonify(_spot_sorted_list(ascending=False, limit=limit, key_col=key_col))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/stock/search")
 def search_stock():
     try:
@@ -687,6 +818,30 @@ def search_stock():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "timestamp": dt.datetime.now().isoformat()})
+
+
+# ---------------------------------------------------------------------------
+# Blueprints (P5+): backtest, /metrics, /circuits
+# ---------------------------------------------------------------------------
+try:
+    from api.backtest import bp as backtest_bp
+    from api.metrics import bp as ops_bp
+    from api.strategies_v2 import bp as v2_bp
+    from api.lhb import bp as lhb_bp
+    from api.moneyflow import bp as mf_bp
+    from api.f10 import bp as f10_bp
+    from api.conditions import bp as cond_bp
+    from api.expression import bp as expr_bp
+    app.register_blueprint(backtest_bp)
+    app.register_blueprint(ops_bp)
+    app.register_blueprint(v2_bp)
+    app.register_blueprint(lhb_bp)
+    app.register_blueprint(mf_bp)
+    app.register_blueprint(f10_bp)
+    app.register_blueprint(cond_bp)
+    app.register_blueprint(expr_bp)
+except Exception as _bp_err:
+    print(f'[data-service] blueprint registration failed: {_bp_err}')
 
 
 if __name__ == "__main__":

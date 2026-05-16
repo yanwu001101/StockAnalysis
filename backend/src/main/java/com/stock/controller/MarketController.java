@@ -55,4 +55,40 @@ public class MarketController {
             return ApiResponse.error("获取北向资金失败: " + e.getMessage());
         }
     }
+
+    @GetMapping("/indices")
+    public ApiResponse<?> indices() {
+        try {
+            return ApiResponse.ok(dataService.getIndices());
+        } catch (Exception e) {
+            return ApiResponse.error("获取指数数据失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/gainers")
+    public ApiResponse<?> gainers(@RequestParam(defaultValue = "20") int limit) {
+        try {
+            return ApiResponse.ok(dataService.getGainers(limit));
+        } catch (Exception e) {
+            return ApiResponse.error("获取涨幅榜失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/losers")
+    public ApiResponse<?> losers(@RequestParam(defaultValue = "20") int limit) {
+        try {
+            return ApiResponse.ok(dataService.getLosers(limit));
+        } catch (Exception e) {
+            return ApiResponse.error("获取跌幅榜失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/most-active")
+    public ApiResponse<?> mostActive(@RequestParam(defaultValue = "20") int limit) {
+        try {
+            return ApiResponse.ok(dataService.getMostActive(limit));
+        } catch (Exception e) {
+            return ApiResponse.error("获取活跃榜失败: " + e.getMessage());
+        }
+    }
 }

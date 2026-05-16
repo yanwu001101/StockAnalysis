@@ -48,6 +48,16 @@ public class StockController {
         }
     }
 
+    @GetMapping("/{code}/f10")
+    public ApiResponse<?> f10(@PathVariable String code) {
+        try {
+            JSONObject data = dataService.getStockF10(code);
+            return ApiResponse.ok(data);
+        } catch (Exception e) {
+            return ApiResponse.error("获取 F10 资料失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/search")
     public ApiResponse<?> search(@RequestParam String keyword) {
         try {

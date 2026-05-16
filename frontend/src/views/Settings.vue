@@ -5,15 +5,17 @@
       <el-form label-position="top" size="default">
         <el-divider content-position="left">外观</el-divider>
         <el-form-item label="主题模式">
-          <el-switch v-model="isDark" active-text="暗色" inactive-text="亮色" @change="toggleTheme" />
+          <el-switch v-model="settings.isDark" active-text="暗色" inactive-text="亮色" />
         </el-form-item>
 
         <el-divider content-position="left">数据</el-divider>
         <el-form-item label="行情刷新间隔 (秒)">
-          <el-input-number v-model="refreshInterval" :min="5" :max="60" :step="5" />
+          <el-input-number v-model="settings.refreshInterval" :min="5" :max="60" :step="5" />
+          <span class="hint">仪表盘按此频率自动刷新</span>
         </el-form-item>
         <el-form-item label="默认选股数量">
-          <el-input-number v-model="defaultLimit" :min="10" :max="200" :step="10" />
+          <el-input-number v-model="settings.defaultLimit" :min="10" :max="200" :step="10" />
+          <span class="hint">智能选股页"输出数量"的初始值</span>
         </el-form-item>
 
         <el-divider content-position="left">账户</el-divider>
@@ -26,20 +28,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const userStore = useUserStore()
-
-const isDark = ref(true)
-const refreshInterval = ref(15)
-const defaultLimit = ref(80)
-
-function toggleTheme(dark: boolean) {
-  document.documentElement.classList.toggle('dark', dark)
-}
+const settings = useSettingsStore()
 
 function handleLogout() {
   userStore.logout()
@@ -56,5 +51,10 @@ function handleLogout() {
   margin: 0 0 24px;
   font-size: 20px;
   color: var(--text-primary);
+}
+.hint {
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--text-3);
 }
 </style>

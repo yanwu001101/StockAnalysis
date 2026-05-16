@@ -16,3 +16,19 @@ export function getNorthboundFlow(days: number = 30): Promise<any[]> {
 export function getTopStocks(limit: number = 20): Promise<any[]> {
   return request.get('/market/top-stocks', { params: { limit } })
 }
+
+export function getIndices(): Promise<any[]> {
+  return request.get('/market/indices')
+}
+
+export function getGainers(limit: number = 20): Promise<any[]> {
+  return request.get('/market/gainers', { params: { limit } })
+}
+
+export function getLosers(limit: number = 20): Promise<any[]> {
+  return request.get('/market/losers', { params: { limit } })
+}
+
+export function getMostActive(limit: number = 20): Promise<any[]> {
+  return request.get('/market/most-active', { params: { limit } })
+}

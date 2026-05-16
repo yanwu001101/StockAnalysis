@@ -31,6 +31,7 @@ request.interceptors.response.use(
     return res.data
   },
   (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       window.location.href = '/login'

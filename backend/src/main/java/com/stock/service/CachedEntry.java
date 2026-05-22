@@ -8,6 +8,6 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 public class CachedEntry {
-    private Object payload;
+    private String json;
     private long writtenAt;
 }

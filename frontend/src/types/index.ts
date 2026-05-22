@@ -101,6 +101,7 @@ export interface ScreenerRequest {
     industries: string[]
   }
   limit: number
+  requireTriggered?: string[]
 }
 
 // Backtest

@@ -194,6 +194,11 @@ def _score_all(ctx: StrategyContext, weights: Optional[dict] = None,
     total = 0.0
     weight_sum = 0.0
     params = params or {}
+    # Markers a strategy can put in details when it cannot meaningfully score.
+    # Their weight contribution is dropped from the composite so missing data
+    # doesn't drag the average down toward zero.
+    NO_DATA_KEYS = ("no_data", "insufficient_data", "no_lhb", "no_rank")
+
     for cls in REGISTRY:
         w = cls.default_weight if weights is None else weights.get(cls.id, 0.0)
         if w <= 0:
@@ -208,22 +213,28 @@ def _score_all(ctx: StrategyContext, weights: Optional[dict] = None,
             user_params = cls.Params(**override) if override else None
             s = cls(params=user_params)
             res = s.score(ctx)
-            total += res.score * w
-            weight_sum += w
+            has_no_data = any(res.details.get(k) for k in NO_DATA_KEYS)
+            if not has_no_data:
+                total += res.score * w
+                weight_sum += w
             entry = {
                 "id": cls.id, "name": cls.name,
                 "score": round(res.score, 2), "signal": res.signal,
                 "weight": w, "triggered": res.triggered, "details": res.details,
+                "no_data": has_no_data,
             }
             out_list.append(entry)
             out_dict[cls.id] = entry
         except Exception as e:
             err = {"id": cls.id, "name": cls.name, "score": 0,
-                   "signal": "neutral", "error": str(e)}
+                   "signal": "neutral", "error": str(e), "no_data": True}
             out_list.append(err)
             out_dict[cls.id] = err
     composite = (total / weight_sum) if weight_sum > 0 else 0.0
-    signal = "bullish" if composite >= 60 else "bearish" if composite <= 25 else "neutral"
+    # Relaxed thresholds vs the legacy 60/25 because (a) some valid strategies
+    # never reach 60 by design (e.g. low_volatility caps at ~75), and (b) the
+    # composite is averaging more dimensions now so the extreme tails are rarer.
+    signal = "bullish" if composite >= 55 else "bearish" if composite <= 30 else "neutral"
     return round(composite, 2), signal, out_dict, out_list
 
 
@@ -262,22 +273,35 @@ def _parse_weights(body: dict) -> Optional[dict[str, float]]:
 
 @bp.route("/stock/<code>/score")
 def stock_score(code: str):
-    code = str(code).zfill(6)
     ctx = _load_ctx(code)
-    weights = _parse_weights(request.args.to_dict()) if request.args else None
+    weights = _parse_weights(request.args)
     composite, signal, out_dict, out_list = _score_all(ctx, weights)
+
+    # Aggregate stats for the front-end "看多 N/M 触发 K" indicator.
+    effective = [it for it in out_list if not it.get("no_data") and not (it.get("details") or {}).get("disabled")]
+    bullish_n = sum(1 for it in effective if it.get("signal") == "bullish")
+    bearish_n = sum(1 for it in effective if it.get("signal") == "bearish")
+    triggered_n = sum(1 for it in effective if it.get("triggered"))
+
     return jsonify({
-        # Legacy-compatible fields (front-end CompositeScore type)
-        "total": composite,
-        "signal": signal,
-        "strategies": out_dict,
-        # Extended fields for richer UI
         "code": code,
         "name": ctx.name,
-        "industry": ctx.industry,
+        "price": ctx.price,
+        "total": composite,
         "composite_score": composite,
         "composite_signal": signal,
+        "strategies": out_dict,
         "strategies_list": out_list,
+        "aggregate": {
+            "effective": len(effective),
+            "total_strategies": len(out_list),
+            "bullish": bullish_n,
+            "bearish": bearish_n,
+            "neutral": len(effective) - bullish_n - bearish_n,
+            "triggered": triggered_n,
+        },
+        "industry": ctx.industry,
+        "signal": signal,
     })
 
 
@@ -299,6 +323,10 @@ def screen():
     industries: list = filters.get("industries") or []
     weights = _parse_weights(body)
     strategy_params = body.get("strategyParams") or body.get("strategy_params") or {}
+    require_triggered: list = (
+        body.get("requireTriggered") or body.get("require_triggered") or []
+    )
+    require_triggered = [str(x) for x in require_triggered if x]
 
     # Universe: top by market cap from cached spot, capped at 200 codes so we
     # don't run 5000 strategy evaluations on every request.
@@ -341,6 +369,13 @@ def screen():
         composite, signal, _, out_list = _score_all(ctx, weights, strategy_params)
         if composite < min_score:
             continue
+        triggered_map = {it["id"]: bool(it.get("triggered")) for it in out_list}
+        if require_triggered and not all(triggered_map.get(sid) for sid in require_triggered):
+            continue
+        effective = [it for it in out_list if not it.get("no_data") and not (it.get("details") or {}).get("disabled")]
+        bullish_count = sum(1 for it in effective if it.get("signal") == "bullish")
+        bearish_count = sum(1 for it in effective if it.get("signal") == "bearish")
+        triggered_count = sum(1 for it in effective if it.get("triggered"))
         results.append({
             "code": code,
             "name": str(row.get(name_col) or ctx.name or ""),
@@ -351,6 +386,14 @@ def screen():
             "compositeScore": composite,
             "signal": signal,
             "strategies": {it["id"]: it["score"] for it in out_list},
+            "triggered": triggered_map,
+            "strategyStats": {
+                "effective": len(effective),
+                "total": len(out_list),
+                "bullish": bullish_count,
+                "bearish": bearish_count,
+                "triggered": triggered_count,
+            },
         })
 
     results.sort(key=lambda x: x["compositeScore"], reverse=True)
@@ -399,4 +442,38 @@ def stock_prediction(code: str):
         "keyDrivers": result.key_drivers,
         "riskWarnings": result.risk_warnings,
         "timeHorizon": result.time_horizon,
+    })
+
+
+@bp.route("/stock/<code>/pro-signal")
+def stock_pro_signal(code: str):
+    """Pro-grade leading-indicator short-term direction signal.
+
+    Designed to be low-lag — uses Heikin-Ashi, DEMA/TEMA, TSI, VWAP deviation,
+    Volume Profile POC, CMF, order-flow proxy, short EMA cross, and 5-day
+    breadth. Returns a probability + key dimensions for the front-end pro page.
+    """
+    code = str(code).zfill(6)
+    ctx = _load_ctx(code)
+    from pro_signal import pro_signal as _pro
+    result = _pro(ctx)
+    dims = [{
+        "name": d.name, "nameEn": d.name_en,
+        "score": round(d.score, 4), "weight": d.weight,
+        "detail": d.detail, "value": d.value,
+    } for d in result.dimensions]
+    return jsonify({
+        "code": result.code,
+        "name": result.name,
+        "price": result.price,
+        "probabilityUp": result.probability_up,
+        "probabilityDown": result.probability_down,
+        "confidence": result.confidence,
+        "direction": result.direction,
+        "label": result.label,
+        "composite": result.composite,
+        "dimensions": dims,
+        "keySignals": result.key_signals,
+        "risks": result.risks,
+        "horizon": result.horizon,
     })

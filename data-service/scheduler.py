@@ -132,8 +132,10 @@ def _get_universe_codes(top_n: int = 300) -> list[str]:
     )
 
 
-def refresh_moneyflow_northbound():
-    """Pull money flow + northbound holdings for top-N universe."""
+def refresh_moneyflow_northbound(days: int = 5):
+    """Pull money flow + northbound holdings for top-N universe.
+
+    days defaults to 5 (incremental). First-run warmup passes 60 to seed history."""
     import asyncio
     if db.get_engine() is None:
         log.info("[scheduler] MySQL unavailable; skipping moneyflow/northbound")
@@ -143,13 +145,13 @@ def refresh_moneyflow_northbound():
         log.warning("[scheduler] empty universe; skipping moneyflow/northbound")
         return
     try:
-        asyncio.run(mf_pipe.run_batch(codes, days=60))
-        log.info("[scheduler] moneyflow refresh done")
+        asyncio.run(mf_pipe.run_batch(codes, days=days))
+        log.info("[scheduler] moneyflow refresh done (days=%d)", days)
     except Exception as e:
         log.warning("[scheduler] moneyflow refresh failed: %s", e)
     try:
-        asyncio.run(nb_pipe.run_batch(codes, days=60))
-        log.info("[scheduler] northbound refresh done")
+        asyncio.run(nb_pipe.run_batch(codes, days=days))
+        log.info("[scheduler] northbound refresh done (days=%d)", days)
     except Exception as e:
         log.warning("[scheduler] northbound refresh failed: %s", e)
 
@@ -217,11 +219,12 @@ def start():
                 id="startup_lhb",
                 replace_existing=True,
             )
-            # Money flow + northbound on startup
+            # Money flow + northbound on startup (seed 60 days)
             sched.add_job(
                 refresh_moneyflow_northbound,
                 DateTrigger(run_date=run_at + dt.timedelta(seconds=60)),
                 id="startup_mf_nb",
+                kwargs={"days": 60},
                 replace_existing=True,
             )
             log.info("[scheduler] startup warmup scheduled at %s (top_n=%d)", run_at, WARMUP_TOP_N)

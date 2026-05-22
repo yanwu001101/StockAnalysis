@@ -56,6 +56,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '策略回测', icon: 'TrendCharts' },
       },
       {
+        path: 'pro-signal/:code',
+        name: 'ProSignal',
+        component: () => import('@/views/ProSignal.vue'),
+        meta: { title: '专业预测', icon: 'Aim', hidden: true },
+      },
+      {
         path: 'lhb',
         name: 'Lhb',
         component: () => import('@/views/Lhb.vue'),

@@ -39,10 +39,17 @@ class Pead(AbstractStrategy):
                 return 0.0
 
         cur = df.iloc[0]
+        cur_yoy = f(cur.get("net_profit_yoy"))
+        revenue_yoy = f(cur.get("revenue_yoy"))
+        # If both YoY series are missing/zero and there is no recent earnings
+        # event, PEAD cannot meaningfully score — flag as no_data so the
+        # composite layer drops it instead of treating 0 as bearish.
+        if cur_yoy == 0 and revenue_yoy == 0 and not ctx.has_earnings_announcement:
+            return ScoreResult(score=0, signal="neutral", details={"no_data": True})
+
         score = 0.0
         details: dict = {}
 
-        cur_yoy = f(cur.get("net_profit_yoy"))
         # Trailing 4-quarter average (excluding current)
         past = [f(r.get("net_profit_yoy")) for _, r in df.iloc[1:5].iterrows()]
         avg_past = (sum(past) / len(past)) if past else 0.0

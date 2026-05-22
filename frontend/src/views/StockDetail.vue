@@ -20,6 +20,9 @@
       <div class="header-right">
         <ScoreGauge :score="compositeScore" :size="90" />
         <div class="action-btns">
+          <el-button type="success" size="small" @click="$router.push(`/pro-signal/${code}`)">
+            <el-icon><Aim /></el-icon>专业预测
+          </el-button>
           <el-button v-if="!isInWatchlist" type="primary" plain size="small" @click="addToWatchlist">
             <el-icon><Star /></el-icon>加自选
           </el-button>
@@ -62,7 +65,7 @@
     </div>
 
     <div class="glass-card strategies-card">
-      <h3>十大策略评分详情</h3>
+      <h3>多策略评分详情</h3>
       <div class="strategy-grid">
         <div class="strategy-item glass-card" v-for="(score, id) in strategyScores" :key="id">
           <div class="strategy-header">
@@ -197,7 +200,7 @@ import KLineChart from '@/components/charts/KLineChart.vue'
 import RadarChart from '@/components/charts/RadarChart.vue'
 import ScoreGauge from '@/components/charts/ScoreGauge.vue'
 import PredictionPanel from '@/components/charts/PredictionPanel.vue'
-import { Star, StarFilled } from '@element-plus/icons-vue'
+import { Star, StarFilled, Aim } from '@element-plus/icons-vue'
 import type { KLineData, PredictionResult } from '@/types'
 
 const route = useRoute()

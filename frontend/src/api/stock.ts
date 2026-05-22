@@ -21,6 +21,10 @@ export function getStockPrediction(code: string, signal?: AbortSignal): Promise<
   return request.get(`/stock/${code}/prediction`, { signal })
 }
 
+export function getStockProSignal(code: string, signal?: AbortSignal): Promise<any> {
+  return request.get(`/stock/${code}/pro-signal`, { signal })
+}
+
 export function searchStock(keyword: string): Promise<any[]> {
   return request.get('/stock/search', { params: { keyword } })
 }

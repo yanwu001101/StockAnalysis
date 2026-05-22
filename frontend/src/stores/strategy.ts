@@ -13,6 +13,18 @@ const DEFAULT_STRATEGIES: StrategyConfig[] = [
   { id: 'lhb_followup', name: '龙虎榜机构跟随', nameEn: 'LHB Followup', description: '机构席位净买 + 买入主导比', enabled: true, weight: 8, icon: 'User', color: '#FECA57' },
   { id: 'sector_rotation', name: '行业动量轮动', nameEn: 'Rotation', description: '行业排名前 20% + 个股相对强势', enabled: true, weight: 8, icon: 'Refresh', color: '#FF9FF3' },
   { id: 'technical_resonance', name: '技术共振', nameEn: 'Resonance', description: 'MACD金叉 + 均线多头 + 量价 + 北向5日加仓', enabled: true, weight: 10, icon: 'TrendCharts', color: '#54A0FF' },
+  { id: 'turtle_breakout', name: '海龟通道突破', nameEn: 'Turtle', description: '20日 Donchian 通道突破 + ATR 确认 (Dennis 1983)', enabled: true, weight: 6, icon: 'TopRight', color: '#10B981' },
+  { id: 'boll_kdj_resonance', name: '布林+KDJ 共振', nameEn: 'Boll+KDJ', description: '下轨支撑 + J<20 金叉，券商研报背书', enabled: true, weight: 6, icon: 'Aim', color: '#F472B6' },
+  { id: 'macd_divergence', name: 'MACD 背离', nameEn: 'MACD Div', description: '顶背离/底背离反转，经典反转信号', enabled: true, weight: 5, icon: 'CaretBottom', color: '#FB923C' },
+  { id: 'max_reversal', name: '彩票异象反向', nameEn: 'MAX', description: '22日最大单日涨幅高→看空 (Bali 2011)', enabled: true, weight: 5, icon: 'WarningFilled', color: '#EC4899' },
+  { id: 'hurst_trend', name: 'Hurst 趋势性', nameEn: 'Hurst', description: 'H>0.55 趋势/H<0.45 反转 (Mandelbrot)', enabled: true, weight: 4, icon: 'DataLine', color: '#8B5CF6' },
+  { id: 'turnover_dryup', name: '缩量企稳', nameEn: 'Dry-up', description: '换手低位 + 价格不破新低，A股底部信号', enabled: true, weight: 4, icon: 'Bottom', color: '#06B6D4' },
+  { id: 'fifty_two_week_high', name: '52周新高效应', nameEn: '52WH', description: '接近52周高点 + 趋势确认 (George & Hwang 2004)', enabled: true, weight: 7, icon: 'TopRight', color: '#22C55E' },
+  { id: 'accruals_quality', name: '应计利润质量', nameEn: 'Accruals', description: '低应计/高现金质量 (Sloan 1996)', enabled: true, weight: 6, icon: 'Money', color: '#0EA5E9' },
+  { id: 'asset_growth', name: '资产增长异象', nameEn: 'Asset Growth', description: '扩张过快后续低收益 (Cooper 2008)', enabled: true, weight: 5, icon: 'PieChart', color: '#EAB308' },
+  { id: 'chip_concentration', name: '筹码集中度', nameEn: 'Chip Conc', description: 'VWAP 带宽 + 价格在成本上方', enabled: true, weight: 5, icon: 'Discount', color: '#A855F7' },
+  { id: 'ma_stack_breakout', name: '均线粘合突破', nameEn: 'MA Stack', description: '5/10/20/30/60 粘合后向上突破，主升浪', enabled: true, weight: 6, icon: 'Histogram', color: '#F43F5E' },
+  { id: 'multi_horizon_momentum', name: '多维度动量', nameEn: 'MultiMom', description: '5/21/63/252-21 多窗口 + Sharpe + 一致性 (AQR/Carhart)', enabled: true, weight: 10, icon: 'Promotion', color: '#0891B2' },
 ]
 
 export const useStrategyStore = defineStore('strategy', () => {

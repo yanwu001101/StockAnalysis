@@ -53,9 +53,17 @@
             <h3>筛选结果 <span class="count num">{{ results.length }}</span></h3>
             <p class="card-sub">点击行查看个股详情</p>
           </div>
-          <el-button @click="exportResults">
-            <el-icon style="margin-right: 6px;"><Download /></el-icon>导 出
-          </el-button>
+          <div class="result-actions">
+            <span class="sort-label">排序优先</span>
+            <el-radio-group v-model="sortBy" size="small" @change="applySort">
+              <el-radio-button value="composite">综合评分</el-radio-button>
+              <el-radio-button value="strategy">策略评分</el-radio-button>
+              <el-radio-button value="pro">专业信号</el-radio-button>
+            </el-radio-group>
+            <el-button @click="exportResults">
+              <el-icon style="margin-right: 6px;"><Download /></el-icon>导 出
+            </el-button>
+          </div>
         </header>
 
         <div class="table-wrap">
@@ -66,12 +74,24 @@
                 <th>名称</th>
                 <th>代码</th>
                 <th>行业</th>
-                <th class="t-right">最新价</th>
-                <th class="t-center">评分</th>
-                <th class="t-right">ROE</th>
-                <th class="t-right">负债率</th>
-                <th class="t-right">市值</th>
+                <th class="t-center">最新价</th>
+                <th class="t-center">综合分</th>
+                <th class="t-center">
+                  策略评分
+                  <el-tooltip content="看多策略数 / 有效策略数 · 触发策略数" placement="top">
+                    <el-icon style="vertical-align: -2px;"><InfoFilled /></el-icon>
+                  </el-tooltip>
+                </th>
+                <th class="t-center">ROE</th>
+                <th class="t-center">负债率</th>
+                <th class="t-center">市值</th>
                 <th class="t-center">信号</th>
+                <th class="t-center">
+                  专业信号
+                  <el-tooltip content="Leading 指标:T+1~T+5 短期方向" placement="top">
+                    <el-icon style="vertical-align: -2px;"><InfoFilled /></el-icon>
+                  </el-tooltip>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -80,15 +100,33 @@
                 <td><span class="stock-name">{{ row.name }}</span></td>
                 <td class="mono dim">{{ row.code }}</td>
                 <td class="dim">{{ row.industry }}</td>
-                <td class="t-right num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
+                <td class="t-center num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
                 <td class="t-center">
                   <span class="score-pill" :class="scoreCls(row.compositeScore)">{{ row.compositeScore }}</span>
                 </td>
-                <td class="t-right num">{{ row.roe }}%</td>
-                <td class="t-right num">{{ row.debtRatio }}%</td>
-                <td class="t-right num">{{ row.marketCap?.toFixed(0) }}</td>
+                <td class="t-center">
+                  <span v-if="row.strategyStats" class="strat-cell">
+                    <span class="strat-main" :class="stratCls(row.strategyStats)">
+                      {{ row.strategyStats.bullish }}/{{ row.strategyStats.effective }}
+                    </span>
+                    <span class="strat-sub">触发 {{ row.strategyStats.triggered }}</span>
+                  </span>
+                  <span v-else class="dim">—</span>
+                </td>
+                <td class="t-center num">{{ row.roe }}%</td>
+                <td class="t-center num">{{ row.debtRatio }}%</td>
+                <td class="t-center num">{{ row.marketCap?.toFixed(0) }}</td>
                 <td class="t-center">
                   <span class="sig" :class="row.signal">{{ sigText(row.signal) }}</span>
+                </td>
+                <td class="t-center" @click.stop>
+                  <span v-if="row.proSignal === undefined" class="pro-loading">···</span>
+                  <span v-else-if="row.proSignal === null" class="pro-na">—</span>
+                  <span v-else class="pro-pill" :class="row.proSignal.direction"
+                        @click="goProSignal(row)" :title="row.proSignal.keySignals?.[0] || ''">
+                    {{ row.proSignal.label }}
+                    <span class="pro-prob">{{ row.proSignal.probabilityUp }}%</span>
+                  </span>
                 </td>
               </tr>
             </tbody>
@@ -109,10 +147,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { InfoFilled } from '@element-plus/icons-vue'
 import { runScreener } from '@/api/strategy'
+import { getStockProSignal } from '@/api/stock'
 import { useStrategyStore } from '@/stores/strategy'
 import { useSettingsStore } from '@/stores/settings'
 import { useRefreshable } from '@/composables/useRefreshable'
@@ -126,6 +166,7 @@ const loading = ref(false)
 const results = ref<any[]>([])
 const distChartRef = ref<HTMLElement>()
 const industryOptions = ref<string[]>([])
+const sortBy = ref<'composite' | 'strategy' | 'pro'>('composite')
 
 const filters = reactive({
   minScore: 60,
@@ -148,7 +189,7 @@ function resetFilters() {
 async function runFilter() {
   loading.value = true
   try {
-    results.value = await runScreener({
+    const list: any[] = await runScreener({
       strategies: strategyStore.getConfigMap(),
       filters: {
         minScore: filters.minScore,
@@ -159,13 +200,74 @@ async function runFilter() {
       },
       limit: filters.limit,
     })
+    for (const r of list) r.proSignal = undefined
+    results.value = list
     ElMessage.success(`筛选完成，共 ${results.value.length} 只`)
     nextTick(renderDistChart)
+    loadProSignals()
   } catch {
     ElMessage.error('筛选失败，请稍后重试')
   } finally {
     loading.value = false
   }
+}
+
+async function loadProSignals() {
+  const concurrency = 6
+  let idx = 0
+  const worker = async () => {
+    while (idx < results.value.length) {
+      const i = idx++
+      const row = results.value[i]
+      try {
+        row.proSignal = await getStockProSignal(row.code)
+      } catch {
+        row.proSignal = null
+      }
+    }
+  }
+  await Promise.all(Array(concurrency).fill(0).map(() => worker()))
+  applySort()
+}
+
+function applySort() {
+  // Use [...arr].sort(...) so the ref reference changes — sorting in-place
+  // does not always trigger Vue's array tracking, which makes the radio
+  // switch appear "dead" even though the underlying order changed.
+  const arr = [...results.value]
+  if (sortBy.value === 'pro') {
+    arr.sort((a, b) => {
+      const pa = a.proSignal?.probabilityUp ?? -1
+      const pb = b.proSignal?.probabilityUp ?? -1
+      if (pa < 0 && pb < 0) return (b.compositeScore || 0) - (a.compositeScore || 0)
+      return pb - pa
+    })
+  } else if (sortBy.value === 'strategy') {
+    arr.sort((a, b) => {
+      const ba = a.strategyStats?.bullish ?? -1
+      const bb = b.strategyStats?.bullish ?? -1
+      if (ba !== bb) return bb - ba
+      const ta = a.strategyStats?.triggered ?? 0
+      const tb = b.strategyStats?.triggered ?? 0
+      if (ta !== tb) return tb - ta
+      return (b.compositeScore || 0) - (a.compositeScore || 0)
+    })
+  } else {
+    arr.sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0))
+  }
+  results.value = arr
+}
+
+function stratCls(stats: any) {
+  if (!stats || !stats.effective) return 'low'
+  const ratio = stats.bullish / stats.effective
+  if (ratio >= 0.5) return 'high'
+  if (ratio >= 0.3) return 'mid'
+  return 'low'
+}
+
+function goProSignal(row: any) {
+  router.push(`/pro-signal/${row.code}`)
 }
 
 function sigText(s: string) {
@@ -238,6 +340,7 @@ function goStock(row: any) { router.push(`/stock/${row.code}`) }
 function exportResults() { ElMessage.info('导出功能开发中') }
 
 onMounted(() => strategyStore.loadFromStorage())
+watch(sortBy, applySort)
 useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh: false })
 </script>
 
@@ -270,6 +373,8 @@ useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh:
 }
 
 .actions { display: flex; gap: 8px; }
+.result-actions { display: flex; align-items: center; gap: 10px; }
+.sort-label { font-size: 12px; color: var(--text-3); }
 
 .filter-grid {
   display: grid;
@@ -336,6 +441,34 @@ useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh:
 .sig.bullish { background: var(--up-soft); color: var(--up); }
 .sig.bearish { background: var(--down-soft); color: var(--down); }
 .sig.neutral { background: var(--surface-2); color: var(--text-3); }
+
+.pro-loading { color: var(--text-4); font-size: 14px; letter-spacing: 1px; }
+.pro-na { color: var(--text-4); }
+.pro-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pro-pill:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+.pro-pill.up { background: var(--up-soft); color: var(--up); }
+.pro-pill.down { background: var(--down-soft); color: var(--down); }
+.pro-pill.flat { background: var(--surface-2); color: var(--text-3); }
+.pro-prob { font-variant-numeric: tabular-nums; opacity: 0.8; font-size: 11px; }
+
+.strat-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.strat-main {
+  font-size: 12px; font-weight: 700;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
+}
+.strat-main.high { background: var(--up-soft); color: var(--up); }
+.strat-main.mid { background: var(--warn-soft); color: #B88800; }
+.strat-main.low { background: var(--surface-2); color: var(--text-3); }
+.strat-sub { font-size: 10px; color: var(--text-4); font-variant-numeric: tabular-nums; }
 
 .empty-state {
   text-align: center; padding: 80px 20px;

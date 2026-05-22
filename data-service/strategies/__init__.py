@@ -31,6 +31,18 @@ from strategies.piotroski_f import PiotroskiF
 from strategies.quality_factor import QualityFactor
 from strategies.sector_rotation import SectorRotation
 from strategies.technical_resonance import TechnicalResonance
+from strategies.turtle_breakout import TurtleBreakout
+from strategies.boll_kdj_resonance import BollKdjResonance
+from strategies.macd_divergence import MacdDivergence
+from strategies.max_reversal import MaxReversal
+from strategies.hurst_trend import HurstTrend
+from strategies.turnover_dryup import TurnoverDryUp
+from strategies.fifty_two_week_high import FiftyTwoWeekHigh
+from strategies.accruals_quality import AccrualsQuality
+from strategies.asset_growth import AssetGrowth
+from strategies.chip_concentration import ChipConcentration
+from strategies.ma_stack_breakout import MAStack
+from strategies.multi_horizon_momentum import MultiHorizonMomentum
 
 
 REGISTRY: list[type[AbstractStrategy]] = [
@@ -44,6 +56,18 @@ REGISTRY: list[type[AbstractStrategy]] = [
     LhbFollowup,
     SectorRotation,
     TechnicalResonance,
+    TurtleBreakout,
+    BollKdjResonance,
+    MacdDivergence,
+    MaxReversal,
+    HurstTrend,
+    TurnoverDryUp,
+    FiftyTwoWeekHigh,
+    AccrualsQuality,
+    AssetGrowth,
+    ChipConcentration,
+    MAStack,
+    MultiHorizonMomentum,
 ]
 
 
@@ -102,6 +126,65 @@ STRATEGY_PARAM_SPECS: dict[str, list[dict]] = {
     "technical_resonance": [
         {"name": "golden_cross_lookback", "label": "金叉回看", "default": 5, "min": 2, "max": 10, "step": 1},
         {"name": "volume_surge_factor", "label": "放量阈值倍数", "default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1},
+    ],
+    "turtle_breakout": [
+        {"name": "channel_days", "label": "通道周期 (日)", "default": 20, "min": 10, "max": 60, "step": 5, "desc": "Donchian 通道天数"},
+        {"name": "atr_period", "label": "ATR 周期", "default": 14, "min": 7, "max": 30, "step": 1},
+        {"name": "atr_mult_min", "label": "ATR 最低占比倍数", "default": 0.8, "min": 0.5, "max": 2.0, "step": 0.1},
+    ],
+    "boll_kdj_resonance": [
+        {"name": "boll_period", "label": "布林周期", "default": 20, "min": 10, "max": 40, "step": 5},
+        {"name": "boll_std", "label": "布林标准差", "default": 2.0, "min": 1.5, "max": 3.0, "step": 0.5},
+        {"name": "j_oversold", "label": "J 超卖线", "default": 20, "min": 0, "max": 40, "step": 5},
+    ],
+    "macd_divergence": [
+        {"name": "lookback_days", "label": "扫描窗口 (日)", "default": 60, "min": 30, "max": 120, "step": 10},
+        {"name": "pivot_window", "label": "枢轴半窗", "default": 5, "min": 3, "max": 10, "step": 1, "desc": "用于定位前后高低点"},
+    ],
+    "max_reversal": [
+        {"name": "window_days", "label": "扫描天数", "default": 22, "min": 10, "max": 60, "step": 2},
+        {"name": "top_k", "label": "看几个最大涨幅", "default": 5, "min": 1, "max": 10, "step": 1},
+        {"name": "high_max_pct", "label": "高单日警戒线", "default": 0.09, "min": 0.03, "max": 0.20, "step": 0.01},
+    ],
+    "hurst_trend": [
+        {"name": "lookback_days", "label": "回看长度 (日)", "default": 180, "min": 90, "max": 365, "step": 15},
+        {"name": "trend_threshold", "label": "趋势阈值 H", "default": 0.55, "min": 0.50, "max": 0.65, "step": 0.01},
+        {"name": "revert_threshold", "label": "反转阈值 H", "default": 0.45, "min": 0.35, "max": 0.50, "step": 0.01},
+    ],
+    "turnover_dryup": [
+        {"name": "lookback_days", "label": "缩量观察日", "default": 30, "min": 10, "max": 60, "step": 5},
+        {"name": "low_quantile", "label": "低量分位线", "default": 0.30, "min": 0.10, "max": 0.50, "step": 0.05},
+        {"name": "near_low_pct", "label": "接近底部容差", "default": 0.05, "min": 0.01, "max": 0.10, "step": 0.01},
+    ],
+    "fifty_two_week_high": [
+        {"name": "lookback_days", "label": "52周观察日", "default": 250, "min": 120, "max": 365, "step": 10},
+        {"name": "high_proximity_pct", "label": "接近高点阈值", "default": 0.95, "min": 0.85, "max": 0.99, "step": 0.01},
+        {"name": "very_close_pct", "label": "极近高点阈值", "default": 0.98, "min": 0.95, "max": 0.999, "step": 0.005},
+    ],
+    "accruals_quality": [
+        {"name": "high_accrual_threshold", "label": "高应计阈值", "default": 0.10, "min": 0.05, "max": 0.20, "step": 0.01, "desc": "应计/资产 高于此值警示"},
+        {"name": "low_accrual_threshold", "label": "低应计阈值", "default": 0.02, "min": 0.0, "max": 0.05, "step": 0.005},
+    ],
+    "asset_growth": [
+        {"name": "healthy_low", "label": "健康增长下限", "default": 0.05, "min": 0.0, "max": 0.15, "step": 0.01},
+        {"name": "healthy_high", "label": "健康增长上限", "default": 0.20, "min": 0.10, "max": 0.40, "step": 0.05},
+        {"name": "explosive_threshold", "label": "扩张警示线", "default": 0.40, "min": 0.20, "max": 1.0, "step": 0.05},
+    ],
+    "chip_concentration": [
+        {"name": "lookback_days", "label": "回看天数", "default": 60, "min": 20, "max": 120, "step": 5},
+        {"name": "tight_band_pct", "label": "紧密带阈值", "default": 0.10, "min": 0.05, "max": 0.20, "step": 0.01},
+        {"name": "very_tight_pct", "label": "极紧带阈值", "default": 0.06, "min": 0.02, "max": 0.10, "step": 0.01},
+    ],
+    "ma_stack_breakout": [
+        {"name": "compression_threshold", "label": "粘合阈值", "default": 0.04, "min": 0.02, "max": 0.10, "step": 0.005},
+        {"name": "very_compressed", "label": "强粘合阈值", "default": 0.025, "min": 0.01, "max": 0.05, "step": 0.005},
+    ],
+    "multi_horizon_momentum": [
+        {"name": "short_days", "label": "短期窗口 (日)", "default": 5, "min": 3, "max": 10, "step": 1},
+        {"name": "medium_days", "label": "中期窗口 (日)", "default": 21, "min": 15, "max": 30, "step": 1},
+        {"name": "long_days", "label": "长期窗口 (日)", "default": 63, "min": 30, "max": 90, "step": 5},
+        {"name": "skip_days", "label": "12-1 跳过近期 (日)", "default": 21, "min": 10, "max": 30, "step": 5},
+        {"name": "consistency_min", "label": "一致性最低数", "default": 3, "min": 2, "max": 4, "step": 1, "desc": "几个时间窗口同向才加分"},
     ],
 }
 

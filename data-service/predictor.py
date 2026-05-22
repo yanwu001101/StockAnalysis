@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """Multi-signal stock prediction engine.
 
-Produces an up/down probability with confidence by combining 7 signal dimensions:
-  1. Technical Momentum  — MACD, RSI, KDJ multi-indicator convergence
-  2. Trend Structure     — MA alignment + ADX trend strength
-  3. Volume-Price        — OBV trend, volume-price divergence
-  4. Smart Money         — northbound + main fund flow
-  5. Mean Reversion      — RSI extremes, Bollinger band deviation
-  6. Volatility Regime   — ATR squeeze → expansion, Bollinger bandwidth
-  7. Candlestick Pattern — key reversal/continuation patterns
+Produces an up/down probability with confidence by combining 8 signal dimensions:
+  1. Multi-Horizon Momentum — 5d/21d/63d/12-1m returns + Sharpe + consistency
+                              (Carhart / AQR / Moskowitz time-series momentum)
+  2. Technical Momentum     — MACD, RSI, KDJ multi-indicator convergence
+  3. Trend Structure        — MA alignment + ADX trend strength
+  4. Volume-Price           — OBV trend, volume-price divergence
+  5. Smart Money            — northbound + main fund flow
+  6. Mean Reversion         — RSI extremes, Bollinger band deviation
+  7. Volatility Regime      — ATR squeeze → expansion, Bollinger bandwidth
+  8. Candlestick Pattern    — key reversal/continuation patterns
 
 Each dimension outputs a direction score ∈ [-1, +1].
 Final probability is a weighted sigmoid of the composite direction.
@@ -66,6 +68,164 @@ def _safe_float(val, default=0.0) -> float:
         return default if (pd.isna(v) or np.isinf(v)) else v
     except Exception:
         return default
+
+
+def _calc_multi_horizon_momentum(df: pd.DataFrame) -> SignalDimension:
+    """Multi-horizon momentum factor — institutional-grade composite.
+
+    Combines four classic momentum specifications (1w / 1m / 3m / 12-1m)
+    plus a Sharpe-adjusted return and a cross-horizon consistency check.
+    This is the single most predictive direction signal in cross-sectional
+    equity research (Jegadeesh-Titman 1993, Carhart 1997, Moskowitz 2012).
+    """
+    close = df["收盘"].astype(float)
+    n = len(close)
+    subs: dict = {}
+
+    if n < 30:
+        return SignalDimension(
+            name="多维度动量", name_en="multi_momentum",
+            score=0.0, weight=0.20, detail="K线不足，无法计算多周期动量",
+            sub_signals={"insufficient": True},
+        )
+
+    def ret(days: int):
+        if n <= days:
+            return None
+        a, b = float(close.iloc[-1]), float(close.iloc[-1 - days])
+        return (a / b - 1.0) if b > 0 else None
+
+    r_1w = ret(5)
+    r_1m = ret(21)
+    r_3m = ret(63)
+    r_12_1 = None
+    if n > 252:
+        a, b = float(close.iloc[-1 - 21]), float(close.iloc[-1 - 252])
+        if b > 0:
+            r_12_1 = (a / b - 1.0)
+
+    # Sharpe (annualised) over 63 days
+    ret_s = close.pct_change().dropna().tail(63)
+    if not ret_s.empty and ret_s.std() > 0:
+        sharpe = float(ret_s.mean() * 252 / (ret_s.std() * np.sqrt(252)))
+    else:
+        sharpe = 0.0
+
+    score = 0.0
+
+    # 1-week (Jegadeesh 1990 short-term reversal — small +ve OK, big spike fades)
+    if r_1w is not None:
+        if r_1w > 0.10:
+            score -= 0.3
+            subs["1w"] = f"周涨{r_1w*100:+.1f}% 短期反转风险"
+        elif r_1w > 0.02:
+            score += 0.2
+            subs["1w"] = f"周涨{r_1w*100:+.1f}%"
+        elif r_1w < -0.05:
+            score += 0.2
+            subs["1w"] = f"周跌{r_1w*100:+.1f}% 反弹机会"
+        elif r_1w < -0.02:
+            score -= 0.1
+            subs["1w"] = f"周跌{r_1w*100:+.1f}%"
+        else:
+            subs["1w"] = f"周持平{r_1w*100:+.1f}%"
+
+    # 1-month
+    if r_1m is not None:
+        if r_1m > 0.15:
+            score += 0.5
+            subs["1m"] = f"月涨{r_1m*100:+.1f}% 强势"
+        elif r_1m > 0.05:
+            score += 0.3
+            subs["1m"] = f"月涨{r_1m*100:+.1f}%"
+        elif r_1m < -0.15:
+            score -= 0.5
+            subs["1m"] = f"月跌{r_1m*100:+.1f}% 弱势"
+        elif r_1m < -0.05:
+            score -= 0.3
+            subs["1m"] = f"月跌{r_1m*100:+.1f}%"
+        else:
+            subs["1m"] = f"月持平{r_1m*100:+.1f}%"
+
+    # 3-month
+    if r_3m is not None:
+        if r_3m > 0.30:
+            score += 0.6
+            subs["3m"] = f"季涨{r_3m*100:+.1f}% 强趋势"
+        elif r_3m > 0.10:
+            score += 0.4
+            subs["3m"] = f"季涨{r_3m*100:+.1f}%"
+        elif r_3m < -0.30:
+            score -= 0.6
+            subs["3m"] = f"季跌{r_3m*100:+.1f}%"
+        elif r_3m < -0.10:
+            score -= 0.4
+            subs["3m"] = f"季跌{r_3m*100:+.1f}%"
+        else:
+            subs["3m"] = f"季震荡{r_3m*100:+.1f}%"
+
+    # 12-1 month (Carhart / JT)
+    if r_12_1 is not None:
+        if r_12_1 > 0.30:
+            score += 0.5
+            subs["12_1"] = f"12-1动量{r_12_1*100:+.1f}% 强"
+        elif r_12_1 > 0.10:
+            score += 0.3
+            subs["12_1"] = f"12-1动量{r_12_1*100:+.1f}%"
+        elif r_12_1 < -0.30:
+            score -= 0.5
+            subs["12_1"] = f"12-1动量{r_12_1*100:+.1f}% 弱"
+        elif r_12_1 < -0.10:
+            score -= 0.3
+            subs["12_1"] = f"12-1动量{r_12_1*100:+.1f}%"
+        else:
+            subs["12_1"] = f"12-1动量{r_12_1*100:+.1f}%"
+
+    # Sharpe contribution
+    if sharpe >= 1.5:
+        score += 0.25
+        subs["sharpe"] = f"风险调整后强 Sharpe={sharpe:.2f}"
+    elif sharpe >= 0.8:
+        score += 0.12
+        subs["sharpe"] = f"Sharpe={sharpe:.2f}"
+    elif sharpe <= -0.8:
+        score -= 0.20
+        subs["sharpe"] = f"风险调整后弱 Sharpe={sharpe:.2f}"
+    else:
+        subs["sharpe"] = f"Sharpe={sharpe:.2f}"
+
+    # Cross-horizon consistency
+    valid = [s for s in [r_1w, r_1m, r_3m, r_12_1] if s is not None]
+    if len(valid) >= 3:
+        pos = sum(1 for s in valid if s > 0)
+        neg = sum(1 for s in valid if s < 0)
+        if pos == len(valid):
+            score += 0.30
+            subs["consistency"] = f"全部 {len(valid)} 周期同向看多"
+        elif neg == len(valid):
+            score -= 0.30
+            subs["consistency"] = f"全部 {len(valid)} 周期同向看空"
+        elif max(pos, neg) >= 3:
+            bias = 1 if pos > neg else -1
+            score += 0.10 * bias
+            subs["consistency"] = f"{max(pos, neg)}/{len(valid)} 方向一致"
+        else:
+            subs["consistency"] = "时间窗口信号分歧"
+
+    # Normalize: theoretical max ≈ 2.5 with everything firing
+    combined = max(-1.0, min(1.0, score / 2.5))
+
+    if combined > 0.30:
+        detail = "多周期动量看多，趋势延续概率高"
+    elif combined < -0.30:
+        detail = "多周期动量看空，弱势延续概率高"
+    else:
+        detail = "多周期动量信号混合"
+
+    return SignalDimension(
+        name="多维度动量", name_en="multi_momentum",
+        score=combined, weight=0.20, detail=detail, sub_signals=subs,
+    )
 
 
 def _calc_technical_momentum(df: pd.DataFrame) -> SignalDimension:
@@ -678,6 +838,7 @@ def predict(ctx) -> PredictionResult:
 
     # Calculate all dimensions
     dimensions = [
+        _calc_multi_horizon_momentum(df),
         _calc_technical_momentum(df),
         _calc_trend_structure(df),
         _calc_volume_price(df),
@@ -686,6 +847,22 @@ def predict(ctx) -> PredictionResult:
         _calc_volatility_regime(df),
         _calc_pattern_signal(df),
     ]
+    # Re-weight: multi-horizon momentum is the strongest single direction
+    # signal in equity research; bump weight while trimming pure indicator
+    # convergence which is more lagging.
+    REWEIGHT = {
+        "multi_momentum": 0.20,
+        "technical_momentum": 0.15,
+        "trend_structure": 0.18,
+        "volume_price": 0.12,
+        "smart_money": 0.13,
+        "mean_reversion": 0.08,
+        "volatility_regime": 0.09,
+        "pattern": 0.05,
+    }
+    for d in dimensions:
+        if d.name_en in REWEIGHT:
+            d.weight = REWEIGHT[d.name_en]
 
     # Weighted composite direction
     total_weight = sum(d.weight for d in dimensions)
@@ -716,17 +893,18 @@ def predict(ctx) -> PredictionResult:
     confidence = round((agreement * 0.45 + data_quality * 0.25 + avg_strength * 0.30) * 100, 1)
     confidence = max(10.0, min(95.0, confidence))  # clamp
 
-    # Signal classification
-    if prob_up >= 65:
+    # Signal classification — slightly relaxed thresholds vs the 65/35
+    # original since the 8-dimension composite is more robust.
+    if prob_up >= 62:
         signal = "bullish"
         signal_label = "看多"
-    elif prob_up <= 35:
+    elif prob_up <= 38:
         signal = "bearish"
         signal_label = "看空"
-    elif prob_up >= 55:
+    elif prob_up >= 53:
         signal = "bullish"
         signal_label = "偏多"
-    elif prob_up <= 45:
+    elif prob_up <= 47:
         signal = "bearish"
         signal_label = "偏空"
     else:

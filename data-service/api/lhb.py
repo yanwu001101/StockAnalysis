@@ -2,6 +2,7 @@
 """Dragon-Tiger Board (龙虎榜) blueprint."""
 from __future__ import annotations
 import datetime as dt
+import time
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy import text
@@ -13,9 +14,17 @@ import db
 bp = Blueprint("lhb_v2", __name__, url_prefix="/api/lhb")
 
 
+_META_CACHE: tuple[dict[str, dict], float] | None = None
+_META_TTL = 30.0
+
+
 def _meta_map() -> dict[str, dict]:
-    """code -> {name, industry} pulled from the spot cache (live names) and
-    fallback merged with stock_info via DB."""
+    """code -> {name, industry}. Built from spot DataFrame, memoised for 30s
+    to avoid rebuilding 5000+ entries on every request."""
+    global _META_CACHE
+    now = time.time()
+    if _META_CACHE is not None and now - _META_CACHE[1] < _META_TTL:
+        return _META_CACHE[0]
     out: dict[str, dict] = {}
     df = cache.get("spot")
     if df is not None and hasattr(df, "columns") and "代码" in df.columns:
@@ -27,17 +36,8 @@ def _meta_map() -> dict[str, dict]:
                 "name": str(r.get("名称", "")),
                 "industry": str(r.get("行业", "")),
             }
+    _META_CACHE = (out, now)
     return out
-
-
-def _enrich(rows: list[dict]) -> list[dict]:
-    meta = _meta_map()
-    for r in rows:
-        if not r.get("name") and r.get("code") in meta:
-            r["name"] = meta[r["code"]]["name"]
-        if not r.get("industry") and r.get("code") in meta:
-            r["industry"] = meta[r["code"]]["industry"]
-    return rows
 
 
 def _date_arg(name: str, default: dt.date) -> dt.date:
@@ -68,7 +68,7 @@ def recent():
     if code:
         sql += "AND code = :c "
         params["c"] = str(code).zfill(6)
-    sql += "ORDER BY trade_date DESC, ABS(net_amount) DESC LIMIT 3000"
+    sql += "ORDER BY trade_date DESC, net_amount DESC LIMIT 500"
     with eng.connect() as conn:
         rows = conn.execute(text(sql), params).fetchall()
     meta = _meta_map()

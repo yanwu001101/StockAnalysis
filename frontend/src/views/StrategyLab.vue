@@ -61,9 +61,20 @@
       <span class="weight-hint" v-if="totalWeight !== 100">(建议调整至 100%)</span>
     </div>
 
-    <div class="glass-card preview-card" v-if="previewData.length">
-      <h3>预览结果 (Top 20)</h3>
-      <el-table :data="previewData" stripe size="small" @row-click="$router.push(`/stock/${$event.code}`)" :row-style="{ cursor: 'pointer' }">
+    <div class="glass-card preview-card" v-if="previewData.length || requireTriggered.length">
+      <div class="preview-head">
+        <h3>预览结果 <span class="result-count" v-if="previewData.length">({{ previewData.length }} 只)</span></h3>
+        <span class="trigger-hint">勾选要求触发的策略，AND 过滤</span>
+      </div>
+      <div class="trigger-filter">
+        <el-checkbox-group v-model="requireTriggered" size="small" @change="previewResults">
+          <el-checkbox v-for="s in strategyStore.strategies.filter(x => x.enabled)" :key="s.id" :label="s.id" :style="{ color: s.color }">
+            {{ s.name }}
+          </el-checkbox>
+        </el-checkbox-group>
+        <el-button v-if="requireTriggered.length" link size="small" @click="clearTriggered">清空</el-button>
+      </div>
+      <el-table v-if="previewData.length" :data="previewData" stripe size="small" @row-click="$router.push(`/stock/${$event.code}`)" :row-style="{ cursor: 'pointer' }">
         <el-table-column type="index" label="#" width="50" />
         <el-table-column prop="name" label="名称" width="100" />
         <el-table-column prop="code" label="代码" width="80" />
@@ -72,12 +83,18 @@
             <el-tag :type="row.compositeScore >= 80 ? 'success' : 'warning'" size="small" effect="dark">{{ row.compositeScore }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="触发" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ Object.values(row.triggered || {}).filter(Boolean).length }}/{{ Object.keys(row.triggered || {}).length }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="signal" label="信号" width="70" align="center">
           <template #default="{ row }">
             <span :class="['signal', row.signal]">{{ ({ bullish: '看多', bearish: '看空', neutral: '中性' } as Record<string, string>)[row.signal] }}</span>
           </template>
         </el-table-column>
       </el-table>
+      <div v-else class="empty-result">没有股票同时触发所选策略，试试减少多选或降低 minScore</div>
     </div>
 
     <el-dialog v-model="showSaveDialog" title="保存策略方案" width="400px">
@@ -102,6 +119,7 @@ const strategyStore = useStrategyStore()
 const previewData = ref<any[]>([])
 const showSaveDialog = ref(false)
 const saveName = ref('')
+const requireTriggered = ref<string[]>([])
 
 // Per-strategy params spec (loaded from backend)
 const paramSpecs = ref<Record<string, any[]>>({})
@@ -142,11 +160,17 @@ async function previewResults() {
       strategyParams: strategyParams,
       filters: { minScore: 30, minMarketCap: 100, maxDebtRatio: 60, minRoe: 10, industries: [] },
       limit: 20,
+      requireTriggered: requireTriggered.value,
     } as any)
     ElMessage.success(`预览完成，共 ${previewData.value.length} 只`)
   } catch {
     ElMessage.error('预览失败')
   }
+}
+
+function clearTriggered() {
+  requireTriggered.value = []
+  previewResults()
 }
 
 function doSave() {
@@ -233,7 +257,18 @@ useRefreshable('策略实验室', previewResults, { immediate: false, autoRefres
 .weight-under { color: #FFC312; font-weight: 700; }
 .weight-hint { font-size: 13px; color: var(--text-muted); }
 .preview-card { padding: 20px; }
-.preview-card h3 { margin: 0 0 12px; font-size: 16px; color: var(--text-primary); }
+.preview-card h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
+.preview-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.result-count { font-size: 13px; color: var(--text-muted); font-weight: 400; margin-left: 4px; }
+.trigger-hint { font-size: 12px; color: var(--text-muted); }
+.trigger-filter {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 12px;
+  background: var(--bg-2); border-radius: 6px;
+  border: 1px dashed var(--line);
+}
+.trigger-filter :deep(.el-checkbox) { margin-right: 12px; }
+.empty-result { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
 .signal { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
 .signal.bullish { background: rgba(255,71,87,0.15); color: #FF4757; }
 .signal.bearish { background: rgba(42,232,164,0.15); color: #2AE8A4; }

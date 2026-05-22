@@ -26,6 +26,50 @@
       </div>
     </section>
 
+    <section class="pro-signal-section rise rise-2">
+      <article class="card pro-card">
+        <header class="card-head">
+          <div>
+            <h3>专业预测 <span class="badge-pro">Leading Indicators · T+1~T+5</span></h3>
+            <p class="card-sub">无滞后 leading 指标体系 · 输入代码 / 点击热门股查看完整九维矩阵</p>
+          </div>
+          <div class="pro-input">
+            <el-input v-model="proCode" placeholder="输入 6 位股票代码" size="small" maxlength="6"
+                      @keydown.enter="goProSignal(proCode)" style="width: 180px;" />
+            <el-button type="success" size="small" @click="goProSignal(proCode)">
+              <el-icon><Aim /></el-icon>专业预测
+            </el-button>
+          </div>
+        </header>
+        <div class="pro-quick">
+          <div v-for="row in (topStocks || []).slice(0, 6)" :key="row.code"
+               class="pro-tile" @click="router.push(`/pro-signal/${row.code}`)">
+            <div class="pro-tile-head">
+              <span class="pro-tile-name">{{ row.name }}</span>
+              <span class="pro-tile-code">{{ row.code }}</span>
+            </div>
+            <div class="pro-tile-body">
+              <template v-if="proCache[row.code]">
+                <span class="pro-tile-label" :class="proCache[row.code].direction">{{ proCache[row.code].label }}</span>
+                <span class="pro-tile-prob">{{ proCache[row.code].probabilityUp }}%</span>
+              </template>
+              <template v-else-if="proLoading[row.code]">
+                <span class="pro-tile-loading">···</span>
+              </template>
+              <template v-else>
+                <span class="pro-tile-loading">—</span>
+              </template>
+            </div>
+            <div class="pro-tile-foot">
+              <span class="num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
+                {{ row.changePercent >= 0 ? '+' : '' }}{{ row.changePercent }}%
+              </span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <section class="main-grid">
       <article class="card top-card rise rise-3">
         <header class="card-head">
@@ -44,31 +88,59 @@
                 <th>名称</th>
                 <th>代码</th>
                 <th>行业</th>
-                <th class="t-right">最新价</th>
-                <th class="t-right">涨跌幅</th>
-                <th class="t-center">评分</th>
+                <th class="t-center">最新价</th>
+                <th class="t-center">涨跌幅</th>
+                <th class="t-center sortable" :class="{ active: sortBy === 'composite' }" @click="toggleSort('composite')">
+                  评分 <span class="sort-arrow">{{ sortArrow('composite') }}</span>
+                </th>
+                <th class="t-center sortable" :class="{ active: sortBy === 'compositeV2' }" @click="toggleSort('compositeV2')">
+                  综合策略分
+                  <el-tooltip content="22 个策略加权综合分（v2）" placement="top">
+                    <el-icon style="vertical-align: -2px;"><InfoFilled /></el-icon>
+                  </el-tooltip>
+                  <span class="sort-arrow">{{ sortArrow('compositeV2') }}</span>
+                </th>
+                <th class="t-center">
+                  策略评分
+                  <el-tooltip content="看多策略数 / 有效策略数 · 触发数" placement="top">
+                    <el-icon style="vertical-align: -2px;"><InfoFilled /></el-icon>
+                  </el-tooltip>
+                </th>
                 <th class="t-center">信号</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(row, i) in topStocks" :key="row.code" class="row" @click="goStock(row)">
+              <tr v-for="(row, i) in sortedTopStocks" :key="row.code" class="row" @click="goStock(row)">
                 <td class="t-rank num">{{ i + 1 }}</td>
                 <td><span class="stock-name">{{ row.name }}</span></td>
                 <td class="mono dim">{{ row.code }}</td>
                 <td class="dim">{{ row.industry }}</td>
-                <td class="t-right num" :class="row.change >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
-                <td class="t-right num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
+                <td class="t-center num" :class="row.change >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
+                <td class="t-center num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
                   {{ row.changePercent >= 0 ? '+' : '' }}{{ row.changePercent }}%
                 </td>
                 <td class="t-center">
                   <span class="score-pill" :class="scoreCls(row.compositeScore)">{{ row.compositeScore }}</span>
                 </td>
                 <td class="t-center">
+                  <span v-if="row.compositeScoreV2 !== undefined" class="score-pill" :class="scoreCls(row.compositeScoreV2)">
+                    {{ row.compositeScoreV2 }}
+                  </span>
+                  <span v-else class="dim-load">···</span>
+                </td>
+                <td class="t-center">
+                  <span v-if="row.strategyStats" class="strat-pill" :class="stratCls(row.strategyStats)">
+                    {{ row.strategyStats.bullish }}/{{ row.strategyStats.effective }}
+                    <span class="strat-trig">· {{ row.strategyStats.triggered }}</span>
+                  </span>
+                  <span v-else class="dim-load">···</span>
+                </td>
+                <td class="t-center">
                   <span class="sig" :class="row.signal">{{ sigText(row.signal) }}</span>
                 </td>
               </tr>
               <tr v-if="!topStocks.length">
-                <td colspan="8" class="empty">暂无数据 · 请确认后端服务已启动</td>
+                <td colspan="10" class="empty">暂无数据 · 请确认后端服务已启动</td>
               </tr>
             </tbody>
           </table>
@@ -115,20 +187,115 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Aim, InfoFilled } from '@element-plus/icons-vue'
 import { useMarketStore } from '@/stores/market'
 import { useRefreshable } from '@/composables/useRefreshable'
+import { getStockProSignal, getStockStrategies } from '@/api/stock'
 import * as echarts from 'echarts'
 
 const router = useRouter()
 const marketStore = useMarketStore()
+
+const proCode = ref('')
+const proCache = reactive<Record<string, any>>({})
+const proLoading = reactive<Record<string, boolean>>({})
+
+function goProSignal(code: string) {
+  const c = (code || '').trim()
+  if (!/^\d{6}$/.test(c)) {
+    ElMessage.warning('请输入 6 位股票代码')
+    return
+  }
+  router.push(`/pro-signal/${c}`)
+}
+
+async function preloadProSignals() {
+  const codes = (marketStore.topStocks || []).slice(0, 6).map((s: any) => s.code)
+  await Promise.all(codes.map(async (code) => {
+    if (proCache[code] || proLoading[code]) return
+    proLoading[code] = true
+    try {
+      proCache[code] = await getStockProSignal(code)
+    } catch {
+      proCache[code] = null
+    } finally {
+      proLoading[code] = false
+    }
+  }))
+}
+
+async function preloadStrategyDetails() {
+  const concurrency = 6
+  const list = marketStore.topStocks || []
+  let idx = 0
+  const worker = async () => {
+    while (idx < list.length) {
+      const i = idx++
+      const row: any = list[i]
+      if (row.compositeScoreV2 !== undefined) continue
+      try {
+        const d: any = await getStockStrategies(row.code)
+        row.compositeScoreV2 = Math.round(d.total ?? d.composite_score ?? 0)
+        row.strategyStats = d.aggregate || null
+      } catch {
+        row.strategyStats = null
+      }
+    }
+  }
+  await Promise.all(Array(concurrency).fill(0).map(() => worker()))
+}
+
+function stratCls(stats: any) {
+  if (!stats || !stats.effective) return 'low'
+  const ratio = stats.bullish / stats.effective
+  if (ratio >= 0.5) return 'high'
+  if (ratio >= 0.3) return 'mid'
+  return 'low'
+}
+
+watch(() => marketStore.topStocks, (v) => {
+  if (v?.length) {
+    preloadProSignals()
+    preloadStrategyDetails()
+  }
+}, { immediate: true })
 
 const northboundChartRef = ref<HTMLElement>()
 const sectorChartRef = ref<HTMLElement>()
 const topStocks = computed(() => marketStore.topStocks || [])
 const indices = computed(() => marketStore.indices || [])
 const activeRank = ref<'gainers' | 'losers' | 'active'>('gainers')
+
+const sortBy = ref<'composite' | 'compositeV2'>('composite')
+const sortDir = ref<'desc' | 'asc'>('desc')
+
+function toggleSort(field: 'composite' | 'compositeV2') {
+  if (sortBy.value === field) {
+    sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortBy.value = field
+    sortDir.value = 'desc'
+  }
+}
+
+function sortArrow(field: 'composite' | 'compositeV2') {
+  if (sortBy.value !== field) return '⇅'
+  return sortDir.value === 'desc' ? '↓' : '↑'
+}
+
+const sortedTopStocks = computed(() => {
+  const arr = [...topStocks.value]
+  arr.sort((a, b) => {
+    const va = sortBy.value === 'composite' ? (a.compositeScore ?? -1) : (a.compositeScoreV2 ?? -1)
+    const vb = sortBy.value === 'composite' ? (b.compositeScore ?? -1) : (b.compositeScoreV2 ?? -1)
+    const diff = vb - va
+    return sortDir.value === 'desc' ? diff : -diff
+  })
+  return arr
+})
 const currentRank = computed(() => {
   if (activeRank.value === 'gainers') return marketStore.gainers || []
   if (activeRank.value === 'losers') return marketStore.losers || []
@@ -137,6 +304,9 @@ const currentRank = computed(() => {
 
 const summaryCards = computed(() => {
   const s: any = marketStore.summary
+  const top = marketStore.topStocks || []
+  const highCount = top.filter((r: any) => (r.compositeScore || 0) >= 60).length
+  const bullishCount = top.filter((r: any) => r.signal === 'bullish').length
   return [
     { label: '上涨家数', foot: `下跌 ${s?.downCount ?? '—'}`, value: s?.upCount ?? '—', cls: 'price-up' },
     { label: '涨停家数', foot: `跌停 ${s?.downLimit ?? '—'}`, value: s?.upLimit ?? '—', cls: 'price-up' },
@@ -144,6 +314,8 @@ const summaryCards = computed(() => {
       value: s ? ((s.avgChange >= 0 ? '+' : '') + s.avgChange + '%') : '—',
       cls: s && s.avgChange >= 0 ? 'price-up' : 'price-down' },
     { label: '领涨板块', foot: '日涨幅第一', value: s?.hotSectors?.[0]?.name ?? '—', cls: '' },
+    { label: '高分股票', foot: `综合分≥60`, value: top.length ? `${highCount}/${top.length}` : '—', cls: highCount >= top.length / 2 ? 'price-up' : '' },
+    { label: '看多策略', foot: `Top 列表中`, value: top.length ? `${bullishCount}/${top.length}` : '—', cls: bullishCount >= top.length / 2 ? 'price-up' : '' },
   ]
 })
 
@@ -321,6 +493,7 @@ useRefreshable('今日盘面', async () => {
   font-size: 14px;
   color: var(--text-2);
   border-bottom: 1px solid var(--line);
+  vertical-align: middle;
 }
 .t-table tbody tr:last-child td { border-bottom: 0; }
 .row { cursor: pointer; transition: background 0.15s ease; }
@@ -402,4 +575,90 @@ useRefreshable('今日盘面', async () => {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .indices { grid-template-columns: repeat(2, 1fr); }
 }
+
+.pro-signal-section { margin-bottom: 16px; }
+.pro-card { padding: 18px 20px 16px; }
+
+.strat-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 12px; font-weight: 700;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.strat-pill.high { background: var(--up-soft); color: var(--up); }
+.strat-pill.mid { background: var(--warn-soft); color: #B88800; }
+.strat-pill.low { background: var(--surface-2); color: var(--text-3); }
+.strat-trig { font-size: 10px; font-weight: 600; opacity: 0.75; }
+.dim-load { color: var(--text-4); font-size: 13px; letter-spacing: 1px; }
+.pro-card .badge-pro {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, rgba(16,185,129,0.12), rgba(8,145,178,0.12));
+  color: #0891B2;
+  letter-spacing: 0.3px;
+}
+.pro-input { display: flex; align-items: center; gap: 8px; }
+.pro-quick {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+.pro-tile {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+.pro-tile:hover {
+  border-color: var(--brand);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+.pro-tile > * { width: 100%; text-align: center; }
+.pro-tile-head { margin-bottom: 4px; }
+.pro-tile-body { margin: 6px 0; min-height: 24px; }
+.pro-tile-foot { margin-top: 2px; }
+.pro-tile-name {
+  display: block;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  text-align: center;
+}
+.pro-tile-code {
+  display: block;
+  font-size: 11px; color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  margin-top: 2px;
+}
+.pro-tile-label {
+  display: inline-block;
+  font-size: 13px; font-weight: 700;
+  padding: 2px 10px; border-radius: var(--radius-pill);
+}
+.pro-tile-label.up { background: var(--up-soft); color: var(--up); }
+.pro-tile-label.down { background: var(--down-soft); color: var(--down); }
+.pro-tile-label.flat { background: var(--surface-2); color: var(--text-3); }
+.pro-tile-prob {
+  display: block;
+  font-size: 12px; font-weight: 600; color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-top: 3px;
+  text-align: center;
+}
+.pro-tile-loading { display: block; color: var(--text-4); font-size: 12px; text-align: center; }
+
+@media (max-width: 1100px) { .pro-quick { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 600px) { .pro-quick { grid-template-columns: repeat(2, 1fr); } }
 </style>

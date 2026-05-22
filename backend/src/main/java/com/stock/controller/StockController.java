@@ -68,6 +68,16 @@ public class StockController {
         }
     }
 
+    @GetMapping("/{code}/pro-signal")
+    public ApiResponse<?> proSignal(@PathVariable String code) {
+        try {
+            JSONObject data = dataService.getStockProSignal(code);
+            return ApiResponse.ok(data);
+        } catch (Exception e) {
+            return ApiResponse.error("获取专业信号失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/search")
     public ApiResponse<?> search(@RequestParam String keyword) {
         try {

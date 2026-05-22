@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Money flow blueprint (main funds / northbound / industry rotation)."""
 from __future__ import annotations
+import time
 from typing import Optional
 
 from flask import Blueprint, jsonify, request
@@ -13,7 +14,15 @@ import db
 bp = Blueprint("moneyflow_v2", __name__, url_prefix="/api/moneyflow")
 
 
+_META_CACHE: tuple[dict[str, dict], float] | None = None
+_META_TTL = 30.0
+
+
 def _meta_map() -> dict[str, dict]:
+    global _META_CACHE
+    now = time.time()
+    if _META_CACHE is not None and now - _META_CACHE[1] < _META_TTL:
+        return _META_CACHE[0]
     out: dict[str, dict] = {}
     df = cache.get("spot")
     if df is not None and hasattr(df, "columns") and "代码" in df.columns:
@@ -26,6 +35,7 @@ def _meta_map() -> dict[str, dict]:
                     "price": float(r.get("最新价") or 0),
                     "changePercent": float(r.get("涨跌幅") or 0),
                 }
+    _META_CACHE = (out, now)
     return out
 
 
@@ -81,26 +91,27 @@ def northbound_rank():
     eng = db.get_engine()
     if eng is None:
         return jsonify([])
-    # Use first/last hold_shares diff over the window to capture accumulation.
+    # Two simple JOINs against the per-code first/last trade_date pair —
+    # avoids the implicit cross-join + CASE-WHEN MAX trick which is opaque
+    # to the optimiser and forces a full scan.
     with eng.connect() as conn:
         rows = conn.execute(text(
-            "SELECT t.code, t.shares_diff, t.last_shares, t.last_ratio, t.first_date, t.last_date "
+            "SELECT t1.code, "
+            "  (t1.hold_shares - t0.hold_shares) AS shares_diff, "
+            "  t1.hold_shares AS last_shares, "
+            "  t1.hold_ratio AS last_ratio, "
+            "  t0.trade_date AS first_date, "
+            "  t1.trade_date AS last_date "
             "FROM ("
-            "  SELECT code,"
-            "    MAX(trade_date) AS last_date, MIN(trade_date) AS first_date,"
-            "    MAX(CASE WHEN trade_date = m.maxd THEN hold_shares END) AS last_shares,"
-            "    MAX(CASE WHEN trade_date = m.maxd THEN hold_ratio END) AS last_ratio,"
-            "    MAX(CASE WHEN trade_date = m.maxd THEN hold_shares END) -"
-            "      MAX(CASE WHEN trade_date = m.mind THEN hold_shares END) AS shares_diff"
-            "  FROM stock_northbound n,"
-            "       (SELECT MIN(trade_date) AS mind, MAX(trade_date) AS maxd"
-            "        FROM stock_northbound"
-            "        WHERE trade_date >= (CURDATE() - INTERVAL :d DAY)) m"
-            "  WHERE trade_date IN (m.mind, m.maxd)"
-            "  GROUP BY code"
-            ") t "
-            "WHERE t.shares_diff IS NOT NULL "
-            "ORDER BY t.shares_diff DESC LIMIT :n"
+            "  SELECT code, MIN(trade_date) AS mind, MAX(trade_date) AS maxd "
+            "  FROM stock_northbound "
+            "  WHERE trade_date >= (CURDATE() - INTERVAL :d DAY) "
+            "  GROUP BY code "
+            ") m "
+            "JOIN stock_northbound t0 ON t0.code = m.code AND t0.trade_date = m.mind "
+            "JOIN stock_northbound t1 ON t1.code = m.code AND t1.trade_date = m.maxd "
+            "WHERE t0.hold_shares IS NOT NULL AND t1.hold_shares IS NOT NULL "
+            "ORDER BY shares_diff DESC LIMIT :n"
         ), {"d": days, "n": limit}).fetchall()
     meta = _meta_map()
     out = []

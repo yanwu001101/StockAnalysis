@@ -15,7 +15,7 @@ async def fetch(code: str, days: int = 60) -> pd.DataFrame:
 
 
 async def run_batch(codes: Iterable[str], days: int = 60) -> int:
-    res = await gather_codes(list(codes), lambda c: fetch(c, days), concurrency=6)
+    res = await gather_codes(list(codes), lambda c: fetch(c, days), concurrency=12)
     total = 0
     for code, df in res.items():
         if isinstance(df, pd.DataFrame) and not df.empty:

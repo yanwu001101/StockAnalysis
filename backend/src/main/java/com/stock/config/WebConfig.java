@@ -8,9 +8,11 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final AuthInterceptor authInterceptor;
+    private final DataTimeCleanupInterceptor dataTimeCleanupInterceptor;
 
-    public WebConfig(AuthInterceptor authInterceptor) {
+    public WebConfig(AuthInterceptor authInterceptor, DataTimeCleanupInterceptor dataTimeCleanupInterceptor) {
         this.authInterceptor = authInterceptor;
+        this.dataTimeCleanupInterceptor = dataTimeCleanupInterceptor;
     }
 
     @Override
@@ -18,5 +20,7 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")
                 .excludePathPatterns("/api/user/login", "/api/user/register");
+        registry.addInterceptor(dataTimeCleanupInterceptor)
+                .addPathPatterns("/api/**");
     }
 }

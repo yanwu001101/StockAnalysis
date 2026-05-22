@@ -68,9 +68,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
+import { useRefreshable } from '@/composables/useRefreshable'
 import * as userApi from '@/api/user'
 
 const userStore = useUserStore()
@@ -118,12 +119,15 @@ async function createGroup() {
   } catch {}
 }
 
-onMounted(async () => {
-  if (userStore.isLoggedIn) {
-    await userStore.fetchWatchlists()
-    if (groups.value.length) activeGroup.value = String(groups.value[0].id)
+async function reloadWatchlists() {
+  if (!userStore.isLoggedIn) return
+  await userStore.fetchWatchlists()
+  if (groups.value.length && !activeGroup.value) {
+    activeGroup.value = String(groups.value[0].id)
   }
-})
+}
+
+useRefreshable('自选股', reloadWatchlists)
 </script>
 
 <style scoped>

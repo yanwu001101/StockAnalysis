@@ -11,6 +11,13 @@ public class ApiResponse<T> {
     private int code = 200;
     private String message = "success";
     private T data;
+    private Long dataTime;
+
+    public ApiResponse(int code, String message, T data) {
+        this.code = code;
+        this.message = message;
+        this.data = data;
+    }
 
     public static <T> ApiResponse<T> ok(T data) {
         return new ApiResponse<>(200, "success", data);

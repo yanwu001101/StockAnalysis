@@ -20,6 +20,7 @@ from typing import Iterable
 import pandas as pd
 
 from core import http_client, parser
+from core.trace import logger
 from sources.base import AbstractSource
 
 
@@ -186,29 +187,40 @@ class EastmoneySource(AbstractSource):
 
     # ---------- 龙虎榜 ----------
     async def fetch_lhb(self, start: dt.date, end: dt.date) -> pd.DataFrame:
-        """Datacenter returns max 500 rows per page; paginate until exhaustion."""
+        """Fetch per-seat LHB details from eastmoney datacenter.
+
+        Uses RPT_BILLBOARD_DAILYDETAILSBUY (席位买入明细) which includes
+        OPERATEDEPT_NAME (席位名称) and both BUY/SELL amounts per seat.
+        Falls back to RPT_DAILYBILLBOARD_DETAILS (stock-level only) if
+        the seat-level report returns nothing.
+        """
         all_rows: list = []
-        for page in range(1, 21):   # safety cap: 21 pages = 10500 rows
-            params = {
-                "sortColumns": "TRADE_DATE",
-                "sortTypes": "-1",
-                "pageSize": 500,
-                "pageNumber": page,
-                "reportName": "RPT_DAILYBILLBOARD_DETAILS",
-                "columns": "ALL",
-                "source": "WEB",
-                "client": "WEB",
-                "filter": (
-                    f"(TRADE_DATE>='{start.isoformat()}')"
-                    f"(TRADE_DATE<='{end.isoformat()}')"
-                ),
-            }
-            obj = await http_client.get_json(DATACENTER_URL, params=params, source=self.name)
-            rows = ((obj or {}).get("result") or {}).get("data") or []
-            if not rows:
-                break
-            all_rows.extend(rows)
-            if len(rows) < 500:
+        for report in ("RPT_BILLBOARD_DAILYDETAILSBUY", "RPT_DAILYBILLBOARD_DETAILS"):
+            all_rows.clear()
+            for page in range(1, 21):   # safety cap: 21 pages = 10500 rows
+                params = {
+                    "sortColumns": "TRADE_DATE",
+                    "sortTypes": "-1",
+                    "pageSize": 500,
+                    "pageNumber": page,
+                    "reportName": report,
+                    "columns": "ALL",
+                    "source": "WEB",
+                    "client": "WEB",
+                    "filter": (
+                        f"(TRADE_DATE>='{start.isoformat()}')"
+                        f"(TRADE_DATE<='{end.isoformat()}')"
+                    ),
+                }
+                obj = await http_client.get_json(DATACENTER_URL, params=params, source=self.name)
+                rows = ((obj or {}).get("result") or {}).get("data") or []
+                if not rows:
+                    break
+                all_rows.extend(rows)
+                if len(rows) < 500:
+                    break
+            if all_rows:
+                logger.debug("fetch_lhb: got %d rows from %s", len(all_rows), report)
                 break
         if not all_rows:
             return pd.DataFrame()
@@ -216,15 +228,27 @@ class EastmoneySource(AbstractSource):
             "SECURITY_CODE": "code",
             "TRADE_DATE": "trade_date",
             "EXPLANATION": "reason",
+            "OPERATEDEPT_NAME": "seat_name",
+            # RPT_BILLBOARD_DAILYDETAILSBUY columns
+            "BUY": "buy_amount",
+            "SELL": "sell_amount",
+            "NET": "net_amount",
+            # RPT_DAILYBILLBOARD_DETAILS columns (fallback)
             "BILLBOARD_BUY_AMT": "buy_amount",
             "BILLBOARD_SELL_AMT": "sell_amount",
             "BILLBOARD_NET_AMT": "net_amount",
-            "OPERATEDEPT_NAME": "seat_name",
         })
         if "code" in df:
             df["code"] = df["code"].astype(str).str.zfill(6)
         if "trade_date" in df:
             df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+        # Derive seat_type from seat_name: "机构专用" → 机构, others → 营业部
+        if "seat_name" in df.columns:
+            df["seat_type"] = df["seat_name"].apply(
+                lambda x: "机构" if isinstance(x, str) and "机构" in x else "营业部"
+            )
+        else:
+            df["seat_type"] = ""
         return df
 
     # ---------- 股东户数 ----------

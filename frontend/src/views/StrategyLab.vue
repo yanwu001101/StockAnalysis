@@ -96,6 +96,7 @@ import { ElMessage } from 'element-plus'
 import { useStrategyStore } from '@/stores/strategy'
 import { runScreener } from '@/api/strategy'
 import request from '@/api/request'
+import { useRefreshable } from '@/composables/useRefreshable'
 
 const strategyStore = useStrategyStore()
 const previewData = ref<any[]>([])
@@ -160,6 +161,7 @@ function doSave() {
 }
 
 onMounted(loadParamSpecs)
+useRefreshable('策略实验室', previewResults, { immediate: false, autoRefresh: false })
 </script>
 
 <style scoped>

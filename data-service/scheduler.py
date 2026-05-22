@@ -23,6 +23,9 @@ import cache
 import eastmoney
 import kline_repo
 import db
+from pipelines import lhb as lhb_pipe
+from pipelines import moneyflow as mf_pipe
+from pipelines import northbound as nb_pipe
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +100,60 @@ def _spawn_warmup_thread():
     t.start()
 
 
+def refresh_lhb():
+    """Pull recent LHB data (past 60 days) into MySQL."""
+    import asyncio
+    try:
+        asyncio.run(lhb_pipe.run(
+            start=dt.date.today() - dt.timedelta(days=60),
+            end=dt.date.today(),
+        ))
+        log.info("[scheduler] lhb refresh done")
+    except Exception as e:
+        log.warning("[scheduler] lhb refresh failed: %s", e)
+
+
+def _get_universe_codes(top_n: int = 300) -> list[str]:
+    """Get top-N stock codes by market cap from spot cache."""
+    df = cache.get("spot")
+    if df is None or df.empty:
+        try:
+            df = eastmoney.fetch_all_spot()
+        except Exception:
+            return []
+    if df is None or df.empty:
+        return []
+    sort_col = "总市值_亿" if "总市值_亿" in df.columns else "总市值"
+    if sort_col not in df.columns:
+        return []
+    return (
+        df.sort_values(sort_col, ascending=False, na_position="last")
+          .head(top_n)["代码"].astype(str).str.zfill(6).tolist()
+    )
+
+
+def refresh_moneyflow_northbound():
+    """Pull money flow + northbound holdings for top-N universe."""
+    import asyncio
+    if db.get_engine() is None:
+        log.info("[scheduler] MySQL unavailable; skipping moneyflow/northbound")
+        return
+    codes = _get_universe_codes(300)
+    if not codes:
+        log.warning("[scheduler] empty universe; skipping moneyflow/northbound")
+        return
+    try:
+        asyncio.run(mf_pipe.run_batch(codes, days=60))
+        log.info("[scheduler] moneyflow refresh done")
+    except Exception as e:
+        log.warning("[scheduler] moneyflow refresh failed: %s", e)
+    try:
+        asyncio.run(nb_pipe.run_batch(codes, days=60))
+        log.info("[scheduler] northbound refresh done")
+    except Exception as e:
+        log.warning("[scheduler] northbound refresh failed: %s", e)
+
+
 def start():
     global _sched
     with _lock:
@@ -124,6 +181,26 @@ def start():
             coalesce=True,
         )
 
+        # LHB (龙虎榜) refresh daily at 17:00 (published ~16:00-16:30)
+        sched.add_job(
+            refresh_lhb,
+            CronTrigger(hour=17, minute=0, timezone="Asia/Shanghai"),
+            id="lhb_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # Money flow + northbound holdings refresh at 17:10
+        sched.add_job(
+            refresh_moneyflow_northbound,
+            CronTrigger(hour=17, minute=10, timezone="Asia/Shanghai"),
+            id="mf_nb_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         # Optional: warmup once after startup
         if WARMUP_ON_START:
             run_at = dt.datetime.now() + dt.timedelta(seconds=WARMUP_DELAY_SEC)
@@ -131,6 +208,20 @@ def start():
                 _spawn_warmup_thread,
                 DateTrigger(run_date=run_at),
                 id="startup_warmup",
+                replace_existing=True,
+            )
+            # Also pull LHB data on startup (after a delay to let DB init)
+            sched.add_job(
+                refresh_lhb,
+                DateTrigger(run_date=run_at + dt.timedelta(seconds=30)),
+                id="startup_lhb",
+                replace_existing=True,
+            )
+            # Money flow + northbound on startup
+            sched.add_job(
+                refresh_moneyflow_northbound,
+                DateTrigger(run_date=run_at + dt.timedelta(seconds=60)),
+                id="startup_mf_nb",
                 replace_existing=True,
             )
             log.info("[scheduler] startup warmup scheduled at %s (top_n=%d)", run_at, WARMUP_TOP_N)

@@ -147,4 +147,31 @@ export interface ApiResponse<T> {
   code: number
   message: string
   data: T
+  dataTime?: number
+}
+
+// Prediction types
+export interface SignalDimension {
+  name: string
+  nameEn: string
+  score: number        // -1 to +1
+  weight: number
+  detail: string
+  subSignals: Record<string, string>
+}
+
+export interface PredictionResult {
+  code: string
+  name: string
+  price: number
+  probabilityUp: number
+  probabilityDown: number
+  confidence: number
+  signal: 'bullish' | 'bearish' | 'neutral'
+  signalLabel: string
+  compositeDirection: number
+  dimensions: SignalDimension[]
+  keyDrivers: string[]
+  riskWarnings: string[]
+  timeHorizon: string
 }

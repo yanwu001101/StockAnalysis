@@ -85,6 +85,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request from '@/api/request'
+import { useRefreshable } from '@/composables/useRefreshable'
 
 const router = useRouter()
 const expr = ref('PE > 0 and PE <= 25 and ROE >= 15 and DEBT <= 60')
@@ -154,6 +155,7 @@ async function runQuery() {
 function goStock(row: any) { router.push(`/stock/${row.code}`) }
 
 onMounted(loadHelp)
+useRefreshable('表达式选股', runQuery, { immediate: false, autoRefresh: false })
 </script>
 
 <style scoped>

@@ -58,6 +58,16 @@ public class StockController {
         }
     }
 
+    @GetMapping("/{code}/prediction")
+    public ApiResponse<?> prediction(@PathVariable String code) {
+        try {
+            JSONObject data = dataService.getStockPrediction(code);
+            return ApiResponse.ok(data);
+        } catch (Exception e) {
+            return ApiResponse.error("获取涨跌预测失败: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/search")
     public ApiResponse<?> search(@RequestParam String keyword) {
         try {

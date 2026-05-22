@@ -104,6 +104,7 @@ public class DataService {
     public JSONArray runConditionScreener(JSONObject body) {
         String resp = restTemplate.postForObject(
             dataServiceUrl + "/api/v2/screen/conditions", body, String.class);
+        DataTimeHolder.recordOldest(System.currentTimeMillis());
         return JSON.parseArray(resp);
     }
 
@@ -120,6 +121,7 @@ public class DataService {
             dataServiceUrl + "/api/v2/screen/expression", body, String.class);
         // data-service returns either an array (success) or {error: "..."} on parse fail
         Object parsed = JSON.parse(resp);
+        DataTimeHolder.recordOldest(System.currentTimeMillis());
         return parsed;
     }
 
@@ -127,6 +129,7 @@ public class DataService {
         try {
             String resp = restTemplate.postForObject(
                 dataServiceUrl + "/api/v2/screen/expression/validate", body, String.class);
+            DataTimeHolder.recordOldest(System.currentTimeMillis());
             return JSON.parseObject(resp);
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             // 400 from data-service when expression invalid — parse body as JSON
@@ -142,16 +145,21 @@ public class DataService {
                 dataServiceUrl + "/api/v2/screen", request, String.class);
             if (resp != null && !resp.isEmpty() && !resp.startsWith("{\"error\"")) {
                 JSONArray arr = JSON.parseArray(resp);
-                if (arr != null && !arr.isEmpty()) return arr;
+                if (arr != null && !arr.isEmpty()) {
+                    DataTimeHolder.recordOldest(System.currentTimeMillis());
+                    return arr;
+                }
             }
         } catch (Exception ignored) {}
         String resp = restTemplate.postForObject(
             dataServiceUrl + "/api/screen", request, String.class);
+        DataTimeHolder.recordOldest(System.currentTimeMillis());
         return JSON.parseArray(resp);
     }
 
     public JSONObject runBacktest(JSONObject request) {
         String resp = restTemplate.postForObject(dataServiceUrl + "/api/backtest", request, String.class);
+        DataTimeHolder.recordOldest(System.currentTimeMillis());
         return JSON.parseObject(resp);
     }
 
@@ -223,8 +231,17 @@ public class DataService {
         }, 300);
     }
 
+    public JSONObject getStockPrediction(String code) {
+        return getCachedOrFetch("prediction:" + code, () -> {
+            String resp = restTemplate.getForObject(
+                dataServiceUrl + "/api/v2/stock/" + code + "/prediction", String.class);
+            return JSON.parseObject(resp);
+        }, 600);
+    }
+
     public JSONArray searchStock(String keyword) {
         String resp = restTemplate.getForObject(dataServiceUrl + "/api/stock/search?keyword=" + keyword, String.class);
+        DataTimeHolder.recordOldest(System.currentTimeMillis());
         return JSON.parseArray(resp);
     }
 
@@ -270,14 +287,18 @@ public class DataService {
         String cacheKey = "stock:" + key;
         try {
             Object cached = redisTemplate.opsForValue().get(cacheKey);
-            if (cached != null) {
-                return (T) cached;
+            if (cached instanceof CachedEntry entry) {
+                DataTimeHolder.recordOldest(entry.getWrittenAt());
+                return (T) entry.getPayload();
             }
+            // 旧格式 (非 CachedEntry) 或为 null: 落到下方 fetch 重新写入新格式
         } catch (Exception ignored) {}
 
         T result = fetcher.fetch();
+        long now = System.currentTimeMillis();
+        DataTimeHolder.recordOldest(now);
         try {
-            redisTemplate.opsForValue().set(cacheKey, result, ttlSeconds, TimeUnit.SECONDS);
+            redisTemplate.opsForValue().set(cacheKey, new CachedEntry(result, now), ttlSeconds, TimeUnit.SECONDS);
         } catch (Exception ignored) {}
         return result;
     }

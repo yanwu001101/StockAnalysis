@@ -83,9 +83,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getLhbRecent, getLhbInstitutionRank, getLhbStockRank, type LhbRow, type LhbAggRow } from '@/api/lhb'
+import { useRefreshable } from '@/composables/useRefreshable'
 
 const router = useRouter()
 const windowDays = ref(30)
@@ -124,7 +125,7 @@ async function load() {
 }
 
 watch([windowDays, activeTab], load)
-onMounted(load)
+useRefreshable('龙虎榜', load)
 </script>
 
 <style scoped>

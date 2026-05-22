@@ -115,6 +115,7 @@ import { ElMessage } from 'element-plus'
 import { runScreener } from '@/api/strategy'
 import { useStrategyStore } from '@/stores/strategy'
 import { useSettingsStore } from '@/stores/settings'
+import { useRefreshable } from '@/composables/useRefreshable'
 import * as echarts from 'echarts'
 
 const router = useRouter()
@@ -237,6 +238,7 @@ function goStock(row: any) { router.push(`/stock/${row.code}`) }
 function exportResults() { ElMessage.info('导出功能开发中') }
 
 onMounted(() => strategyStore.loadFromStorage())
+useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh: false })
 </script>
 
 <style scoped>

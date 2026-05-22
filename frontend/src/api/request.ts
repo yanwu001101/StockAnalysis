@@ -28,6 +28,12 @@ request.interceptors.response.use(
       ElMessage.error(res.message || '请求失败')
       return Promise.reject(new Error(res.message || '请求失败'))
     }
+    if (res.dataTime != null) {
+      // 在拦截器内动态 import,避免和 store 初始化顺序产生循环依赖
+      import('@/stores/refresh').then(({ useRefreshStore }) => {
+        useRefreshStore().recordDataTime(res.dataTime!)
+      })
+    }
     return res.data
   },
   (error) => {

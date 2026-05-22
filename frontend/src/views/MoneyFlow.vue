@@ -97,10 +97,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getMainRank, getNorthboundRank, getSectorFlow,
          type MainFlowRow, type NbFlowRow, type SectorRow } from '@/api/moneyflow'
+import { useRefreshable } from '@/composables/useRefreshable'
 
 const router = useRouter()
 const windowDays = ref(5)
@@ -131,7 +132,7 @@ async function load() {
 }
 
 watch([windowDays, activeTab], load)
-onMounted(load)
+useRefreshable('资金流向', load)
 </script>
 
 <style scoped>

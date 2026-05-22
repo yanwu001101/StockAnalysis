@@ -92,12 +92,7 @@ def recent():
 
 @bp.route("/institution-rank")
 def institution_rank():
-    """Highest net-buy stocks in the LHB window.
-
-    NOTE: the upstream eastmoney RPT_DAILYBILLBOARD_DETAILS doesn't return per-
-    seat type tags reliably, so we expose "high net-buy on LHB" as the
-    practical proxy investors use.
-    """
+    """Highest net-buy stocks by institutional seats (机构专用) in the LHB window."""
     days = int(request.args.get("days", 30))
     eng = db.get_engine()
     if eng is None:
@@ -115,6 +110,7 @@ def institution_rank():
             "LEFT JOIN stock_info si ON si.code = l.code "
             "WHERE l.trade_date >= (CURDATE() - INTERVAL :d DAY) "
             "AND l.net_amount IS NOT NULL "
+            "AND l.seat_type = '机构' "
             "GROUP BY l.code "
             "ORDER BY net_sum DESC LIMIT 50"
         ), {"d": days}).fetchall()

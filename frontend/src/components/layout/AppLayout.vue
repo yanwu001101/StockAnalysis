@@ -3,10 +3,13 @@
     <Sidebar :collapsed="sidebarCollapsed" @toggle="sidebarCollapsed = !sidebarCollapsed" />
     <div class="main-area" :class="{ collapsed: sidebarCollapsed }">
       <Header @toggle-sidebar="sidebarCollapsed = !sidebarCollapsed" />
+      <RefreshBar v-if="refreshStore.reloader" />
       <main class="content-area">
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
-            <component :is="Component" />
+            <keep-alive>
+              <component :is="Component" />
+            </keep-alive>
           </transition>
         </router-view>
       </main>
@@ -18,8 +21,11 @@
 import { ref } from 'vue'
 import Sidebar from './Sidebar.vue'
 import Header from './Header.vue'
+import RefreshBar from './RefreshBar.vue'
+import { useRefreshStore } from '@/stores/refresh'
 
 const sidebarCollapsed = ref(false)
+const refreshStore = useRefreshStore()
 </script>
 
 <style scoped>

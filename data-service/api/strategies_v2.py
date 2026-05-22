@@ -123,6 +123,15 @@ def _load_ctx(code: str) -> StrategyContext:
         )
         if not lhb.empty:
             ctx.lhb_df = lhb
+        mf = pd.read_sql(
+            text("SELECT trade_date, super_large_net, large_net, medium_net, small_net, main_net "
+                 "FROM stock_moneyflow WHERE code=:c "
+                 "AND trade_date >= (CURDATE() - INTERVAL 60 DAY) "
+                 "ORDER BY trade_date DESC"),
+            conn, params={"c": code},
+        )
+        if not mf.empty:
+            ctx.moneyflow_df = mf
         si = pd.read_sql(
             text("SELECT name, industry, latest_price, market_cap "
                  "FROM stock_info WHERE code=:c LIMIT 1"),
@@ -352,3 +361,42 @@ def screen():
 def list_v2():
     from strategies import list_meta
     return jsonify(list_meta())
+
+
+@bp.route("/stock/<code>/prediction")
+def stock_prediction(code: str):
+    """Multi-signal up/down probability prediction for a single stock.
+
+    Returns probability_up, probability_down, confidence, per-dimension
+    breakdown, key drivers, and risk warnings.
+    """
+    code = str(code).zfill(6)
+    ctx = _load_ctx(code)
+    from predictor import predict
+    result = predict(ctx)
+    # Serialize dimensions
+    dims = []
+    for d in result.dimensions:
+        dims.append({
+            "name": d.name,
+            "nameEn": d.name_en,
+            "score": round(d.score, 4),
+            "weight": d.weight,
+            "detail": d.detail,
+            "subSignals": d.sub_signals,
+        })
+    return jsonify({
+        "code": result.code,
+        "name": result.name,
+        "price": result.price,
+        "probabilityUp": result.probability_up,
+        "probabilityDown": result.probability_down,
+        "confidence": result.confidence,
+        "signal": result.signal,
+        "signalLabel": result.signal_label,
+        "compositeDirection": result.composite_direction,
+        "dimensions": dims,
+        "keyDrivers": result.key_drivers,
+        "riskWarnings": result.risk_warnings,
+        "timeHorizon": result.time_horizon,
+    })

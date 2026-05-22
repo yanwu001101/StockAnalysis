@@ -115,15 +115,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMarketStore } from '@/stores/market'
-import { useSettingsStore } from '@/stores/settings'
+import { useRefreshable } from '@/composables/useRefreshable'
 import * as echarts from 'echarts'
 
 const router = useRouter()
 const marketStore = useMarketStore()
-const settings = useSettingsStore()
 
 const northboundChartRef = ref<HTMLElement>()
 const sectorChartRef = ref<HTMLElement>()
@@ -170,77 +169,70 @@ function chartTokens() {
   }
 }
 
-let refreshTimer: number | null = null
-
-onMounted(async () => {
-  await marketStore.fetchAll()
-  refreshTimer = window.setInterval(() => marketStore.fetchAll(), settings.refreshInterval * 1000)
-  nextTick(() => {
-    const t = chartTokens()
-    if (northboundChartRef.value && marketStore.northboundFlow.length) {
-      const chart = echarts.init(northboundChartRef.value)
-      chart.setOption({
-        backgroundColor: 'transparent',
-        textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
-        grid: { left: 48, right: 12, top: 12, bottom: 24 },
-        xAxis: { type: 'category', data: marketStore.northboundFlow.map((d: any) => d.date),
-          axisLabel: { color: t.text3, fontSize: 10 },
-          axisLine: { lineStyle: { color: t.line } },
-          axisTick: { show: false } },
-        yAxis: { type: 'value',
-          splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
-          axisLabel: { color: t.text3, fontSize: 10 },
-          axisLine: { show: false }, axisTick: { show: false } },
-        series: [{
-          type: 'bar',
-          data: marketStore.northboundFlow.map((d: any) => ({
-            value: d.netFlow,
-            itemStyle: { color: d.netFlow >= 0 ? t.up : t.down, borderRadius: [3, 3, 0, 0] },
-          })),
-          barWidth: '60%',
-        }],
-        tooltip: { trigger: 'axis', backgroundColor: t.bg,
-          borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
-      })
-    }
-    if (sectorChartRef.value && marketStore.sectors.length) {
-      const chart = echarts.init(sectorChartRef.value)
-      const sorted = [...marketStore.sectors].sort((a, b) => b.change - a.change).slice(0, 10)
-      chart.setOption({
-        backgroundColor: 'transparent',
-        textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
-        grid: { left: 80, right: 24, top: 8, bottom: 16 },
-        xAxis: { type: 'value',
-          splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
-          axisLabel: { color: t.text3, fontSize: 10 },
-          axisLine: { show: false }, axisTick: { show: false } },
-        yAxis: { type: 'category', data: sorted.map(s => s.name).reverse(),
-          axisLabel: { color: t.text, fontSize: 12 },
-          axisLine: { show: false }, axisTick: { show: false } },
-        series: [{
-          type: 'bar',
-          data: sorted.map(s => s.change).reverse(),
-          itemStyle: {
-            color: (params: any) => {
-              const val = sorted[sorted.length - 1 - params.dataIndex]?.change || 0
-              return val >= 0 ? t.up : t.down
-            },
-            borderRadius: [0, 3, 3, 0],
-          },
-          barWidth: 12,
-        }],
-        tooltip: { trigger: 'axis', backgroundColor: t.bg,
-          borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
-      })
-    }
-  })
-})
-
-onBeforeUnmount(() => {
-  if (refreshTimer !== null) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
+function renderCharts() {
+  const t = chartTokens()
+  if (northboundChartRef.value && marketStore.northboundFlow.length) {
+    const chart = echarts.getInstanceByDom(northboundChartRef.value) || echarts.init(northboundChartRef.value)
+    chart.setOption({
+      backgroundColor: 'transparent',
+      textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
+      grid: { left: 48, right: 12, top: 12, bottom: 24 },
+      xAxis: { type: 'category', data: marketStore.northboundFlow.map((d: any) => d.date),
+        axisLabel: { color: t.text3, fontSize: 10 },
+        axisLine: { lineStyle: { color: t.line } },
+        axisTick: { show: false } },
+      yAxis: { type: 'value',
+        splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
+        axisLabel: { color: t.text3, fontSize: 10 },
+        axisLine: { show: false }, axisTick: { show: false } },
+      series: [{
+        type: 'bar',
+        data: marketStore.northboundFlow.map((d: any) => ({
+          value: d.netFlow,
+          itemStyle: { color: d.netFlow >= 0 ? t.up : t.down, borderRadius: [3, 3, 0, 0] },
+        })),
+        barWidth: '60%',
+      }],
+      tooltip: { trigger: 'axis', backgroundColor: t.bg,
+        borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
+    })
   }
+  if (sectorChartRef.value && marketStore.sectors.length) {
+    const chart = echarts.getInstanceByDom(sectorChartRef.value) || echarts.init(sectorChartRef.value)
+    const sorted = [...marketStore.sectors].sort((a, b) => b.change - a.change).slice(0, 10)
+    chart.setOption({
+      backgroundColor: 'transparent',
+      textStyle: { fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text },
+      grid: { left: 80, right: 24, top: 8, bottom: 16 },
+      xAxis: { type: 'value',
+        splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
+        axisLabel: { color: t.text3, fontSize: 10 },
+        axisLine: { show: false }, axisTick: { show: false } },
+      yAxis: { type: 'category', data: sorted.map(s => s.name).reverse(),
+        axisLabel: { color: t.text, fontSize: 12 },
+        axisLine: { show: false }, axisTick: { show: false } },
+      series: [{
+        type: 'bar',
+        data: sorted.map(s => s.change).reverse(),
+        itemStyle: {
+          color: (params: any) => {
+            const val = sorted[sorted.length - 1 - params.dataIndex]?.change || 0
+            return val >= 0 ? t.up : t.down
+          },
+          borderRadius: [0, 3, 3, 0],
+        },
+        barWidth: 12,
+      }],
+      tooltip: { trigger: 'axis', backgroundColor: t.bg,
+        borderColor: t.line, borderWidth: 1, textStyle: { color: t.text } },
+    })
+  }
+}
+
+useRefreshable('今日盘面', async () => {
+  await marketStore.fetchAll()
+  await nextTick()
+  renderCharts()
 })
 </script>
 

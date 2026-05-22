@@ -39,7 +39,7 @@
         </span>
       </div>
 
-      <el-tooltip content="刷新" placement="bottom">
+      <el-tooltip content="刷新市场概览" placement="bottom">
         <button class="ghost-btn" :disabled="refreshing" @click="refreshData">
           <el-icon :size="16" :class="{ spinning: refreshing }"><Refresh /></el-icon>
         </button>

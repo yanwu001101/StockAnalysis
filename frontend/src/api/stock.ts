@@ -1,5 +1,5 @@
 import request from './request'
-import type { StockDetail, KLineData, CompositeScore } from '@/types'
+import type { StockDetail, KLineData, CompositeScore, PredictionResult } from '@/types'
 
 export function getStockDetail(code: string, signal?: AbortSignal): Promise<StockDetail> {
   return request.get(`/stock/${code}`, { signal })
@@ -15,6 +15,10 @@ export function getStockStrategies(code: string, signal?: AbortSignal): Promise<
 
 export function getStockF10(code: string, signal?: AbortSignal): Promise<any> {
   return request.get(`/stock/${code}/f10`, { signal })
+}
+
+export function getStockPrediction(code: string, signal?: AbortSignal): Promise<PredictionResult> {
+  return request.get(`/stock/${code}/prediction`, { signal })
 }
 
 export function searchStock(keyword: string): Promise<any[]> {

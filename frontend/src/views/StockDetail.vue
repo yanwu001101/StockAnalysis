@@ -74,6 +74,8 @@
       </div>
     </div>
 
+    <PredictionPanel v-if="prediction" :prediction="prediction" />
+
     <div class="glass-card f10-card" v-loading="f10Loading">
       <div class="card-header">
         <h3>F10 公司资料</h3>
@@ -186,15 +188,17 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getStockDetail, getStockKLine, getStockStrategies, getStockF10 } from '@/api/stock'
+import { getStockDetail, getStockKLine, getStockStrategies, getStockF10, getStockPrediction } from '@/api/stock'
 import { addToWatchlist as addWatchlistApi, removeFromWatchlist as removeWatchlistApi } from '@/api/user'
 import { useUserStore } from '@/stores/user'
 import { useStrategyStore } from '@/stores/strategy'
+import { useRefreshable } from '@/composables/useRefreshable'
 import KLineChart from '@/components/charts/KLineChart.vue'
 import RadarChart from '@/components/charts/RadarChart.vue'
 import ScoreGauge from '@/components/charts/ScoreGauge.vue'
+import PredictionPanel from '@/components/charts/PredictionPanel.vue'
 import { Star, StarFilled } from '@element-plus/icons-vue'
-import type { KLineData } from '@/types'
+import type { KLineData, PredictionResult } from '@/types'
 
 const route = useRoute()
 const userStore = useUserStore()
@@ -206,6 +210,7 @@ const klineData = ref<KLineData[]>([])
 const klinePeriod = ref('daily')
 const compositeScore = ref(0)
 const strategyScores = ref<Record<string, number>>({})
+const prediction = ref<PredictionResult | null>(null)
 
 // F10 state
 const f10Tab = ref<'profile' | 'holders' | 'dividend' | 'peers'>('profile')
@@ -286,10 +291,11 @@ async function loadData() {
   abortCtrl = new AbortController()
   const signal = abortCtrl.signal
   try {
-    const [detail, kline, strategies] = await Promise.allSettled([
+    const [detail, kline, strategies, pred] = await Promise.allSettled([
       getStockDetail(c, signal),
       getStockKLine(c, klinePeriod.value, 250, signal),
       getStockStrategies(c, signal),
+      getStockPrediction(c, signal),
     ])
     if (detail.status === 'fulfilled') stockInfo.value = detail.value
     if (kline.status === 'fulfilled') klineData.value = kline.value
@@ -301,6 +307,7 @@ async function loadData() {
         strategyScores.value[k] = v.score || 0
       })
     }
+    if (pred.status === 'fulfilled') prediction.value = pred.value
   } catch {}
   // F10 loads in parallel (slower akshare path).
   loadF10()
@@ -323,8 +330,8 @@ watch(klinePeriod, () => {
   getStockKLine(code.value, klinePeriod.value, 250, abortCtrl?.signal).then(d => klineData.value = d).catch(() => {})
 })
 
+useRefreshable('个股详情', loadData)
 onMounted(() => {
-  loadData()
   // Pull the user's watchlists so the header button reflects "已自选" state
   if (userStore.isLoggedIn) userStore.fetchWatchlists()
 })
@@ -408,6 +415,7 @@ onBeforeUnmount(() => abortCtrl?.abort())
 .metric-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .strategies-card { padding: 20px; }
 .strategies-card h3 { font-size: 16px; color: var(--text-primary); margin: 0 0 16px 0; }
+.prediction-panel { margin-bottom: 16px; }
 .strategy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .strategy-item { padding: 14px; }
 .strategy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }

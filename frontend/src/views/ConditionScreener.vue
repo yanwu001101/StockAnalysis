@@ -109,6 +109,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request from '@/api/request'
+import { useRefreshable } from '@/composables/useRefreshable'
 
 const router = useRouter()
 const loading = ref(false)
@@ -233,11 +234,8 @@ async function runQuery() {
 
 function goStock(row: any) { router.push(`/stock/${row.code}`) }
 
-onMounted(async () => {
-  await loadFields()
-  // Auto-run the default query so users see something immediately
-  runQuery()
-})
+onMounted(loadFields)
+useRefreshable('条件选股', runQuery, { autoRefresh: false })
 </script>
 
 <style scoped>

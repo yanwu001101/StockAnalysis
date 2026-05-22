@@ -99,6 +99,7 @@ import { ref, reactive, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { runBacktest } from '@/api/strategy'
 import { useStrategyStore } from '@/stores/strategy'
+import { useRefreshable } from '@/composables/useRefreshable'
 import * as echarts from 'echarts'
 import type { BacktestResult } from '@/types'
 
@@ -164,6 +165,8 @@ function renderCurve() {
     tooltip: { trigger: 'axis', backgroundColor: 'rgba(15,32,53,0.95)', borderColor: 'rgba(0,212,255,0.2)', textStyle: { color: '#E8EDF3' } },
   })
 }
+
+useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
 </script>
 
 <style scoped>

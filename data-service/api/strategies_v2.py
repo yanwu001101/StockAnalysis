@@ -323,6 +323,15 @@ def screen():
     industries: list = filters.get("industries") or []
     weights = _parse_weights(body)
     strategy_params = body.get("strategyParams") or body.get("strategy_params") or {}
+    # Caller-controlled universe size. Default 200 keeps legacy callers fast;
+    # set 0 / very large to scan the entire spot snapshot (~5000 codes, ~3 min).
+    top_universe = body.get("topUniverse") or body.get("top_universe")
+    try:
+        top_universe = int(top_universe) if top_universe is not None else 200
+    except (TypeError, ValueError):
+        top_universe = 200
+    if top_universe <= 0:
+        top_universe = 10_000  # effectively "all"
     require_triggered: list = (
         body.get("requireTriggered") or body.get("require_triggered") or []
     )
@@ -334,6 +343,13 @@ def screen():
     if spot_df is None or spot_df.empty:
         # Fall back to legacy cache shape
         spot_df = cache.get("spot")
+    if spot_df is None or spot_df.empty:
+        # Bootstrap on cold cache — see expression.py _load_universe for context.
+        try:
+            from app import fetch_spot
+            spot_df = fetch_spot()
+        except Exception:
+            spot_df = None
     if spot_df is None or spot_df.empty:
         return jsonify([])
 
@@ -352,7 +368,7 @@ def screen():
         df = df[df[ind_col].astype(str).isin(industries)]
     if cap_col:
         df = df.sort_values(cap_col, ascending=False, na_position="last")
-    universe = df.head(200)
+    universe = df.head(top_universe)
 
     results: list[dict] = []
     for _, row in universe.iterrows():
@@ -398,6 +414,83 @@ def screen():
 
     results.sort(key=lambda x: x["compositeScore"], reverse=True)
     return jsonify(results[:limit])
+
+
+@bp.route("/strategy-tops")
+def strategy_tops():
+    """Return top-N codes for every strategy from the pre-computed table.
+
+    Query: ?limit=N (default 10)
+    Response: {
+      "strategies": [
+        {"id": "piotroski_f", "name": "...", "rows": [
+            {"code", "name", "industry", "price", "changePercent", "score", "signal", "triggered"}
+        ]},
+        ...
+      ],
+      "computed_at": "...",
+      "row_count": int
+    }
+
+    Uses cached spot snapshot to enrich each row with name/industry/price.
+    Falls back to live computation if the pre-score table is empty.
+    """
+    from repo import strategy_score_repo
+    from strategies import REGISTRY
+
+    limit = int(request.args.get("limit", 10))
+    limit = max(1, min(limit, 50))
+
+    tops = strategy_score_repo.top_n_all(limit)
+
+    # Build code → quote map from cached spot for enrichment
+    meta: dict[str, dict] = {}
+    spot = cache.get("spot")
+    if spot is not None and hasattr(spot, "columns") and "代码" in spot.columns:
+        for _, r in spot.iterrows():
+            c = str(r.get("代码", "")).zfill(6)
+            if c:
+                meta[c] = {
+                    "name": str(r.get("名称", "")),
+                    "industry": str(r.get("行业", "")),
+                    "price": float(r.get("最新价") or 0),
+                    "changePercent": float(r.get("涨跌幅") or 0),
+                }
+
+    by_strat: dict[str, list[dict]] = {cls.id: [] for cls in REGISTRY}
+    if not tops.empty:
+        # Sorted within partition already (ROW_NUMBER ORDER BY score DESC)
+        for _, r in tops.iterrows():
+            sid = str(r["strategy_id"])
+            if sid not in by_strat:
+                continue
+            code = str(r["code"]).zfill(6)
+            m = meta.get(code) or {}
+            by_strat[sid].append({
+                "code": code,
+                "name": m.get("name", ""),
+                "industry": m.get("industry", ""),
+                "price": round(m.get("price", 0), 2),
+                "changePercent": round(m.get("changePercent", 0), 2),
+                "score": float(r["score"]),
+                "signal": r.get("signal_type") or "neutral",
+                "triggered": bool(r.get("triggered")),
+            })
+
+    strategies_out = []
+    for cls in REGISTRY:
+        strategies_out.append({
+            "id": cls.id,
+            "name": cls.name,
+            "rows": by_strat.get(cls.id, []),
+        })
+
+    computed_at = strategy_score_repo.latest_computed_at()
+    return jsonify({
+        "strategies": strategies_out,
+        "computed_at": computed_at.isoformat() if computed_at else None,
+        "row_count": strategy_score_repo.row_count(),
+    })
 
 
 @bp.route("/strategies")

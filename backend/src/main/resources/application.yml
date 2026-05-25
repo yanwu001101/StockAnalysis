@@ -21,7 +21,7 @@ mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   global-config:
     db-config:
       logic-delete-field: deleted
@@ -37,8 +37,35 @@ jwt:
 data-service:
   url: ${DATA_SERVICE_URL:http://localhost:5001}
 
+# CORS — comma-separated list, defaults to dev-friendly "*"
+app:
+  cors:
+    allowed-origins: ${CORS_ORIGINS:*}
+
+# Actuator — only expose health (and info) to the outside world
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
 # Logging
 logging:
   level:
-    com.stock: DEBUG
-    com.baomidou.mybatisplus: DEBUG
+    root: INFO
+    com.stock: INFO
+    com.baomidou.mybatisplus: WARN
+    # Bump these to DEBUG via env when needed
+    # com.stock: ${LOG_LEVEL_APP:INFO}
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{0} - %msg%n"

@@ -156,6 +156,16 @@ def refresh_moneyflow_northbound(days: int = 5):
         log.warning("[scheduler] northbound refresh failed: %s", e)
 
 
+def refresh_strategy_scores():
+    """Pre-compute every (code, strategy) score so the dashboard's
+    'Top per strategy' panel becomes a millisecond SELECT."""
+    try:
+        from jobs import strategy_score
+        strategy_score.run()
+    except Exception as e:
+        log.warning("[scheduler] strategy_score refresh failed: %s", e)
+
+
 def start():
     global _sched
     with _lock:
@@ -203,6 +213,17 @@ def start():
             coalesce=True,
         )
 
+        # Strategy score rebuild at 17:30 — after K-line / LHB / moneyflow
+        # have all landed, so each strategy sees today's complete data set.
+        sched.add_job(
+            refresh_strategy_scores,
+            CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
+            id="strategy_score_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         # Optional: warmup once after startup
         if WARMUP_ON_START:
             run_at = dt.datetime.now() + dt.timedelta(seconds=WARMUP_DELAY_SEC)
@@ -225,6 +246,14 @@ def start():
                 DateTrigger(run_date=run_at + dt.timedelta(seconds=60)),
                 id="startup_mf_nb",
                 kwargs={"days": 60},
+                replace_existing=True,
+            )
+            # Strategy score rebuild ~3 min after startup — assumes spot,
+            # K-lines, LHB, moneyflow have all landed by then.
+            sched.add_job(
+                refresh_strategy_scores,
+                DateTrigger(run_date=run_at + dt.timedelta(seconds=180)),
+                id="startup_strategy_score",
                 replace_existing=True,
             )
             log.info("[scheduler] startup warmup scheduled at %s (top_n=%d)", run_at, WARMUP_TOP_N)

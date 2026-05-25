@@ -38,10 +38,17 @@
       <div class="glass-card kline-card">
         <div class="card-header">
           <h3>K线图</h3>
-          <el-radio-group v-model="klinePeriod" size="small">
-            <el-radio-button value="daily">日K</el-radio-button>
-            <el-radio-button value="weekly">周K</el-radio-button>
-          </el-radio-group>
+          <div class="kline-controls">
+            <el-radio-group v-model="klinePeriod" size="small">
+              <el-radio-button value="daily">日K</el-radio-button>
+              <el-radio-button value="weekly">周K</el-radio-button>
+            </el-radio-group>
+            <el-radio-group v-model="klineAdjust" size="small">
+              <el-radio-button value="qfq">前复权</el-radio-button>
+              <el-radio-button value="hfq">后复权</el-radio-button>
+              <el-radio-button value="none">不复权</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
         <KLineChart :data="klineData" :height="480" />
       </div>
@@ -179,7 +186,7 @@
             <template #default="{ row }">{{ row.roe ? row.roe.toFixed(2) : '—' }}</template>
           </el-table-column>
           <el-table-column label="市值(亿)" width="100" align="right">
-            <template #default="{ row }">{{ row.marketCap }}</template>
+            <template #default="{ row }">{{ formatNumber(row.marketCap, 0) }}</template>
           </el-table-column>
         </el-table>
       </div>
@@ -202,15 +209,19 @@ import ScoreGauge from '@/components/charts/ScoreGauge.vue'
 import PredictionPanel from '@/components/charts/PredictionPanel.vue'
 import { Star, StarFilled, Aim } from '@element-plus/icons-vue'
 import type { KLineData, PredictionResult } from '@/types'
+import { useSettingsStore } from '@/stores/settings'
+import { formatNumber } from '@/utils/format'
 
 const route = useRoute()
 const userStore = useUserStore()
 const strategyStore = useStrategyStore()
+const settings = useSettingsStore()
 
 const code = computed(() => route.params.code as string)
 const stockInfo = ref<any>({})
 const klineData = ref<KLineData[]>([])
 const klinePeriod = ref('daily')
+const klineAdjust = ref<'qfq' | 'hfq' | 'none'>(settings.klineAdjust)
 const compositeScore = ref(0)
 const strategyScores = ref<Record<string, number>>({})
 const prediction = ref<PredictionResult | null>(null)
@@ -296,7 +307,7 @@ async function loadData() {
   try {
     const [detail, kline, strategies, pred] = await Promise.allSettled([
       getStockDetail(c, signal),
-      getStockKLine(c, klinePeriod.value, 250, signal),
+      getStockKLine(c, klinePeriod.value, 250, signal, klineAdjust.value),
       getStockStrategies(c, signal),
       getStockPrediction(c, signal),
     ])
@@ -328,9 +339,18 @@ async function loadF10() {
 }
 
 watch(() => code.value, loadData)
-watch(klinePeriod, () => {
+
+// Re-fetch only the K-line when the user changes period or adjustment. Debounce
+// so rapid clicks (日/周/前/后/不) don't fire three overlapping requests.
+let klineTimer: number | undefined
+watch([klinePeriod, klineAdjust], () => {
   if (!code.value) return
-  getStockKLine(code.value, klinePeriod.value, 250, abortCtrl?.signal).then(d => klineData.value = d).catch(() => {})
+  if (klineTimer) window.clearTimeout(klineTimer)
+  klineTimer = window.setTimeout(() => {
+    getStockKLine(code.value, klinePeriod.value, 250, abortCtrl?.signal, klineAdjust.value)
+      .then(d => (klineData.value = d))
+      .catch(() => {})
+  }, 200)
 })
 
 useRefreshable('个股详情', loadData)
@@ -342,6 +362,11 @@ onBeforeUnmount(() => abortCtrl?.abort())
 </script>
 
 <style scoped>
+.kline-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .f10-card { padding: 18px 20px; margin-top: 16px; }
 .f10-card .card-header {
   display: flex; justify-content: space-between; align-items: center;

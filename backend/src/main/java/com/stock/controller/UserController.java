@@ -24,21 +24,13 @@ public class UserController {
 
     @PostMapping("/register")
     public ApiResponse<?> register(@RequestBody Map<String, String> body) {
-        try {
-            return ApiResponse.ok(userService.register(
-                body.get("username"), body.get("password"), body.get("nickname")));
-        } catch (Exception e) {
-            return ApiResponse.error(e.getMessage());
-        }
+        return ApiResponse.ok(userService.register(
+            body.get("username"), body.get("password"), body.get("nickname")));
     }
 
     @PostMapping("/login")
     public ApiResponse<?> login(@RequestBody Map<String, String> body) {
-        try {
-            return ApiResponse.ok(userService.login(body.get("username"), body.get("password")));
-        } catch (Exception e) {
-            return ApiResponse.error(e.getMessage());
-        }
+        return ApiResponse.ok(userService.login(body.get("username"), body.get("password")));
     }
 
     @GetMapping("/info")

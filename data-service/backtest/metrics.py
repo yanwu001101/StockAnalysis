@@ -52,12 +52,22 @@ def compute(equity: pd.Series, trades: list[dict] | None = None,
 
     calmar = float(annualized / abs(max_dd)) if max_dd < 0 else 0.0
 
-    wins = 0
-    n_trades = 0
-    if trades:
-        n_trades = len(trades)
-        wins = sum(1 for t in trades if (t.get("pnl") or 0) > 0)
-    win_rate = (wins / n_trades) if n_trades > 0 else 0.0
+    # WinRate has two meanings depending on the back-test mode:
+    #   * Single-stock — closed trades carry a `pnl`, so we use the classical
+    #     "winning trades / closed trades" definition.
+    #   * Portfolio — rebalance rows in `trades` have no per-line pnl (each
+    #     row is a delta in shares, not a realised exit). Fall back to the
+    #     fraction of UP days in the equity curve, which is a meaningful
+    #     proxy when the per-trade PnL isn't attributable.
+    n_trades = len(trades) if trades else 0
+    closed = [t for t in (trades or []) if t.get("pnl") is not None] if trades else []
+    if closed:
+        wins = sum(1 for t in closed if (t.get("pnl") or 0) > 0)
+        win_rate = wins / len(closed)
+    elif len(rets) > 0:
+        win_rate = float((rets > 0).sum() / len(rets))
+    else:
+        win_rate = 0.0
 
     return Metrics(
         total_return=total_return,

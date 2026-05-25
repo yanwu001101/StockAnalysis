@@ -196,15 +196,34 @@ def fetch_financial() -> pd.DataFrame:
     return cached("financial", 600, _fetch)
 
 
-def fetch_stock_daily(code: str, days: int = 250) -> pd.DataFrame:
-    key = f"daily:{code}:{days}"
+def fetch_stock_daily(code: str, days: int = 250, adjust: str = "qfq") -> pd.DataFrame:
+    # Persisted kline_repo only holds front-adjusted data; for hfq / none we
+    # always go straight to the source with a separate cache key.
+    if adjust == "qfq":
+        key = f"daily:{code}:{days}"
+        def _fetch():
+            try:
+                df = kline_repo.get_daily(code, days)
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                print(f"[data-service] kline_repo daily {code} failed: {e}")
+            try:
+                end = dt.date.today()
+                start = end - dt.timedelta(days=int(days * 1.5))
+                df = ak.stock_zh_a_hist(
+                    symbol=code, period="daily",
+                    start_date=start.strftime("%Y%m%d"),
+                    end_date=end.strftime("%Y%m%d"),
+                    adjust="qfq")
+                return df.tail(days) if df is not None and not df.empty else pd.DataFrame()
+            except Exception:
+                return pd.DataFrame()
+        return cached(key, 120, _fetch)
+
+    ak_adjust = "" if adjust == "none" else adjust  # "" = un-adjusted in akshare
+    key = f"daily:{code}:{days}:{adjust}"
     def _fetch():
-        try:
-            df = kline_repo.get_daily(code, days)
-            if df is not None and not df.empty:
-                return df
-        except Exception as e:
-            print(f"[data-service] kline_repo daily {code} failed: {e}")
         try:
             end = dt.date.today()
             start = end - dt.timedelta(days=int(days * 1.5))
@@ -212,23 +231,40 @@ def fetch_stock_daily(code: str, days: int = 250) -> pd.DataFrame:
                 symbol=code, period="daily",
                 start_date=start.strftime("%Y%m%d"),
                 end_date=end.strftime("%Y%m%d"),
-                adjust="qfq")
+                adjust=ak_adjust)
             return df.tail(days) if df is not None and not df.empty else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
-    return cached(key, 120, _fetch)
+    return cached(key, 300, _fetch)
 
 
-def fetch_stock_weekly(code: str, days: int = 900) -> pd.DataFrame:
-    key = f"weekly:{code}:{days}"
+def fetch_stock_weekly(code: str, days: int = 900, adjust: str = "qfq") -> pd.DataFrame:
+    if adjust == "qfq":
+        key = f"weekly:{code}:{days}"
+        def _fetch():
+            weeks = max(int(days / 7) + 4, 60)
+            try:
+                df = kline_repo.get_weekly(code, weeks)
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                print(f"[data-service] kline_repo weekly {code} failed: {e}")
+            try:
+                end = dt.date.today()
+                start = end - dt.timedelta(days=days)
+                df = ak.stock_zh_a_hist(
+                    symbol=code, period="weekly",
+                    start_date=start.strftime("%Y%m%d"),
+                    end_date=end.strftime("%Y%m%d"),
+                    adjust="qfq")
+                return df if df is not None else pd.DataFrame()
+            except Exception:
+                return pd.DataFrame()
+        return cached(key, 300, _fetch)
+
+    ak_adjust = "" if adjust == "none" else adjust
+    key = f"weekly:{code}:{days}:{adjust}"
     def _fetch():
-        weeks = max(int(days / 7) + 4, 60)
-        try:
-            df = kline_repo.get_weekly(code, weeks)
-            if df is not None and not df.empty:
-                return df
-        except Exception as e:
-            print(f"[data-service] kline_repo weekly {code} failed: {e}")
         try:
             end = dt.date.today()
             start = end - dt.timedelta(days=days)
@@ -236,11 +272,11 @@ def fetch_stock_weekly(code: str, days: int = 900) -> pd.DataFrame:
                 symbol=code, period="weekly",
                 start_date=start.strftime("%Y%m%d"),
                 end_date=end.strftime("%Y%m%d"),
-                adjust="qfq")
+                adjust=ak_adjust)
             return df if df is not None else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
-    return cached(key, 300, _fetch)
+    return cached(key, 600, _fetch)
 
 
 def fetch_weekly_trend(code: str) -> dict:
@@ -449,25 +485,39 @@ def stock_detail(code):
             return jsonify({"error": "Stock not found"}), 404
 
         r = row.iloc[0]
+
+        # Some fundamental fields (e.g. 销售毛利率 for bank stocks) come back
+        # as NaN, which Python passes through round() unchanged and `or 0`
+        # cannot guard against (bool(NaN) is True). JSON spec forbids NaN,
+        # so the downstream Java parser then 500s on what looks like fine data.
+        def safe_round(v, digits=2):
+            try:
+                x = float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+            if x is None or x != x:  # NaN check
+                return None
+            return round(x, digits)
+
         result = {
             "code": code,
             "name": str(r.get("名称", "")),
             "industry": str(r.get("行业", "")),
-            "price": round(float(r.get("最新价", 0) or 0), 2),
-            "changePercent": round(float(r.get("涨跌幅", 0) or 0), 2),
-            "marketCap": round(float(r.get("总市值_亿", 0) or 0), 0),
+            "price": safe_round(r.get("最新价"), 2) or 0,
+            "changePercent": safe_round(r.get("涨跌幅"), 2) or 0,
+            "marketCap": safe_round(r.get("总市值_亿"), 0) or 0,
         }
 
         if not fin.empty:
             f = fin.iloc[0]
             result.update({
-                "roe": round(float(f.get("净资产收益率", 0) or 0), 2),
-                "rawRoe": round(float(f.get("净资产收益率_原始", 0) or 0), 2),
-                "debtRatio": round(float(f.get("资产负债率", 0) or 0), 2),
-                "cashFlowPerShare": round(float(f.get("经营现金流", 0) or 0), 4),
-                "revenueGrowth": round(float(f.get("营收同比增长率", 0) or 0), 2),
-                "profitGrowth": round(float(f.get("净利润同比增长率", 0) or 0), 2),
-                "grossMargin": round(float(f.get("销售毛利率", 0) or 0), 2),
+                "roe": safe_round(f.get("净资产收益率"), 2),
+                "rawRoe": safe_round(f.get("净资产收益率_原始"), 2),
+                "debtRatio": safe_round(f.get("资产负债率"), 2),
+                "cashFlowPerShare": safe_round(f.get("经营现金流"), 4),
+                "revenueGrowth": safe_round(f.get("营收同比增长率"), 2),
+                "profitGrowth": safe_round(f.get("净利润同比增长率"), 2),
+                "grossMargin": safe_round(f.get("销售毛利率"), 2),
             })
 
         return jsonify(result)
@@ -482,8 +532,12 @@ def stock_kline(code):
         code = normalize_code(code)
         period = request.args.get("period", "daily")
         days = int(request.args.get("days", 250))
+        adjust = request.args.get("adjust", "qfq")
+        if adjust not in ("qfq", "hfq", "none"):
+            adjust = "qfq"
 
-        df = fetch_stock_daily(code, days) if period == "daily" else fetch_stock_weekly(code, days)
+        df = fetch_stock_daily(code, days, adjust) if period == "daily" \
+            else fetch_stock_weekly(code, days, adjust)
         if df is None or df.empty:
             return jsonify([])
 
@@ -832,6 +886,7 @@ try:
     from api.f10 import bp as f10_bp
     from api.conditions import bp as cond_bp
     from api.expression import bp as expr_bp
+    from api.admin import bp as admin_bp
     app.register_blueprint(backtest_bp)
     app.register_blueprint(ops_bp)
     app.register_blueprint(v2_bp)
@@ -840,6 +895,7 @@ try:
     app.register_blueprint(f10_bp)
     app.register_blueprint(cond_bp)
     app.register_blueprint(expr_bp)
+    app.register_blueprint(admin_bp)
 except Exception as _bp_err:
     print(f'[data-service] blueprint registration failed: {_bp_err}')
 

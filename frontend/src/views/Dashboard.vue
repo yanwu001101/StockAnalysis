@@ -183,6 +183,49 @@
         </div>
       </aside>
     </section>
+
+    <section class="strategy-ranks-area rise rise-4" v-if="strategyTopsData || strategyPoolLoading">
+      <article class="card strat-ranks-card">
+        <header class="card-head">
+          <div>
+            <h3>各策略 Top 榜</h3>
+            <p class="card-sub">
+              <span>全市场预扫描结果 · 当日盘后 17:30 自动刷新</span>
+              <span v-if="strategyComputedAt" class="ts-tag">数据时间 {{ strategyComputedAt.replace('T', ' ').slice(0, 16) }}</span>
+            </p>
+          </div>
+          <div class="result-actions">
+            <span class="sort-label">每策略 Top</span>
+            <el-radio-group v-model="ranksPerStrat" size="small">
+              <el-radio-button :value="3">3</el-radio-button>
+              <el-radio-button :value="5">5</el-radio-button>
+              <el-radio-button :value="10">10</el-radio-button>
+            </el-radio-group>
+          </div>
+        </header>
+        <el-skeleton v-if="strategyPoolLoading && !strategyTopsData" :rows="6" animated style="margin-top: 14px;" />
+        <div v-else class="strat-ranks-grid">
+          <div class="strat-rank-col" v-for="col in strategyRankColumns" :key="col.id">
+            <header class="strat-rank-head">
+              <span class="strat-rank-dot" :style="{ background: col.color }"></span>
+              <span class="strat-rank-name">{{ col.name }}</span>
+            </header>
+            <ol class="strat-rank-list">
+              <li v-for="(row, i) in col.rows" :key="row.code" @click="goStock(row)">
+                <span class="srl-rank">{{ i + 1 }}</span>
+                <span class="srl-name">{{ row.name }}</span>
+                <span class="srl-code">{{ row.code }}</span>
+                <span class="srl-score" :class="scoreCls(row._stratScore)">{{ row._stratScore }}</span>
+              </li>
+            </ol>
+            <div v-if="!col.rows.length" class="strat-rank-empty">无评分股票</div>
+          </div>
+        </div>
+        <div v-if="!strategyPoolLoading && !strategyRankColumns.length" class="strat-rank-empty">
+          请到「策略实验室」启用至少一个策略,或前往「设置 → 手动数据预热」触发首次扫描
+        </div>
+      </article>
+    </section>
   </div>
 </template>
 
@@ -192,12 +235,15 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Aim, InfoFilled } from '@element-plus/icons-vue'
 import { useMarketStore } from '@/stores/market'
+import { useStrategyStore } from '@/stores/strategy'
 import { useRefreshable } from '@/composables/useRefreshable'
 import { getStockProSignal, getStockStrategies } from '@/api/stock'
+import { getStrategyTops, type StrategyTops } from '@/api/strategy'
 import * as echarts from 'echarts'
 
 const router = useRouter()
 const marketStore = useMarketStore()
+const strategyStore = useStrategyStore()
 
 const proCode = ref('')
 const proCache = reactive<Record<string, any>>({})
@@ -240,6 +286,13 @@ async function preloadStrategyDetails() {
         const d: any = await getStockStrategies(row.code)
         row.compositeScoreV2 = Math.round(d.total ?? d.composite_score ?? 0)
         row.strategyStats = d.aggregate || null
+        // Per-strategy scores for the "各策略 Top 榜" panel below.
+        const map: Record<string, number> = {}
+        for (const [id, info] of Object.entries(d.strategies || {})) {
+          const sc = (info as any)?.score
+          if (typeof sc === 'number') map[id] = sc
+        }
+        row.strategies = map
       } catch {
         row.strategyStats = null
       }
@@ -271,6 +324,42 @@ const activeRank = ref<'gainers' | 'losers' | 'active'>('gainers')
 
 const sortBy = ref<'composite' | 'compositeV2'>('composite')
 const sortDir = ref<'desc' | 'asc'>('desc')
+const ranksPerStrat = ref<number>(5)
+const strategyTopsData = ref<StrategyTops | null>(null)
+const strategyPoolLoading = ref(false)
+
+// Per-strategy Top-N is fetched from the pre-computed table — millisecond
+// response regardless of universe size. The post-market scheduler rebuilds
+// it nightly; users can trigger an immediate rebuild via Settings → Warmup.
+async function loadStrategyPool() {
+  if (strategyPoolLoading.value) return
+  strategyPoolLoading.value = true
+  try {
+    strategyTopsData.value = await getStrategyTops(10)
+  } catch {
+    strategyTopsData.value = null
+  } finally {
+    strategyPoolLoading.value = false
+  }
+}
+
+const strategyRankColumns = computed(() => {
+  const tops = strategyTopsData.value
+  if (!tops?.strategies) return []
+  const limit = ranksPerStrat.value
+  const enabledIds = new Set(strategyStore.strategies.filter(s => s.enabled).map(s => s.id))
+  const colorById = Object.fromEntries(strategyStore.strategies.map(s => [s.id, s.color]))
+  return tops.strategies
+    .filter(s => enabledIds.has(s.id))
+    .map(s => ({
+      id: s.id,
+      name: s.name,
+      color: colorById[s.id] || 'var(--brand)',
+      rows: s.rows.slice(0, limit).map(r => ({ ...r, _stratScore: Math.round(r.score) })),
+    }))
+})
+
+const strategyComputedAt = computed(() => strategyTopsData.value?.computed_at || null)
 
 function toggleSort(field: 'composite' | 'compositeV2') {
   if (sortBy.value === field) {
@@ -403,6 +492,8 @@ function renderCharts() {
 
 useRefreshable('今日盘面', async () => {
   await marketStore.fetchAll()
+  // Strategy pool is independent of marketStore — fire in parallel, don't block.
+  loadStrategyPool()
   await nextTick()
   renderCharts()
 })
@@ -661,4 +752,55 @@ useRefreshable('今日盘面', async () => {
 
 @media (max-width: 1100px) { .pro-quick { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 600px) { .pro-quick { grid-template-columns: repeat(2, 1fr); } }
+
+/* — Per-strategy Top boards — */
+.strategy-ranks-area { margin-top: 16px; }
+.strat-ranks-card { padding: 18px 20px; }
+.strat-ranks-card .card-sub { margin: 4px 0 0; font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 10px; }
+.ts-tag {
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg-2);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+.result-actions { display: flex; align-items: center; gap: 8px; }
+.sort-label { font-size: 12px; color: var(--text-3); }
+.strat-ranks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.strat-rank-col {
+  background: var(--bg-2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.strat-rank-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.strat-rank-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.strat-rank-name { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+.strat-rank-list { list-style: none; margin: 0; padding: 0; }
+.strat-rank-list li {
+  display: grid;
+  grid-template-columns: 18px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.12s;
+}
+.strat-rank-list li:hover { background: var(--surface-hover); }
+.srl-rank { color: var(--text-4); font-variant-numeric: tabular-nums; text-align: right; }
+.srl-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srl-code { color: var(--text-3); font-family: var(--font-num); font-size: 11px; }
+.srl-score { font-family: var(--font-num); font-weight: 600; font-size: 12px; min-width: 28px; text-align: right; }
+.strat-rank-empty { font-size: 12px; color: var(--text-4); padding: 8px 0; text-align: center; }
 </style>

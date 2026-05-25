@@ -142,7 +142,13 @@ def _peer_compare(code: str) -> dict:
     """Return same-industry stocks ranked alongside the target."""
     spot = cache.get("spot")
     if spot is None or not hasattr(spot, "columns"):
-        return {}
+        try:
+            from app import fetch_spot
+            spot = fetch_spot()
+        except Exception:
+            spot = None
+        if spot is None or not hasattr(spot, "columns"):
+            return {}
     code = code.zfill(6)
     if "代码" not in spot.columns or "行业" not in spot.columns:
         return {}

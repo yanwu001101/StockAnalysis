@@ -147,14 +147,14 @@ watch(() => route.params.code, load)
 .prob-card { padding: 16px; text-align: center; }
 .prob-card h3 { margin: 0 0 10px; font-size: 14px; color: var(--text-muted); font-weight: 600; }
 .prob-card .label { font-size: 28px; font-weight: 800; padding: 8px 0; }
-.prob-card.up .label { color: #FF4757; }
-.prob-card.down .label { color: #2AE8A4; }
-.prob-card.flat .label { color: var(--text-muted); }
-.prob-bar { height: 8px; background: rgba(42,232,164,0.15); border-radius: 4px; overflow: hidden; margin: 10px 0 6px; }
-.bar-fill.up { height: 100%; background: linear-gradient(90deg, #FF4757, #FF6B81); }
+.prob-card.up .label { color: var(--up); }
+.prob-card.down .label { color: var(--down); }
+.prob-card.flat .label { color: var(--text-3); }
+.prob-bar { height: 8px; background: var(--bg-2); border-radius: 4px; overflow: hidden; margin: 10px 0 6px; }
+.bar-fill.up { height: 100%; background: var(--up); }
 .prob-numbers { display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; padding: 4px 0 10px; }
-.prob-numbers .up { color: #FF4757; }
-.prob-numbers .down { color: #2AE8A4; }
+.prob-numbers .up { color: var(--up); }
+.prob-numbers .down { color: var(--down); }
 .confidence { margin-top: 8px; }
 .confidence .meta { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px; }
 
@@ -162,7 +162,7 @@ watch(() => route.params.code, load)
 .key-signals h3, .risks h3, .dimensions-card h3, .info h3 { margin: 0 0 10px; font-size: 14px; color: var(--text-primary); }
 .key-signals ul, .risks ul { margin: 0; padding-left: 18px; }
 .key-signals li { font-size: 13px; color: var(--text); padding: 3px 0; line-height: 1.5; }
-.risks .risk-item { font-size: 13px; color: var(--warn, #FFC312); padding: 3px 0; }
+.risks .risk-item { font-size: 13px; color: var(--warn); padding: 3px 0; }
 
 .dimensions-card { padding: 16px; margin-bottom: 16px; }
 .dim-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -173,8 +173,8 @@ watch(() => route.params.code, load)
   background: var(--bg-2);
   transition: all 0.2s;
 }
-.dim-cell.bull { border-color: rgba(255,71,87,0.4); background: rgba(255,71,87,0.05); }
-.dim-cell.bear { border-color: rgba(42,232,164,0.4); background: rgba(42,232,164,0.05); }
+.dim-cell.bull { border-color: var(--up); background: var(--up-soft); }
+.dim-cell.bear { border-color: var(--down); background: var(--down-soft); }
 .dim-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .dim-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .dim-value { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }

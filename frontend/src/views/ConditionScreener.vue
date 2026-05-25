@@ -97,7 +97,7 @@
         <el-table-column prop="roe" label="ROE" width="80" align="right" />
         <el-table-column prop="debtRatio" label="负债率" width="90" align="right" />
         <el-table-column label="市值(亿)" width="100" align="right">
-          <template #default="{ row }">{{ row.marketCap }}</template>
+          <template #default="{ row }">{{ formatNumber(row.marketCap, 0) }}</template>
         </el-table-column>
       </el-table>
     </div>
@@ -110,6 +110,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request from '@/api/request'
 import { useRefreshable } from '@/composables/useRefreshable'
+import { formatNumber } from '@/utils/format'
 
 const router = useRouter()
 const loading = ref(false)

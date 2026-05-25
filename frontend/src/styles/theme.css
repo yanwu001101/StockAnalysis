@@ -56,6 +56,15 @@
   --font-num:     "SF Mono", "JetBrains Mono", "PingFang SC", Menlo, Consolas, monospace;
 }
 
+/* Optional override: international convention — red = down, green = up.
+   User toggles this via Settings → ColorScheme. */
+:root[data-color-scheme="red-down"] {
+  --up:           #07C160;
+  --up-soft:      rgba(7, 193, 96, 0.10);
+  --down:         #FA5151;
+  --down-soft:    rgba(250, 81, 81, 0.10);
+}
+
 /* — Dark theme — */
 :root[data-theme="dark"] {
   --bg:           #111111;
@@ -223,6 +232,8 @@ h4 { font-size: 15px; }
 .score-high   { color: var(--brand); }
 .score-medium { color: var(--warn); }
 .score-low    { color: var(--up); }
+.brand-text { color: var(--brand); }
+.warn-text  { color: var(--warn); }
 
 /* — Scrollbar — */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

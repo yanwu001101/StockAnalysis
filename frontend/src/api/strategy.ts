@@ -20,3 +20,24 @@ export function runScreener(req: ScreenerRequest): Promise<any[]> {
 export function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
   return request.post('/backtest', req)
 }
+
+export interface StrategyTopsRow {
+  code: string
+  name: string
+  industry: string
+  price: number
+  changePercent: number
+  score: number
+  signal: string
+  triggered: boolean
+}
+
+export interface StrategyTops {
+  strategies: Array<{ id: string; name: string; rows: StrategyTopsRow[] }>
+  computed_at: string | null
+  row_count: number
+}
+
+export function getStrategyTops(limit: number = 10): Promise<StrategyTops> {
+  return request.get('/strategy-tops', { params: { limit } })
+}

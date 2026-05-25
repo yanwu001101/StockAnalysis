@@ -18,7 +18,7 @@
       <div class="strategy-card glass-card" v-for="s in strategyStore.strategies" :key="s.id">
         <div class="strategy-top">
           <div class="strategy-info">
-            <el-switch v-model="s.enabled" @change="strategyStore.toggleStrategy(s.id)" />
+            <el-switch v-model="s.enabled" />
             <div class="strategy-meta">
               <span class="strategy-name">{{ s.name }}</span>
               <span class="strategy-desc">{{ s.description }}</span>
@@ -35,7 +35,7 @@
           </div>
         </div>
         <div class="weight-slider">
-          <el-slider v-model="s.weight" :min="0" :max="50" :step="1" :disabled="!s.enabled" @change="(v: number) => strategyStore.updateWeight(s.id, v)" />
+          <el-slider v-model="s.weight" :min="0" :max="50" :step="1" :disabled="!s.enabled" />
         </div>
         <div class="params-grid" v-if="expanded[s.id]">
           <div class="param-row" v-for="p in paramsOf(s.id)" :key="p.name">
@@ -54,11 +54,11 @@
     </div>
 
     <div class="glass-card total-weight-card">
-      <span>总权重: </span>
-      <span :class="totalWeight === 100 ? 'weight-ok' : totalWeight > 100 ? 'weight-over' : 'weight-under'">
-        {{ totalWeight }}%
-      </span>
-      <span class="weight-hint" v-if="totalWeight !== 100">(建议调整至 100%)</span>
+      <span class="tw-label">相对权重总和</span>
+      <span class="tw-value">{{ totalWeight }}%</span>
+      <span class="tw-hint">综合分按比例归一化,总和不必等于 100。</span>
+      <el-button v-if="totalWeight !== 100 && totalWeight > 0"
+                 link size="small" @click="normalizeWeights">一键归一化为 100%</el-button>
     </div>
 
     <div class="glass-card preview-card" v-if="previewData.length || requireTriggered.length">
@@ -68,7 +68,7 @@
       </div>
       <div class="trigger-filter">
         <el-checkbox-group v-model="requireTriggered" size="small" @change="previewResults">
-          <el-checkbox v-for="s in strategyStore.strategies.filter(x => x.enabled)" :key="s.id" :label="s.id" :style="{ color: s.color }">
+          <el-checkbox v-for="s in strategyStore.strategies.filter(x => x.enabled)" :key="s.id" :value="s.id" :style="{ color: s.color }">
             {{ s.name }}
           </el-checkbox>
         </el-checkbox-group>
@@ -152,6 +152,33 @@ async function loadParamSpecs() {
 const totalWeight = computed(() =>
   strategyStore.strategies.filter(s => s.enabled).reduce((sum, s) => sum + s.weight, 0)
 )
+
+// Scale enabled strategy weights so they sum to exactly 100 while preserving
+// proportions. Values are rounded to integers; the residue (max ±N) is
+// absorbed by the heaviest weight so the total lands on a clean 100.
+function normalizeWeights() {
+  const enabled = strategyStore.strategies.filter(s => s.enabled)
+  const sum = enabled.reduce((acc, s) => acc + s.weight, 0)
+  if (sum <= 0) return
+  // Snapshot original weights so we can pick the heaviest BEFORE we start
+  // overwriting them in-place.
+  const snapshot = enabled.map(s => ({ id: s.id, original: s.weight }))
+  const heaviestId = snapshot.reduce((a, b) => (b.original > a.original ? b : a)).id
+
+  const factor = 100 / sum
+  let running = 0
+  for (const item of snapshot) {
+    const v = Math.max(1, Math.round(item.original * factor))
+    strategyStore.updateWeight(item.id, v)
+    running += v
+  }
+  const diff = 100 - running
+  if (diff !== 0) {
+    const cur = strategyStore.strategies.find(s => s.id === heaviestId)
+    if (cur) strategyStore.updateWeight(heaviestId, Math.max(1, cur.weight + diff))
+  }
+  ElMessage.success('已等比归一化为 100%')
+}
 
 async function previewResults() {
   try {
@@ -247,15 +274,14 @@ useRefreshable('策略实验室', previewResults, { immediate: false, autoRefres
 .total-weight-card {
   padding: 16px 24px;
   margin-bottom: 16px;
-  font-size: 16px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.weight-ok { color: #2AE8A4; font-weight: 700; }
-.weight-over { color: #FF4757; font-weight: 700; }
-.weight-under { color: #FFC312; font-weight: 700; }
-.weight-hint { font-size: 13px; color: var(--text-muted); }
+.tw-label { font-size: 13px; color: var(--text-3); }
+.tw-value { font-size: 20px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.tw-hint { font-size: 12px; color: var(--text-3); flex: 1; }
 .preview-card { padding: 20px; }
 .preview-card h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
 .preview-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }

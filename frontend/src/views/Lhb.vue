@@ -21,7 +21,8 @@
     </div>
 
     <div class="card" v-loading="loading">
-      <el-table v-if="activeTab === 'recent'" :data="recent" stripe size="small"
+      <el-skeleton v-if="loading && !currentRows.length" :rows="8" animated style="padding: 8px;" />
+      <el-table v-else-if="activeTab === 'recent'" :data="recent" stripe size="small"
                 @row-click="goStock" :row-style="{ cursor: 'pointer' }" empty-text="无数据">
         <el-table-column prop="tradeDate" label="日期" width="100" />
         <el-table-column prop="code" label="代码" width="80" />
@@ -83,10 +84,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getLhbRecent, getLhbInstitutionRank, getLhbStockRank, type LhbRow, type LhbAggRow } from '@/api/lhb'
 import { useRefreshable } from '@/composables/useRefreshable'
+import { useAmountFormat } from '@/composables/useAmountFormat'
 
 const router = useRouter()
 const windowDays = ref(30)
@@ -96,10 +98,13 @@ const instRank = ref<LhbAggRow[]>([])
 const stockRank = ref<LhbAggRow[]>([])
 const loading = ref(false)
 
-function wan(v: number | null | undefined) {
-  if (v == null) return '—'
-  return (v / 10000).toFixed(0)
-}
+const currentRows = computed(() => {
+  if (activeTab.value === 'recent') return recent.value
+  if (activeTab.value === 'institution') return instRank.value
+  return stockRank.value
+})
+
+const { formatText: wan } = useAmountFormat()
 
 function seatCls(t: string) {
   if (t.includes('机构')) return 'tag-inst'

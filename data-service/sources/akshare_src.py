@@ -125,7 +125,7 @@ class AkshareSource(AbstractSource):
                 "net_profit_yoy": r.get("净利润-同比增长"),
                 "roe": r.get("净资产收益率"),
                 "gross_margin": r.get("销售毛利率"),
-                "op_cashflow": r.get("每股经营性现金流"),
+                "op_cashflow": r.get("每股经营现金流量"),
                 "bvps": r.get("每股净资产"),
             }
             # Try to enrich with debt ratio from stock_zcfz_em

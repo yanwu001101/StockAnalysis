@@ -294,7 +294,16 @@ def expression_help():
 def _load_universe(top_n: int) -> tuple[pd.DataFrame, dict]:
     spot = cache.get("spot")
     if spot is None or not hasattr(spot, "columns"):
-        return pd.DataFrame(), {}
+        # Bootstrap on cache miss — Redis can be cold on first request after a
+        # fresh worker or recreated container, and this screener has no other
+        # path that warms up the spot snapshot.
+        try:
+            from app import fetch_spot
+            spot = fetch_spot()
+        except Exception:
+            spot = None
+        if spot is None or not hasattr(spot, "columns"):
+            return pd.DataFrame(), {}
     df = spot.copy()
     if "代码" not in df.columns:
         return pd.DataFrame(), {}

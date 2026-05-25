@@ -22,7 +22,8 @@
     </div>
 
     <div class="card" v-loading="loading">
-      <el-table v-if="activeTab === 'main-in' || activeTab === 'main-out'" :data="mainRows" stripe size="small"
+      <el-skeleton v-if="loading && !currentRows.length" :rows="8" animated style="padding: 8px;" />
+      <el-table v-else-if="activeTab === 'main-in' || activeTab === 'main-out'" :data="mainRows" stripe size="small"
                 @row-click="goStock" :row-style="{ cursor: 'pointer' }" empty-text="无数据">
         <el-table-column type="index" label="#" width="50" />
         <el-table-column prop="name" label="名称" width="100" />
@@ -97,11 +98,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getMainRank, getNorthboundRank, getSectorFlow,
          type MainFlowRow, type NbFlowRow, type SectorRow } from '@/api/moneyflow'
 import { useRefreshable } from '@/composables/useRefreshable'
+import { useAmountFormat } from '@/composables/useAmountFormat'
 
 const router = useRouter()
 const windowDays = ref(5)
@@ -111,7 +113,13 @@ const nbRows = ref<NbFlowRow[]>([])
 const sectorRows = ref<SectorRow[]>([])
 const loading = ref(false)
 
-function wan(v: number) { return (v / 10000).toFixed(0) }
+const currentRows = computed(() => {
+  if (activeTab.value === 'nb') return nbRows.value
+  if (activeTab.value === 'sector') return sectorRows.value
+  return mainRows.value
+})
+
+const { formatText: wan } = useAmountFormat()
 function goStock(row: any) { router.push(`/stock/${row.code}`) }
 
 async function load() {

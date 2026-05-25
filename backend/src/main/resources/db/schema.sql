@@ -274,3 +274,16 @@ CREATE TABLE IF NOT EXISTS `stock_announcement` (
     UNIQUE KEY `uk_ann_code_title` (`code`, `ann_date`, `title`(190)),
     INDEX `idx_ann_date` (`ann_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 策略评分 (预扫描结果) — 给仪表盘各策略 Top 榜用,毫秒级 SELECT
+CREATE TABLE IF NOT EXISTS `stock_strategy_score` (
+    `code`        VARCHAR(10)  NOT NULL,
+    `strategy_id` VARCHAR(40)  NOT NULL,
+    `score`       DECIMAL(6,2) NOT NULL,
+    `signal_type` VARCHAR(10)  DEFAULT 'neutral',
+    `triggered`   TINYINT(1)   DEFAULT 0,
+    `computed_at` DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`, `strategy_id`),
+    KEY `idx_strat_score` (`strategy_id`, `score`),
+    KEY `idx_computed` (`computed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

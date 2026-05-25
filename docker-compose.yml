@@ -23,8 +23,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: stock-redis
-    ports:
-      - "127.0.0.1:6379:6379"
+    # host 6379 已被本地 Redis 占用,容器只暴露给 docker 内网
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -69,6 +70,12 @@ services:
       - DATA_SERVICE_URL=http://data-service:5001
       - JWT_SECRET=${JWT_SECRET:-StockScreenerSecretKey2024MustBe256BitsLong!!}
       - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       mysql:
         condition: service_healthy

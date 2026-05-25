@@ -36,7 +36,7 @@ public class UserService {
         User existing = userMapper.selectOne(
             new LambdaQueryWrapper<User>().eq(User::getUsername, username));
         if (existing != null) {
-            throw new RuntimeException("用户名已存在");
+            throw new com.stock.exception.BusinessException("用户名已存在");
         }
 
         User user = new User();
@@ -61,7 +61,7 @@ public class UserService {
         User user = userMapper.selectOne(
             new LambdaQueryWrapper<User>().eq(User::getUsername, username));
         if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
-            throw new RuntimeException("用户名或密码错误");
+            throw new com.stock.exception.BusinessException(401, "用户名或密码错误");
         }
 
         String token = jwtConfig.generateToken(user.getId(), user.getUsername());

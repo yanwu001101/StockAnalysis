@@ -145,7 +145,14 @@ def _build_universe(top_n: int = 500) -> pd.DataFrame:
     """Return a DataFrame keyed by code containing every queryable field."""
     spot = cache.get("spot")
     if spot is None or not hasattr(spot, "columns"):
-        return pd.DataFrame()
+        # Bootstrap on cache miss — see expression.py _load_universe for context.
+        try:
+            from app import fetch_spot
+            spot = fetch_spot()
+        except Exception:
+            spot = None
+        if spot is None or not hasattr(spot, "columns"):
+            return pd.DataFrame()
     df = spot.copy()
     if "代码" not in df.columns:
         return pd.DataFrame()

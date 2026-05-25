@@ -59,11 +59,11 @@
             </div>
             <div class="metric-item">
               <span class="metric-label">夏普比率</span>
-              <span class="metric-value" style="color: #00D4FF;">{{ result.sharpeRatio.toFixed(2) }}</span>
+              <span class="metric-value brand-text">{{ result.sharpeRatio.toFixed(2) }}</span>
             </div>
             <div class="metric-item">
               <span class="metric-label">胜率</span>
-              <span class="metric-value" style="color: #FFC312;">{{ (result.winRate * 100).toFixed(1) }}%</span>
+              <span class="metric-value warn-text">{{ (result.winRate * 100).toFixed(1) }}%</span>
             </div>
             <div class="metric-item">
               <span class="metric-label">交易次数</span>
@@ -87,6 +87,51 @@
           <h3>收益曲线</h3>
           <div ref="curveChartRef" style="height: 350px;"></div>
         </div>
+
+        <div class="glass-card trades-card" v-if="(result as any).trades?.length">
+          <div class="trades-head">
+            <h3>交易明细 <span class="trades-count">共 {{ (result as any).trades.length }} 笔</span></h3>
+            <div class="trades-filter">
+              <el-radio-group v-model="tradeSideFilter" size="small">
+                <el-radio-button value="all">全部</el-radio-button>
+                <el-radio-button value="buy">仅买入</el-radio-button>
+                <el-radio-button value="sell">仅卖出</el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+          <el-table :data="filteredTrades" stripe size="small" max-height="420"
+                    :row-style="{ cursor: 'pointer' }"
+                    @row-click="(row: any) => row.code && $router.push(`/stock/${row.code}`)">
+            <el-table-column label="日期" prop="date" width="120" sortable />
+            <el-table-column label="代码" prop="code" width="100" />
+            <el-table-column label="方向" width="80">
+              <template #default="{ row }">
+                <span :class="['side-tag', row.side]">
+                  {{ row.side === 'buy' ? '买入' : row.side === 'sell' ? '卖出' : row.side }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="价格" width="100" align="right">
+              <template #default="{ row }">{{ row.price != null ? Number(row.price).toFixed(2) : '—' }}</template>
+            </el-table-column>
+            <el-table-column label="股数" width="120" align="right">
+              <template #default="{ row }">{{ row.shares != null ? formatNumber(row.shares, 0) : '—' }}</template>
+            </el-table-column>
+            <el-table-column label="盈亏" width="120" align="right">
+              <template #default="{ row }">
+                <span v-if="row.pnl == null" class="dim">—</span>
+                <span v-else :class="row.pnl >= 0 ? 'price-up' : 'price-down'">
+                  {{ row.pnl >= 0 ? '+' : '' }}{{ formatNumber(row.pnl, 0) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="备注" min-width="120">
+              <template #default="{ row }">
+                <span class="dim" v-if="row.reason === 'end_of_window'">期末强平</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
       </div>
     </div>
 
@@ -95,11 +140,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, nextTick } from 'vue'
+import { ref, reactive, computed, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { runBacktest } from '@/api/strategy'
 import { useStrategyStore } from '@/stores/strategy'
 import { useRefreshable } from '@/composables/useRefreshable'
+import { formatNumber } from '@/utils/format'
 import * as echarts from 'echarts'
 import type { BacktestResult } from '@/types'
 
@@ -107,6 +153,13 @@ const strategyStore = useStrategyStore()
 const loading = ref(false)
 const result = ref<BacktestResult | null>(null)
 const curveChartRef = ref<HTMLElement>()
+const tradeSideFilter = ref<'all' | 'buy' | 'sell'>('all')
+
+const filteredTrades = computed(() => {
+  const all = ((result.value as any)?.trades ?? []) as any[]
+  if (tradeSideFilter.value === 'all') return all
+  return all.filter(t => t.side === tradeSideFilter.value)
+})
 
 const config = reactive({
   stockCode: '',
@@ -144,26 +197,50 @@ async function runTest() {
 
 function renderCurve() {
   if (!curveChartRef.value || !result.value?.equityCurve?.length) return
+  const root = getComputedStyle(document.documentElement)
+  const brand = root.getPropertyValue('--brand').trim() || '#07C160'
+  const text3 = root.getPropertyValue('--text-3').trim() || '#888888'
+  const line = root.getPropertyValue('--line').trim() || '#E5E5E5'
+  const surface = root.getPropertyValue('--surface').trim() || '#FFFFFF'
+
   const chart = echarts.init(curveChartRef.value)
   const data = result.value.equityCurve
   chart.setOption({
     backgroundColor: 'transparent',
     grid: { left: 60, right: 30, top: 20, bottom: 40 },
-    xAxis: { type: 'category', data: data.map(d => d.date), axisLabel: { color: '#8892A4', fontSize: 10 }, axisLine: { lineStyle: { color: '#2A3A4A' } } },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(42,58,74,0.3)' } }, axisLabel: { color: '#8892A4' } },
+    xAxis: { type: 'category', data: data.map(d => d.date),
+      axisLabel: { color: text3, fontSize: 10 },
+      axisLine: { lineStyle: { color: line } } },
+    yAxis: { type: 'value',
+      splitLine: { lineStyle: { color: line } },
+      axisLabel: { color: text3 } },
     series: [{
       type: 'line',
       data: data.map(d => d.value),
       smooth: true,
       symbol: 'none',
-      lineStyle: { color: '#00D4FF', width: 2 },
+      lineStyle: { color: brand, width: 2 },
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-        { offset: 0, color: 'rgba(0,212,255,0.3)' },
-        { offset: 1, color: 'rgba(0,212,255,0.02)' },
+        { offset: 0, color: hexToRgba(brand, 0.18) },
+        { offset: 1, color: hexToRgba(brand, 0.02) },
       ]) },
     }],
-    tooltip: { trigger: 'axis', backgroundColor: 'rgba(15,32,53,0.95)', borderColor: 'rgba(0,212,255,0.2)', textStyle: { color: '#E8EDF3' } },
+    tooltip: { trigger: 'axis',
+      backgroundColor: surface,
+      borderColor: line,
+      textStyle: { color: root.getPropertyValue('--text').trim() || '#191919' } },
   })
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = hex.replace('#', '')
+  const v = m.length === 3
+    ? m.split('').map(c => c + c).join('')
+    : m
+  const r = parseInt(v.slice(0, 2), 16)
+  const g = parseInt(v.slice(2, 4), 16)
+  const b = parseInt(v.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
@@ -189,23 +266,31 @@ useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
 .picks-card { padding: 20px; }
 .picks-card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text-primary); }
 .picks-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.trades-card { padding: 20px; margin-top: 16px; }
+.trades-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 12px; }
+.trades-card h3 { margin: 0; font-size: 15px; color: var(--text); }
+.trades-count { margin-left: 8px; font-size: 12px; color: var(--text-3); font-weight: 400; }
+.side-tag { font-size: 11px; padding: 2px 10px; border-radius: var(--radius-pill); }
+.side-tag.buy  { background: var(--up-soft); color: var(--up); }
+.side-tag.sell { background: var(--down-soft); color: var(--down); }
+.dim { color: var(--text-3); }
 .pick-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px;
-  background: rgba(0, 212, 255, 0.08);
-  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: var(--brand-soft);
+  border: 1px solid transparent;
   border-radius: 16px;
-  color: var(--text-primary);
+  color: var(--text);
   font-size: 13px;
   cursor: pointer;
   transition: background 0.15s;
 }
-.pick-chip:hover { background: rgba(0, 212, 255, 0.16); }
+.pick-chip:hover { background: var(--surface-hover); }
 .pick-rank {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px;
   border-radius: 50%;
-  background: rgba(0, 212, 255, 0.4);
+  background: var(--brand);
   color: #fff;
   font-size: 10px;
   font-weight: 700;

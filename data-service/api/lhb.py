@@ -27,6 +27,12 @@ def _meta_map() -> dict[str, dict]:
         return _META_CACHE[0]
     out: dict[str, dict] = {}
     df = cache.get("spot")
+    if df is None or not hasattr(df, "columns"):
+        try:
+            from app import fetch_spot
+            df = fetch_spot()
+        except Exception:
+            df = None
     if df is not None and hasattr(df, "columns") and "代码" in df.columns:
         for _, r in df.iterrows():
             c = str(r.get("代码", "")).zfill(6)
@@ -36,8 +42,26 @@ def _meta_map() -> dict[str, dict]:
                 "name": str(r.get("名称", "")),
                 "industry": str(r.get("行业", "")),
             }
-    _META_CACHE = (out, now)
+    if out:
+        _META_CACHE = (out, now)
     return out
+
+
+def _enrich(rows: list[dict]) -> list[dict]:
+    """Fill in name/industry from spot cache when the SQL JOIN's stock_info
+    side is empty (the table is sparsely populated)."""
+    meta = _meta_map()
+    for r in rows:
+        if r.get("name") and r.get("industry"):
+            continue
+        m = meta.get(r.get("code", ""))
+        if not m:
+            continue
+        if not r.get("name"):
+            r["name"] = m.get("name", "")
+        if not r.get("industry"):
+            r["industry"] = m.get("industry", "")
+    return rows
 
 
 def _date_arg(name: str, default: dt.date) -> dt.date:

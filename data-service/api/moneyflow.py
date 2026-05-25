@@ -25,6 +25,14 @@ def _meta_map() -> dict[str, dict]:
         return _META_CACHE[0]
     out: dict[str, dict] = {}
     df = cache.get("spot")
+    if df is None or not hasattr(df, "columns"):
+        # Bootstrap on cold cache so the very first request after a worker /
+        # Redis restart still gets name/industry/price filled.
+        try:
+            from app import fetch_spot
+            df = fetch_spot()
+        except Exception:
+            df = None
     if df is not None and hasattr(df, "columns") and "代码" in df.columns:
         for _, r in df.iterrows():
             c = str(r.get("代码", "")).zfill(6)
@@ -35,7 +43,10 @@ def _meta_map() -> dict[str, dict]:
                     "price": float(r.get("最新价") or 0),
                     "changePercent": float(r.get("涨跌幅") or 0),
                 }
-    _META_CACHE = (out, now)
+    # Only memoize when we actually got rows; otherwise let the next request
+    # retry the fetch instead of latching in an empty meta-map for 30s.
+    if out:
+        _META_CACHE = (out, now)
     return out
 
 
@@ -139,7 +150,13 @@ def sector_flow():
     sourced from the spot cache (same data the dashboard uses)."""
     df = cache.get("spot")
     if df is None or not hasattr(df, "columns"):
-        return jsonify([])
+        try:
+            from app import fetch_spot
+            df = fetch_spot()
+        except Exception:
+            df = None
+        if df is None or not hasattr(df, "columns"):
+            return jsonify([])
     ind_col = "行业" if "行业" in df.columns else None
     chg_col = "涨跌幅" if "涨跌幅" in df.columns else None
     if not ind_col or not chg_col:

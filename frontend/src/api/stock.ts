@@ -5,8 +5,8 @@ export function getStockDetail(code: string, signal?: AbortSignal): Promise<Stoc
   return request.get(`/stock/${code}`, { signal })
 }
 
-export function getStockKLine(code: string, period: string = 'daily', days: number = 250, signal?: AbortSignal): Promise<KLineData[]> {
-  return request.get(`/stock/${code}/kline`, { params: { period, days }, signal })
+export function getStockKLine(code: string, period: string = 'daily', days: number = 250, signal?: AbortSignal, adjust: string = 'qfq'): Promise<KLineData[]> {
+  return request.get(`/stock/${code}/kline`, { params: { period, days, adjust }, signal })
 }
 
 export function getStockStrategies(code: string, signal?: AbortSignal): Promise<CompositeScore> {

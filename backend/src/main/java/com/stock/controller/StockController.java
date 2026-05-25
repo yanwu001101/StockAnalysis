@@ -18,73 +18,46 @@ public class StockController {
 
     @GetMapping("/{code}")
     public ApiResponse<?> detail(@PathVariable String code) {
-        try {
-            JSONObject data = dataService.getStockDetail(code);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("获取个股详情失败: " + e.getMessage());
-        }
+        JSONObject data = dataService.getStockDetail(code);
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/{code}/kline")
     public ApiResponse<?> kline(@PathVariable String code,
                                 @RequestParam(defaultValue = "daily") String period,
-                                @RequestParam(defaultValue = "250") int days) {
-        try {
-            JSONArray data = dataService.getStockKLine(code, period, days);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("获取K线数据失败: " + e.getMessage());
-        }
+                                @RequestParam(defaultValue = "250") int days,
+                                @RequestParam(defaultValue = "qfq") String adjust) {
+        JSONArray data = dataService.getStockKLine(code, period, days, adjust);
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/{code}/strategies")
     public ApiResponse<?> strategies(@PathVariable String code) {
-        try {
-            JSONObject data = dataService.getStockStrategies(code);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("获取策略评分失败: " + e.getMessage());
-        }
+        JSONObject data = dataService.getStockStrategies(code);
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/{code}/f10")
     public ApiResponse<?> f10(@PathVariable String code) {
-        try {
-            JSONObject data = dataService.getStockF10(code);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("获取 F10 资料失败: " + e.getMessage());
-        }
+        JSONObject data = dataService.getStockF10(code);
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/{code}/prediction")
     public ApiResponse<?> prediction(@PathVariable String code) {
-        try {
-            JSONObject data = dataService.getStockPrediction(code);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("获取涨跌预测失败: " + e.getMessage());
-        }
+        JSONObject data = dataService.getStockPrediction(code);
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/{code}/pro-signal")
     public ApiResponse<?> proSignal(@PathVariable String code) {
-        try {
-            JSONObject data = dataService.getStockProSignal(code);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("获取专业信号失败: " + e.getMessage());
-        }
+        JSONObject data = dataService.getStockProSignal(code);
+        return ApiResponse.ok(data);
     }
 
     @GetMapping("/search")
     public ApiResponse<?> search(@RequestParam String keyword) {
-        try {
-            JSONArray data = dataService.searchStock(keyword);
-            return ApiResponse.ok(data);
-        } catch (Exception e) {
-            return ApiResponse.error("搜索失败: " + e.getMessage());
-        }
+        JSONArray data = dataService.searchStock(keyword);
+        return ApiResponse.ok(data);
     }
 }

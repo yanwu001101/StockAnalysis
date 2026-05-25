@@ -46,6 +46,12 @@
       </div>
     </section>
 
+    <section v-if="loading && !results.length" class="results-area">
+      <article class="card result-card">
+        <el-skeleton :rows="8" animated />
+      </article>
+    </section>
+
     <section class="results-area" v-if="results.length">
       <article class="card result-card rise rise-3">
         <header class="card-head">
@@ -115,7 +121,7 @@
                 </td>
                 <td class="t-center num">{{ row.roe }}%</td>
                 <td class="t-center num">{{ row.debtRatio }}%</td>
-                <td class="t-center num">{{ row.marketCap?.toFixed(0) }}</td>
+                <td class="t-center num">{{ formatNumber(row.marketCap, 0) }}</td>
                 <td class="t-center">
                   <span class="sig" :class="row.signal">{{ sigText(row.signal) }}</span>
                 </td>
@@ -156,6 +162,7 @@ import { getStockProSignal } from '@/api/stock'
 import { useStrategyStore } from '@/stores/strategy'
 import { useSettingsStore } from '@/stores/settings'
 import { useRefreshable } from '@/composables/useRefreshable'
+import { formatNumber } from '@/utils/format'
 import * as echarts from 'echarts'
 
 const router = useRouter()
@@ -168,20 +175,23 @@ const distChartRef = ref<HTMLElement>()
 const industryOptions = ref<string[]>([])
 const sortBy = ref<'composite' | 'strategy' | 'pro'>('composite')
 
+// Defaults are deliberately permissive — composite scores live in the 30-70
+// range now that look-ahead is fixed, and a strict 60 floor would empty the
+// table. Users can tighten via the sliders.
 const filters = reactive({
-  minScore: 60,
-  minRoe: 15,
-  maxDebtRatio: 50,
-  minMarketCap: 200,
+  minScore: 40,
+  minRoe: 8,
+  maxDebtRatio: 70,
+  minMarketCap: 50,
   industries: [] as string[],
   limit: settings.defaultLimit,
 })
 
 function resetFilters() {
-  filters.minScore = 60
-  filters.minRoe = 15
-  filters.maxDebtRatio = 50
-  filters.minMarketCap = 200
+  filters.minScore = 40
+  filters.minRoe = 8
+  filters.maxDebtRatio = 70
+  filters.minMarketCap = 50
   filters.industries = []
   filters.limit = settings.defaultLimit
 }

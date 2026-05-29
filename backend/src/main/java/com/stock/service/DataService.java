@@ -205,6 +205,7 @@ public class DataService {
     public JSONObject adminCacheClear(String pattern) { return postObj("/api/admin/cache/clear" + qs("pattern", pattern), null); }
     public JSONObject adminWarmupStart(String job)    { return postObj("/api/admin/warmup" + qs("job", job), null); }
     public JSONObject getAdminWarmupStatus(String id) { return getObjNoCache("/api/admin/warmup/status" + qs("id", id)); }
+    public JSONObject getAdminSchedulerJobs()         { return getObjNoCache("/api/admin/scheduler/jobs"); }
 
     // =====================================================================
     // Helpers

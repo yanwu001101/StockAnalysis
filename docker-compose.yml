@@ -94,6 +94,17 @@ services:
       - backend
     restart: unless-stopped
 
+  admin-frontend:
+    build: ./admin-frontend
+    container_name: stock-admin
+    ports:
+      # bind to localhost only — expose via frp/SSH tunnel when needed,
+      # never directly to public internet
+      - "127.0.0.1:8081:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   mysql_data:
   redis_data:

@@ -63,14 +63,25 @@ public class UserService {
         if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
             throw new com.stock.exception.BusinessException(401, "用户名或密码错误");
         }
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            throw new com.stock.exception.BusinessException(403, "账号已被禁用");
+        }
 
-        String token = jwtConfig.generateToken(user.getId(), user.getUsername());
+        String role = user.getRole() == null ? "USER" : user.getRole();
+        String token = jwtConfig.generateToken(user.getId(), user.getUsername(), role);
+
+        user.setLastLoginAt(java.time.LocalDateTime.now());
+        userMapper.updateById(user);
+
         Map<String, Object> result = new HashMap<>();
         result.put("token", token);
         Map<String, Object> userInfo = new HashMap<>();
         userInfo.put("id", user.getId());
         userInfo.put("username", user.getUsername());
         userInfo.put("nickname", user.getNickname());
+        userInfo.put("role", role);
+        userInfo.put("mustChangePassword",
+            user.getMustChangePassword() != null && user.getMustChangePassword() == 1);
         result.put("user", userInfo);
         return result;
     }

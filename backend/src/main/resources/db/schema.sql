@@ -287,3 +287,54 @@ CREATE TABLE IF NOT EXISTS `stock_strategy_score` (
     KEY `idx_strat_score` (`strategy_id`, `score`),
     KEY `idx_computed` (`computed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------- Phase 4: 管理后台 ----------
+-- user 表追加管理字段(MySQL 8.0 支持 IF NOT EXISTS;迁移类会做幂等兜底)
+ALTER TABLE `user`
+    ADD COLUMN IF NOT EXISTS `role`   VARCHAR(20) NOT NULL DEFAULT 'USER' AFTER `avatar`,
+    ADD COLUMN IF NOT EXISTS `status` TINYINT     NOT NULL DEFAULT 1      AFTER `role`,
+    ADD COLUMN IF NOT EXISTS `last_login_at` DATETIME NULL AFTER `status`,
+    ADD COLUMN IF NOT EXISTS `must_change_password` TINYINT NOT NULL DEFAULT 0 AFTER `last_login_at`;
+
+-- 把首个用户升级为 ADMIN(仅当其当前是 USER)
+UPDATE `user`
+   SET `role` = 'ADMIN'
+ WHERE `id` = (SELECT id FROM (SELECT id FROM `user` ORDER BY id ASC LIMIT 1) AS t)
+   AND `role` = 'USER';
+
+-- 业务配置(KV 表)
+CREATE TABLE IF NOT EXISTS `app_config` (
+    `k` VARCHAR(64)  NOT NULL,
+    `v` TEXT         NOT NULL,
+    `description` VARCHAR(255) DEFAULT '',
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `updated_by` BIGINT,
+    PRIMARY KEY (`k`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 股票名单(白/黑/池)
+CREATE TABLE IF NOT EXISTS `stock_list` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `list_type` VARCHAR(20) NOT NULL,
+    `code` VARCHAR(10) NOT NULL,
+    `note` VARCHAR(255) DEFAULT '',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `created_by` BIGINT,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_type_code` (`list_type`, `code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 管理员操作审计日志
+CREATE TABLE IF NOT EXISTS `admin_audit_log` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `admin_id` BIGINT NOT NULL,
+    `admin_name` VARCHAR(50) NOT NULL,
+    `action` VARCHAR(64) NOT NULL,
+    `target` VARCHAR(255) DEFAULT '',
+    `payload_json` TEXT,
+    `ip` VARCHAR(64) DEFAULT '',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_admin_time` (`admin_id`, `created_at`),
+    INDEX `idx_action` (`action`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

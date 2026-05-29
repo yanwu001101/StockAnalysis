@@ -47,14 +47,21 @@ public class JwtConfig {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    public String generateToken(Long userId, String username) {
+    public String generateToken(Long userId, String username, String role) {
         return Jwts.builder()
                 .subject(username)
                 .claim("userId", userId)
+                .claim("role", role == null ? "USER" : role)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getKey())
                 .compact();
+    }
+
+    /** @deprecated use the 3-arg overload that includes role. */
+    @Deprecated
+    public String generateToken(Long userId, String username) {
+        return generateToken(userId, username, "USER");
     }
 
     public Claims parseToken(String token) {

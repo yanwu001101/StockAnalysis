@@ -22,6 +22,9 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
+        String path = request.getRequestURI();
+        String role = null;
+
         String token = request.getHeader("Authorization");
         if (token != null && token.startsWith("Bearer ")) {
             token = token.substring(7);
@@ -29,19 +32,36 @@ public class AuthInterceptor implements HandlerInterceptor {
                 Claims claims = jwtConfig.parseToken(token);
                 request.setAttribute("userId", claims.get("userId", Long.class));
                 request.setAttribute("username", claims.getSubject());
-                return true;
+                role = claims.get("role", String.class);
+                if (role == null) role = "USER";
+                request.setAttribute("role", role);
             }
         }
 
-        // For non-critical endpoints, allow without auth
-        String path = request.getRequestURI();
+        // /api/admin/** must be ADMIN — anonymous or non-admin gets 403/401
+        if (path.startsWith("/api/admin/")) {
+            if (role == null) {
+                response.setStatus(401);
+                return false;
+            }
+            if (!"ADMIN".equals(role)) {
+                response.setStatus(403);
+                return false;
+            }
+            return true;
+        }
+
+        if (role != null) return true;
+
+        // Public endpoints (no token required) — keep the C-side surface usable
+        // for anonymous market browsing, but admin is no longer in this list.
         if (path.startsWith("/api/user/login") || path.startsWith("/api/user/register") ||
             path.startsWith("/api/market") || path.startsWith("/api/stock") ||
             path.startsWith("/api/screen") || path.startsWith("/api/strategies") ||
             path.startsWith("/api/strategy-tops") ||
             path.startsWith("/api/backtest") || path.startsWith("/api/lhb") ||
             path.startsWith("/api/moneyflow") || path.startsWith("/api/condition-fields") ||
-            path.startsWith("/api/expression") || path.startsWith("/api/admin")) {
+            path.startsWith("/api/expression")) {
             return true;
         }
 

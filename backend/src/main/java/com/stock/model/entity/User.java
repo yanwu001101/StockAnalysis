@@ -13,6 +13,10 @@ public class User {
     private String password;
     private String nickname;
     private String avatar;
+    private String role;
+    private Integer status;
+    private LocalDateTime lastLoginAt;
+    private Integer mustChangePassword;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     @TableLogic

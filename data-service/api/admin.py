@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 import cache
 import db
+import scheduler as scheduler_mod
 
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
@@ -216,3 +217,22 @@ def warmup_status():
                        key=lambda x: x.get("started_at") or "",
                        reverse=True)[:20]
         return jsonify({"items": [dict(x) for x in items]})
+
+
+# ---------------------------------------------------------------------------
+# Scheduler — list registered APScheduler jobs (admin task center view)
+# ---------------------------------------------------------------------------
+
+@bp.route("/scheduler/jobs")
+def scheduler_jobs():
+    sched = getattr(scheduler_mod, "_sched", None)
+    if sched is None:
+        return jsonify({"jobs": [], "running": False})
+    jobs = []
+    for j in sched.get_jobs():
+        jobs.append({
+            "id": j.id,
+            "next_run_time": str(j.next_run_time) if j.next_run_time else None,
+            "trigger": str(j.trigger),
+        })
+    return jsonify({"jobs": jobs, "running": True, "valid_runs": list(_VALID_JOBS)})

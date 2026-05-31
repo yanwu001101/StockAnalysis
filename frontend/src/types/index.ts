@@ -134,6 +134,23 @@ export interface TradeRecord {
   pnl: number
 }
 
+// 保存的回测列表项(后端只回摘要列)
+export interface SavedBacktestSummary {
+  id: number
+  name: string
+  stockCode: string
+  strategyId: string
+  startDate: string
+  endDate: string
+  totalReturn: number
+  annualizedReturn: number
+  maxDrawdown: number
+  sharpeRatio: number
+  winRate: number
+  tradeCount: number
+  createdAt: string
+}
+
 // User
 export interface UserInfo {
   id: number

@@ -1,5 +1,5 @@
 import request from './request'
-import type { ScreenerRequest, BacktestRequest, BacktestResult, StrategyConfig } from '@/types'
+import type { ScreenerRequest, BacktestRequest, BacktestResult, StrategyConfig, SavedBacktestSummary } from '@/types'
 
 export function getStrategies(): Promise<StrategyConfig[]> {
   return request.get('/strategies')
@@ -19,6 +19,34 @@ export function runScreener(req: ScreenerRequest): Promise<any[]> {
 
 export function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
   return request.post('/backtest', req)
+}
+
+// ---- 保存的回测(账号云端,需登录) ----
+
+export function saveBacktest(payload: {
+  name: string
+  request: any
+  result: BacktestResult
+}): Promise<{ id: number }> {
+  return request.post('/user/backtests', payload)
+}
+
+export function listSavedBacktests(): Promise<SavedBacktestSummary[]> {
+  return request.get('/user/backtests')
+}
+
+export function getSavedBacktest(id: number): Promise<{
+  id: number
+  name: string
+  createdAt: string
+  result: BacktestResult
+  request: any
+}> {
+  return request.get(`/user/backtests/${id}`)
+}
+
+export function deleteSavedBacktest(id: number): Promise<any> {
+  return request.delete(`/user/backtests/${id}`)
 }
 
 export interface StrategyTopsRow {

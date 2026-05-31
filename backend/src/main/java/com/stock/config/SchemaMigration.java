@@ -32,6 +32,7 @@ public class SchemaMigration {
             createAppConfigTable();
             createStockListTable();
             createAdminAuditLogTable();
+            createBacktestRunTable();
             log.info("[migration] Phase4 admin schema applied");
         } catch (Exception e) {
             log.error("[migration] Phase4 admin schema failed: {}", e.getMessage(), e);
@@ -97,6 +98,33 @@ public class SchemaMigration {
             "PRIMARY KEY (`id`)," +
             "INDEX `idx_admin_time` (`admin_id`, `created_at`)," +
             "INDEX `idx_action` (`action`)" +
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
+
+    /** Per-user saved backtest runs (full snapshot). See BacktestHistoryController. */
+    private void createBacktestRunTable() {
+        jdbc.execute(
+            "CREATE TABLE IF NOT EXISTS `backtest_run` (" +
+            "`id` BIGINT NOT NULL AUTO_INCREMENT," +
+            "`user_id` BIGINT NOT NULL," +
+            "`name` VARCHAR(100) NOT NULL DEFAULT ''," +
+            "`stock_code` VARCHAR(10) DEFAULT ''," +          // 空 = 组合回测
+            "`strategy_id` VARCHAR(64) NOT NULL," +
+            "`start_date` VARCHAR(10)," +
+            "`end_date` VARCHAR(10)," +
+            "`initial_capital` DOUBLE," +
+            "`top_n` INT," +
+            "`total_return` DOUBLE," +
+            "`annualized_return` DOUBLE," +
+            "`max_drawdown` DOUBLE," +
+            "`sharpe_ratio` DOUBLE," +
+            "`win_rate` DOUBLE," +
+            "`trade_count` INT," +
+            "`request_json` LONGTEXT," +                      // 原始请求(便于以后重跑)
+            "`result_json` LONGTEXT," +                       // 扁平后的完整结果
+            "`created_at` DATETIME DEFAULT CURRENT_TIMESTAMP," +
+            "PRIMARY KEY (`id`)," +
+            "INDEX `idx_user_time` (`user_id`, `created_at`)" +
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     }
 

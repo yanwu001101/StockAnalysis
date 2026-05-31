@@ -6,6 +6,7 @@
     </div>
 
     <div class="config-grid">
+      <div class="config-col">
       <div class="glass-card config-card">
         <h3>回测参数</h3>
         <el-form label-position="top" size="small">
@@ -37,9 +38,33 @@
         </el-form>
       </div>
 
+      <div class="glass-card saved-card" v-if="userStore.isLoggedIn && savedList.length">
+        <h3>已保存回测 <span class="saved-count">{{ savedList.length }}</span></h3>
+        <div class="saved-list">
+          <div v-for="item in savedList" :key="item.id" class="saved-item">
+            <div class="saved-main" @click="loadSaved(item)">
+              <div class="saved-name" :title="item.name">{{ item.name }}</div>
+              <div class="saved-meta">
+                <span :class="item.totalReturn >= 0 ? 'price-up' : 'price-down'">
+                  {{ item.totalReturn >= 0 ? '+' : '' }}{{ (item.totalReturn * 100).toFixed(1) }}%
+                </span>
+                <span class="saved-date">{{ fmtDate(item.createdAt) }}</span>
+              </div>
+            </div>
+            <el-icon class="saved-del" @click.stop="removeSaved(item)"><Delete /></el-icon>
+          </div>
+        </div>
+      </div>
+      </div>
+
       <div class="result-area" v-if="result">
         <div class="glass-card metrics-card">
-          <h3>回测结果</h3>
+          <div class="card-head">
+            <h3>回测结果</h3>
+            <el-button size="small" type="success" plain @click="saveCurrent">
+              <el-icon><Star /></el-icon>&nbsp;保存
+            </el-button>
+          </div>
           <div class="metrics-grid">
             <div class="metric-item">
               <span class="metric-label">总收益率</span>
@@ -140,20 +165,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
-import { runBacktest } from '@/api/strategy'
+import { ref, reactive, computed, nextTick, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { runBacktest, saveBacktest, listSavedBacktests, getSavedBacktest, deleteSavedBacktest } from '@/api/strategy'
 import { useStrategyStore } from '@/stores/strategy'
+import { useUserStore } from '@/stores/user'
 import { useRefreshable } from '@/composables/useRefreshable'
 import { formatNumber } from '@/utils/format'
 import * as echarts from 'echarts'
-import type { BacktestResult } from '@/types'
+import type { BacktestResult, SavedBacktestSummary } from '@/types'
 
 const strategyStore = useStrategyStore()
+const userStore = useUserStore()
 const loading = ref(false)
 const result = ref<BacktestResult | null>(null)
 const curveChartRef = ref<HTMLElement>()
 const tradeSideFilter = ref<'all' | 'buy' | 'sell'>('all')
+const lastRequest = ref<any>(null)              // 最近一次发给 /backtest 的请求体,保存时一并落库
+const savedList = ref<SavedBacktestSummary[]>([])
 
 const filteredTrades = computed(() => {
   const all = ((result.value as any)?.trades ?? []) as any[]
@@ -186,6 +215,7 @@ async function runTest() {
       body.strategyConfig = strategyStore.getConfigMap()
     }
     result.value = await runBacktest(body)
+    lastRequest.value = body
     ElMessage.success(config.stockCode ? `${config.stockCode} 择时回测完成` : '组合回测完成')
     nextTick(renderCurve)
   } catch {
@@ -243,6 +273,83 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+// ---- 保存 / 历史 ----
+
+function defaultName(): string {
+  const stratName = strategyStore.strategies.find(s => s.id === config.strategyId)?.name || config.strategyId
+  const prefix = config.stockCode ? `${config.stockCode} ` : ''
+  return `${prefix}${stratName} ${config.startDate}~${config.endDate}`
+}
+
+async function saveCurrent() {
+  const snapshot = result.value
+  if (!snapshot) return
+  if (!userStore.isLoggedIn) {
+    ElMessage.warning('请先登录后再保存回测')
+    return
+  }
+  try {
+    const { value } = await ElMessageBox.prompt('给这次回测起个名字', '保存回测', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: defaultName(),
+      inputValidator: (v: string) => (!!v && v.trim().length > 0) || '名字不能为空',
+    })
+    await saveBacktest({ name: value.trim(), request: lastRequest.value, result: snapshot })
+    ElMessage.success('已保存')
+    await refreshSaved()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error('保存失败')
+  }
+}
+
+async function refreshSaved() {
+  if (!userStore.isLoggedIn) { savedList.value = []; return }
+  try {
+    savedList.value = await listSavedBacktests()
+  } catch { /* 静默,不打扰回测主流程 */ }
+}
+
+async function loadSaved(item: SavedBacktestSummary) {
+  try {
+    const detail = await getSavedBacktest(item.id)
+    result.value = detail.result
+    // 回填配置标量,方便对照;故意不动全局策略权重 store(避免覆盖用户当前调参)
+    const req = detail.request || {}
+    config.stockCode = req.stockCode || item.stockCode || ''
+    config.strategyId = req.strategyId || item.strategyId || config.strategyId
+    config.startDate = item.startDate || config.startDate
+    config.endDate = item.endDate || config.endDate
+    if (req.initialCapital) config.initialCapital = req.initialCapital / 10000
+    if (req.topN) config.topN = req.topN
+    tradeSideFilter.value = 'all'
+    ElMessage.success(`已载入「${item.name}」`)
+    nextTick(renderCurve)
+  } catch {
+    ElMessage.error('载入失败')
+  }
+}
+
+async function removeSaved(item: SavedBacktestSummary) {
+  try {
+    await ElMessageBox.confirm(`删除「${item.name}」?`, '删除回测', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
+    })
+    await deleteSavedBacktest(item.id)
+    ElMessage.success('已删除')
+    await refreshSaved()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error('删除失败')
+  }
+}
+
+function fmtDate(s: string): string {
+  if (!s) return ''
+  return s.replace('T', ' ').slice(5, 16)   // MM-DD HH:mm
+}
+
+onMounted(refreshSaved)
+
 useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
 </script>
 
@@ -296,5 +403,29 @@ useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
   font-weight: 700;
 }
 .pick-code { font-variant-numeric: tabular-nums; }
+
+.config-col { display: flex; flex-direction: column; gap: 16px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.card-head h3 { margin: 0; }
+.saved-card { padding: 20px; }
+.saved-card h3 { margin: 0 0 12px; font-size: 15px; color: var(--text); }
+.saved-count { margin-left: 6px; font-size: 12px; color: var(--text-3); font-weight: 400; }
+.saved-list { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
+.saved-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: var(--radius, 8px);
+  background: var(--surface-hover);
+  transition: background 0.15s;
+}
+.saved-item:hover { background: var(--brand-soft); }
+.saved-main { flex: 1; min-width: 0; cursor: pointer; }
+.saved-name {
+  font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.saved-meta { display: flex; gap: 10px; align-items: center; margin-top: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.saved-date { color: var(--text-3); }
+.saved-del { color: var(--text-3); cursor: pointer; flex-shrink: 0; padding: 4px; }
+.saved-del:hover { color: var(--down); }
 @media (max-width: 1000px) { .config-grid { grid-template-columns: 1fr; } }
 </style>

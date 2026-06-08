@@ -32,7 +32,8 @@ HEADERS_EM = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://quote.eastm
 HEADERS_TX = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://gu.qq.com/"}
 HEADERS_SINA = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://finance.sina.com.cn/"}
 
-SPOT_URL = "http://push2delay.eastmoney.com/api/qt/clist/get"
+SPOT_URL_REALTIME = "http://push2.eastmoney.com/api/qt/clist/get"
+SPOT_URL_DELAYED = "http://push2delay.eastmoney.com/api/qt/clist/get"
 TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 SINA_KLINE_URL = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
 
@@ -40,6 +41,15 @@ SPOT_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
 SPOT_FIELDS = "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f10,f15,f16,f17,f18,f20,f21,f23,f100"
 
 KLT_MAP = {101: "day", 102: "week", 103: "month"}
+
+
+def _spot_urls() -> list[str]:
+    mode = os.getenv("EM_SPOT_MODE", "auto").strip().lower()
+    if mode in ("realtime", "real", "live", "push2"):
+        return [SPOT_URL_REALTIME]
+    if mode in ("delay", "delayed", "push2delay"):
+        return [SPOT_URL_DELAYED]
+    return [SPOT_URL_REALTIME, SPOT_URL_DELAYED]
 
 
 def secid(code: str) -> str:
@@ -62,7 +72,7 @@ def _jitter_sleep() -> float:
 # Spot snapshot via push2delay
 # ---------------------------------------------------------------------------
 
-async def _fetch_spot_page(session, page: int, page_size: int) -> list:
+async def _fetch_spot_page(session, url: str, page: int, page_size: int) -> list:
     params = {
         "pn": page, "pz": page_size, "po": 1, "np": 1,
         "ut": "bd1d9ddb04089700cf9c27f6f7426281",
@@ -70,7 +80,7 @@ async def _fetch_spot_page(session, page: int, page_size: int) -> list:
         "fs": SPOT_FS, "fields": SPOT_FIELDS,
         "_": str(int(random.random() * 1e13)),
     }
-    async with session.get(SPOT_URL, params=params, headers=HEADERS_EM,
+    async with session.get(url, params=params, headers=HEADERS_EM,
                            timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
         text = await r.text()
         try:
@@ -85,21 +95,25 @@ async def _fetch_all_spot_async() -> pd.DataFrame:
     page_size = 200
     rows = []
     async with aiohttp.ClientSession() as s:
-        first = await _fetch_spot_page(s, 1, page_size)
-        rows.extend(first)
-        if not first:
-            return pd.DataFrame()
-        page = 2
-        empty_streak = 0
-        while page <= 60 and empty_streak < 2:
-            await asyncio.sleep(_jitter_sleep())
-            chunk = await _fetch_spot_page(s, page, page_size)
-            if not chunk:
-                empty_streak += 1
-            else:
-                rows.extend(chunk)
-                empty_streak = 0
-            page += 1
+        for url in _spot_urls():
+            rows.clear()
+            first = await _fetch_spot_page(s, url, 1, page_size)
+            rows.extend(first)
+            if not first:
+                continue
+            page = 2
+            empty_streak = 0
+            while page <= 60 and empty_streak < 2:
+                await asyncio.sleep(_jitter_sleep())
+                chunk = await _fetch_spot_page(s, url, page, page_size)
+                if not chunk:
+                    empty_streak += 1
+                else:
+                    rows.extend(chunk)
+                    empty_streak = 0
+                page += 1
+            if rows:
+                break
     if not rows:
         return pd.DataFrame()
 
@@ -129,6 +143,74 @@ def fetch_all_spot() -> pd.DataFrame:
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             return ex.submit(lambda: asyncio.run(_fetch_all_spot_async())).result()
+
+
+# ---------------------------------------------------------------------------
+# Single-stock quote (per-code fallback when the bulk spot snapshot is empty)
+# ---------------------------------------------------------------------------
+
+def _num(v):
+    """eastmoney returns "-" for halted/unknown fields; coerce to float or None."""
+    if v in (None, "-", ""):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _fetch_single_quote_async(code: str) -> pd.DataFrame:
+    code = str(code).zfill(6)
+    params = {
+        "secid": secid(code),
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": 2, "invt": 2,
+        "fields": "f43,f57,f58,f116,f127,f169,f170",
+        "_": str(int(random.random() * 1e13)),
+    }
+    # Reuse the spot host preference (push2 / push2delay) — same /api/qt service.
+    urls = [u.replace("/clist/get", "/stock/get") for u in _spot_urls()]
+    async with aiohttp.ClientSession() as s:
+        for url in urls:
+            try:
+                async with s.get(url, params=params, headers=HEADERS_EM,
+                                 timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
+                    text = await r.text()
+                data = json.loads(text)
+            except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict) or data.get("rc") not in (0, None):
+                continue
+            d = data.get("data")
+            if not isinstance(d, dict):
+                continue
+            price = _num(d.get("f43"))
+            if price is None:               # halted / not a tradable quote → caller stays "not found"
+                continue
+            mc = _num(d.get("f116"))
+            row = {
+                "代码": str(d.get("f57") or code).zfill(6),
+                "名称": str(d.get("f58") or ""),
+                "行业": str(d.get("f127") or ""),
+                "最新价": price,
+                "涨跌幅": _num(d.get("f170")),
+                "总市值_亿": (mc / 100_000_000) if mc is not None else None,
+            }
+            return pd.DataFrame([row])
+    return pd.DataFrame()
+
+
+def fetch_single_quote(code: str) -> pd.DataFrame:
+    """One-row spot quote for a single code, Chinese columns matching fetch_all_spot.
+    Returns an empty DataFrame when the quote can't be obtained (caller keeps its
+    'Stock not found' semantics). Used by /api/stock/<code> when the bulk snapshot
+    is cold or the upstream batch source is unavailable."""
+    try:
+        return asyncio.run(_fetch_single_quote_async(code))
+    except RuntimeError:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(lambda: asyncio.run(_fetch_single_quote_async(code))).result()
 
 
 # ---------------------------------------------------------------------------

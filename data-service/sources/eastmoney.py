@@ -14,6 +14,7 @@ rate-limited.
 from __future__ import annotations
 import asyncio
 import datetime as dt
+import os
 import random
 from typing import Iterable
 
@@ -24,12 +25,22 @@ from core.trace import logger
 from sources.base import AbstractSource
 
 
-SPOT_URL = "http://push2delay.eastmoney.com/api/qt/clist/get"
+SPOT_URL_REALTIME = "http://push2.eastmoney.com/api/qt/clist/get"
+SPOT_URL_DELAYED = "http://push2delay.eastmoney.com/api/qt/clist/get"
 DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 FFLOW_URL = "http://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
 
 SPOT_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
 SPOT_FIELDS = "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f10,f15,f16,f17,f18,f20,f21,f23,f100"
+
+
+def _spot_urls() -> list[str]:
+    mode = os.getenv("EM_SPOT_MODE", "auto").strip().lower()
+    if mode in ("realtime", "real", "live", "push2"):
+        return [SPOT_URL_REALTIME]
+    if mode in ("delay", "delayed", "push2delay"):
+        return [SPOT_URL_DELAYED]
+    return [SPOT_URL_REALTIME, SPOT_URL_DELAYED]
 
 
 def _secid(code: str) -> str:
@@ -43,26 +54,30 @@ class EastmoneySource(AbstractSource):
     # ---------- spot ----------
     async def fetch_spot(self) -> pd.DataFrame:
         rows: list = []
-        page = 1
-        empty = 0
-        while page <= 60 and empty < 2:
-            params = {
-                "pn": page, "pz": 200, "po": 1, "np": 1,
-                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-                "fltt": 2, "invt": 2, "fid": "f3",
-                "fs": SPOT_FS, "fields": SPOT_FIELDS,
-                "_": str(int(random.random() * 1e13)),
-            }
-            obj = await http_client.get_json(SPOT_URL, params=params, source=self.name)
-            diff = ((obj or {}).get("data") or {}).get("diff") or []
-            if isinstance(diff, dict):
-                diff = list(diff.values())
-            if not diff:
-                empty += 1
-            else:
-                rows.extend(diff)
-                empty = 0
-            page += 1
+        for url in _spot_urls():
+            rows.clear()
+            page = 1
+            empty = 0
+            while page <= 60 and empty < 2:
+                params = {
+                    "pn": page, "pz": 200, "po": 1, "np": 1,
+                    "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                    "fltt": 2, "invt": 2, "fid": "f3",
+                    "fs": SPOT_FS, "fields": SPOT_FIELDS,
+                    "_": str(int(random.random() * 1e13)),
+                }
+                obj = await http_client.get_json(url, params=params, source=self.name)
+                diff = ((obj or {}).get("data") or {}).get("diff") or []
+                if isinstance(diff, dict):
+                    diff = list(diff.values())
+                if not diff:
+                    empty += 1
+                else:
+                    rows.extend(diff)
+                    empty = 0
+                page += 1
+            if rows:
+                break
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows).rename(columns={

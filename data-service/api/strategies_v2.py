@@ -15,6 +15,7 @@ import threading
 import time
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from flask import Blueprint, jsonify, request
 from sqlalchemy import text
@@ -219,8 +220,8 @@ def _score_all(ctx: StrategyContext, weights: Optional[dict] = None,
                 weight_sum += w
             entry = {
                 "id": cls.id, "name": cls.name,
-                "score": round(res.score, 2), "signal": res.signal,
-                "weight": w, "triggered": res.triggered, "details": res.details,
+                "score": round(float(res.score), 2), "signal": str(res.signal),
+                "weight": float(w), "triggered": bool(res.triggered), "details": _json_safe(res.details),
                 "no_data": has_no_data,
             }
             out_list.append(entry)
@@ -236,6 +237,25 @@ def _score_all(ctx: StrategyContext, weights: Optional[dict] = None,
     # composite is averaging more dimensions now so the extreme tails are rarer.
     signal = "bullish" if composite >= 55 else "bearish" if composite <= 30 else "neutral"
     return round(composite, 2), signal, out_dict, out_list
+
+
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        v = float(value)
+        return None if pd.isna(v) else v
+    if pd.isna(value) if not isinstance(value, (str, bytes, bool, int, float, type(None))) else False:
+        return None
+    return value
 
 
 def _parse_weights(body: dict) -> Optional[dict[str, float]]:
@@ -271,11 +291,14 @@ def _parse_weights(body: dict) -> Optional[dict[str, float]]:
     return out
 
 
-@bp.route("/stock/<code>/score")
+@bp.route("/stock/<code>/score", methods=["GET", "POST"])
 def stock_score(code: str):
     ctx = _load_ctx(code)
-    weights = _parse_weights(request.args)
-    composite, signal, out_dict, out_list = _score_all(ctx, weights)
+    body = request.get_json(silent=True) or {}
+    source = body if request.method == "POST" else request.args
+    weights = _parse_weights(source)
+    strategy_params = body.get("strategyParams") or body.get("strategy_params") or {} if request.method == "POST" else {}
+    composite, signal, out_dict, out_list = _score_all(ctx, weights, strategy_params)
 
     # Aggregate stats for the front-end "看多 N/M 触发 K" indicator.
     effective = [it for it in out_list if not it.get("no_data") and not (it.get("details") or {}).get("disabled")]

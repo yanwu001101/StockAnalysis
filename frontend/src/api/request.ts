@@ -42,7 +42,8 @@ request.interceptors.response.use(
       localStorage.removeItem('token')
       window.location.href = '/login'
     } else {
-      ElMessage.error(error.message || '网络错误')
+      const message = error.response?.data?.message || error.response?.data?.msg || error.message || '网络错误'
+      ElMessage.error(message)
     }
     return Promise.reject(error)
   }

@@ -49,6 +49,7 @@ services:
       - EM_CONCURRENCY=8
       - EM_JITTER_MIN_MS=50
       - EM_JITTER_MAX_MS=200
+      - EM_SPOT_MODE=auto
       - WARMUP_ON_START=true
     depends_on:
       mysql:

@@ -56,11 +56,18 @@ def test_strategy_runs(strategy_cls):
     assert res.signal in ("bullish", "bearish", "neutral")
 
 
-def test_registry_has_ten():
-    assert len(REGISTRY) == 10
+def test_registry_size_matches_current_suite():
+    assert len(REGISTRY) == 29
 
 
 def test_by_id():
     assert by_id("piotroski_f") is not None
     assert by_id("magic_formula") is not None
+    assert by_id("ashare_short_reversal") is not None
+    assert by_id("conservative_formula") is not None
+    assert by_id("fund_price_divergence") is not None
+    assert by_id("rsrs_timing") is not None
+    assert by_id("trend_pullback_stop") is not None
+    assert by_id("daily_momentum_reversal_t") is not None
+    assert by_id("growth_trend_accelerator") is not None
     assert by_id("nonexistent") is None

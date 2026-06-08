@@ -468,10 +468,15 @@ def top_stocks():
 def stock_detail(code):
     try:
         code = normalize_code(code)
-        spot = fetch_spot()
-        financial = fetch_financial()
-        row = spot[spot["代码"] == code]
-        fin = financial[financial["代码"] == code]
+        # Quote source priority, all non-blocking:
+        #  1) warm bulk spot snapshot (populated by scheduler/warmup) — never trigger
+        #     the heavy 5000-row fetch inside a per-stock request;
+        #  2) eastmoney single-stock quote — reliable per-code fallback when the
+        #     snapshot is cold or the bulk source is rate-limited / down.
+        spot = cache.get("spot")
+        row = (spot[spot["代码"] == code]
+               if spot is not None and "代码" in getattr(spot, "columns", [])
+               else pd.DataFrame())
 
         if row.empty:
             try:
@@ -508,6 +513,12 @@ def stock_detail(code):
             "marketCap": safe_round(r.get("总市值_亿"), 0) or 0,
         }
 
+        # Best-effort fundamentals enrichment — warm cache only, never block the
+        # quote on a slow / failing financial fetch.
+        fin = pd.DataFrame()
+        financial = cache.get("financial")
+        if financial is not None and "代码" in getattr(financial, "columns", []):
+            fin = financial[financial["代码"] == code]
         if not fin.empty:
             f = fin.iloc[0]
             result.update({

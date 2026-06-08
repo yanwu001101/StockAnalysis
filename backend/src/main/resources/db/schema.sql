@@ -338,3 +338,55 @@ CREATE TABLE IF NOT EXISTS `admin_audit_log` (
     INDEX `idx_admin_time` (`admin_id`, `created_at`),
     INDEX `idx_action` (`action`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- User portfolio positions for manual/imported holdings and advice.
+CREATE TABLE IF NOT EXISTS `portfolio_position` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT NOT NULL,
+    `code` VARCHAR(10) NOT NULL,
+    `name` VARCHAR(50) NOT NULL DEFAULT '',
+    `shares` DECIMAL(18,2) NOT NULL DEFAULT 0,
+    `available_shares` DECIMAL(18,2) NOT NULL DEFAULT 0,
+    `avg_cost` DECIMAL(12,4) NOT NULL DEFAULT 0,
+    `target_weight` DECIMAL(8,2) NOT NULL DEFAULT 20,
+    `source` VARCHAR(20) NOT NULL DEFAULT 'manual',
+    `notes` VARCHAR(255) NOT NULL DEFAULT '',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `deleted` TINYINT DEFAULT 0,
+    PRIMARY KEY (`id`),
+    INDEX `idx_portfolio_code` (`user_id`, `code`),
+    INDEX `idx_portfolio_user` (`user_id`, `updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Per-user AI provider config. api_key_cipher stores encrypted key only.
+CREATE TABLE IF NOT EXISTS `user_ai_config` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT NOT NULL,
+    `provider` VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
+    `base_url` VARCHAR(255) NOT NULL DEFAULT '',
+    `model` VARCHAR(80) NOT NULL DEFAULT '',
+    `api_key_cipher` TEXT,
+    `api_key_mask` VARCHAR(40) NOT NULL DEFAULT '',
+    `temperature` DECIMAL(4,2) NOT NULL DEFAULT 0.20,
+    `enabled` TINYINT NOT NULL DEFAULT 0,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_ai_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- AI analysis history + feedback, used as lightweight user preference memory.
+CREATE TABLE IF NOT EXISTS `ai_analysis_run` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT NOT NULL,
+    `scope` VARCHAR(40) NOT NULL DEFAULT 'portfolio',
+    `request_json` LONGTEXT,
+    `result_text` LONGTEXT,
+    `model` VARCHAR(80) NOT NULL DEFAULT '',
+    `feedback` VARCHAR(20) NOT NULL DEFAULT '',
+    `feedback_note` VARCHAR(500) NOT NULL DEFAULT '',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_ai_user_time` (`user_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -23,6 +23,7 @@ import cache
 import eastmoney
 import kline_repo
 import db
+from pipelines import spot as spot_pipe
 from pipelines import lhb as lhb_pipe
 from pipelines import moneyflow as mf_pipe
 from pipelines import northbound as nb_pipe
@@ -47,10 +48,18 @@ def refresh_spot_cache():
     # Force-refresh the in-memory/Redis spot cache by deleting then re-fetching.
     try:
         cache.delete("spot")
+        cache.delete("spot_v2")
         df = eastmoney.fetch_all_spot()
         if df is not None and not df.empty:
-            cache.set("spot", df, 300)
+            cache.set("spot", df, 60)
             log.info("[scheduler] spot cache refreshed: %d rows", len(df))
+        try:
+            import asyncio
+            v2 = asyncio.run(spot_pipe.run())
+            if v2 is not None and not v2.empty:
+                log.info("[scheduler] spot_v2 cache refreshed: %d rows", len(v2))
+        except Exception as e:
+            log.warning("[scheduler] refresh spot_v2 failed: %s", e)
     except Exception as e:
         log.warning("[scheduler] refresh_spot_cache failed: %s", e)
 
@@ -186,7 +195,7 @@ def start():
         # Spot refresh during trading hours
         sched.add_job(
             refresh_spot_cache,
-            CronTrigger(hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
+            CronTrigger(hour="9-15", minute="*/1", timezone="Asia/Shanghai"),
             id="spot_refresh",
             replace_existing=True,
             max_instances=1,

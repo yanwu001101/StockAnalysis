@@ -1,4 +1,4 @@
-"""Strategy registry — single source of truth for the 10 strategies.
+"""Strategy registry — single source of truth for the strategy suite.
 
 The screener, individual-stock evaluator, and backtest engine all iterate this
 list. Adding a strategy means: write a `BaseStrategy` subclass, then register
@@ -43,6 +43,13 @@ from strategies.asset_growth import AssetGrowth
 from strategies.chip_concentration import ChipConcentration
 from strategies.ma_stack_breakout import MAStack
 from strategies.multi_horizon_momentum import MultiHorizonMomentum
+from strategies.ashare_short_reversal import AShareShortReversal
+from strategies.conservative_formula import ConservativeFormula
+from strategies.fund_price_divergence import FundPriceDivergence
+from strategies.rsrs_timing import RsrsTiming
+from strategies.trend_pullback_stop import TrendPullbackStop
+from strategies.daily_momentum_reversal_t import DailyMomentumReversalT
+from strategies.growth_trend_accelerator import GrowthTrendAccelerator
 
 
 REGISTRY: list[type[AbstractStrategy]] = [
@@ -68,6 +75,13 @@ REGISTRY: list[type[AbstractStrategy]] = [
     ChipConcentration,
     MAStack,
     MultiHorizonMomentum,
+    AShareShortReversal,
+    ConservativeFormula,
+    FundPriceDivergence,
+    RsrsTiming,
+    TrendPullbackStop,
+    DailyMomentumReversalT,
+    GrowthTrendAccelerator,
 ]
 
 
@@ -185,6 +199,42 @@ STRATEGY_PARAM_SPECS: dict[str, list[dict]] = {
         {"name": "long_days", "label": "长期窗口 (日)", "default": 63, "min": 30, "max": 90, "step": 5},
         {"name": "skip_days", "label": "12-1 跳过近期 (日)", "default": 21, "min": 10, "max": 30, "step": 5},
         {"name": "consistency_min", "label": "一致性最低数", "default": 3, "min": 2, "max": 4, "step": 1, "desc": "几个时间窗口同向才加分"},
+    ],
+    "ashare_short_reversal": [
+        {"name": "window_days", "label": "反转观察日", "default": 10, "min": 5, "max": 20, "step": 1},
+        {"name": "oversold_return", "label": "超跌收益线", "default": -0.08, "min": -0.20, "max": -0.03, "step": 0.01},
+        {"name": "overheat_return", "label": "过热收益线", "default": 0.15, "min": 0.08, "max": 0.30, "step": 0.01},
+    ],
+    "conservative_formula": [
+        {"name": "vol_days", "label": "低波动观察日", "default": 60, "min": 30, "max": 120, "step": 5},
+        {"name": "momentum_days", "label": "趋势观察日", "default": 63, "min": 30, "max": 120, "step": 5},
+        {"name": "max_debt_ratio", "label": "最大负债率", "default": 65, "min": 35, "max": 90, "step": 5},
+    ],
+    "fund_price_divergence": [
+        {"name": "window_days", "label": "资金窗口", "default": 5, "min": 3, "max": 20, "step": 1},
+        {"name": "strong_inflow", "label": "强流入线", "default": 50000000, "min": 10000000, "max": 200000000, "step": 10000000},
+        {"name": "strong_outflow", "label": "强流出线", "default": -50000000, "min": -200000000, "max": -10000000, "step": 10000000},
+    ],
+    "rsrs_timing": [
+        {"name": "window_days", "label": "回归窗口", "default": 18, "min": 12, "max": 30, "step": 1},
+        {"name": "zscore_days", "label": "标准化窗口", "default": 110, "min": 60, "max": 180, "step": 10},
+        {"name": "bullish_z", "label": "突破确认线", "default": 0.7, "min": 0.3, "max": 1.5, "step": 0.1},
+        {"name": "bearish_z", "label": "支撑转弱线", "default": -0.7, "min": -1.5, "max": -0.3, "step": 0.1},
+    ],
+    "trend_pullback_stop": [
+        {"name": "fast_ma", "label": "短均线", "default": 20, "min": 10, "max": 30, "step": 5},
+        {"name": "slow_ma", "label": "趋势均线", "default": 60, "min": 40, "max": 120, "step": 10},
+        {"name": "trail_mult", "label": "ATR 止盈倍数", "default": 2.6, "min": 1.5, "max": 4.0, "step": 0.1},
+    ],
+    "daily_momentum_reversal_t": [
+        {"name": "momentum_1d", "label": "日频动量线", "default": 0.018, "min": 0.005, "max": 0.05, "step": 0.001},
+        {"name": "hot_3d", "label": "3日过热线", "default": 0.075, "min": 0.04, "max": 0.15, "step": 0.005},
+        {"name": "hot_5d", "label": "5日过热线", "default": 0.12, "min": 0.06, "max": 0.25, "step": 0.01},
+    ],
+    "growth_trend_accelerator": [
+        {"name": "min_profit_yoy", "label": "净利增速线", "default": 20, "min": 5, "max": 80, "step": 5},
+        {"name": "min_revenue_yoy", "label": "营收增速线", "default": 10, "min": 0, "max": 50, "step": 5},
+        {"name": "momentum_days", "label": "趋势观察日", "default": 63, "min": 30, "max": 120, "step": 5},
     ],
 }
 

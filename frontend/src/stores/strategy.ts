@@ -25,6 +25,13 @@ const DEFAULT_STRATEGIES: StrategyConfig[] = [
   { id: 'chip_concentration', name: '筹码集中度', nameEn: 'Chip Conc', description: 'VWAP 带宽 + 价格在成本上方', enabled: true, weight: 5, icon: 'Discount', color: '#A855F7' },
   { id: 'ma_stack_breakout', name: '均线粘合突破', nameEn: 'MA Stack', description: '5/10/20/30/60 粘合后向上突破,主升浪', enabled: true, weight: 6, icon: 'Histogram', color: '#F43F5E' },
   { id: 'multi_horizon_momentum', name: '多维度动量', nameEn: 'MultiMom', description: '5/21/63/252-21 多窗口 + Sharpe + 一致性', enabled: true, weight: 10, icon: 'Promotion', color: '#0891B2' },
+  { id: 'ashare_short_reversal', name: 'A股短期反转', nameEn: 'A Reversal', description: '10 日超跌 + 质量锚定，规避追高过热', enabled: true, weight: 7, icon: 'RefreshLeft', color: '#14B8A6' },
+  { id: 'conservative_formula', name: '保守公式', nameEn: 'Conservative', description: '低波动 + 质量 + 正趋势，偏稳健持仓', enabled: true, weight: 8, icon: 'Lock', color: '#64748B' },
+  { id: 'fund_price_divergence', name: '资金价量背离', nameEn: 'Flow Divergence', description: '主力资金与价格背离，识别吸筹/派发', enabled: true, weight: 7, icon: 'Switch', color: '#0EA5E9' },
+  { id: 'rsrs_timing', name: 'RSRS支撑阻力强度', nameEn: 'RSRS', description: '高低价回归强度，判断突破质量和支撑转弱', enabled: true, weight: 6, icon: 'Connection', color: '#2563EB' },
+  { id: 'trend_pullback_stop', name: '趋势回撤止盈', nameEn: 'Trail Stop', description: '趋势内回撤低吸 + ATR 移动止盈/破位减仓', enabled: true, weight: 7, icon: 'SetUp', color: '#DC2626' },
+  { id: 'daily_momentum_reversal_t', name: '日频动量反转T', nameEn: 'Daily T', description: '捕捉1-2日动量，过热后提示高抛/别追', enabled: true, weight: 8, icon: 'Lightning', color: '#F97316' },
+  { id: 'growth_trend_accelerator', name: '成长趋势加速', nameEn: 'Growth Trend', description: '业绩加速 + 趋势确认，偏收益进攻', enabled: true, weight: 9, icon: 'Rocket', color: '#22C55E' },
 ]
 
 export const useStrategyStore = defineStore('strategy', () => {

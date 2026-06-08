@@ -64,23 +64,23 @@ public class DataService {
     // Market
     // =====================================================================
 
-    public JSONObject getMarketSummary()            { return cached("market:summary", "/api/market/summary", 300); }
-    public JSONArray  getTopStocks(int limit)       { return cachedArr("market:top:" + limit, "/api/market/top-stocks?limit=" + limit, 300); }
-    public JSONArray  getSectorRotation()           { return cachedArr("market:sectors", "/api/market/sector-rotation", 600); }
-    public JSONArray  getNorthboundFlow(int days)   { return cachedArr("market:northbound:" + days, "/api/market/northbound-flow?days=" + days, 300); }
+    public JSONObject getMarketSummary()            { return cached("market:summary", "/api/market/summary", 60); }
+    public JSONArray  getTopStocks(int limit)       { return cachedArr("market:top:" + limit, "/api/market/top-stocks?limit=" + limit, 60); }
+    public JSONArray  getSectorRotation()           { return cachedArr("market:sectors", "/api/market/sector-rotation", 60); }
+    public JSONArray  getNorthboundFlow(int days)   { return cachedArr("market:northbound:" + days, "/api/market/northbound-flow?days=" + days, 120); }
     public JSONArray  getIndices()                  { return cachedArr("market:indices", "/api/market/indices", 60); }
-    public JSONArray  getGainers(int limit)         { return cachedArr("market:gainers:" + limit, "/api/market/gainers?limit=" + limit, 120); }
-    public JSONArray  getLosers(int limit)          { return cachedArr("market:losers:" + limit, "/api/market/losers?limit=" + limit, 120); }
-    public JSONArray  getMostActive(int limit)      { return cachedArr("market:most-active:" + limit, "/api/market/most-active?limit=" + limit, 120); }
+    public JSONArray  getGainers(int limit)         { return cachedArr("market:gainers:" + limit, "/api/market/gainers?limit=" + limit, 30); }
+    public JSONArray  getLosers(int limit)          { return cachedArr("market:losers:" + limit, "/api/market/losers?limit=" + limit, 30); }
+    public JSONArray  getMostActive(int limit)      { return cachedArr("market:most-active:" + limit, "/api/market/most-active?limit=" + limit, 30); }
 
     // =====================================================================
     // Stock detail
     // =====================================================================
 
-    public JSONObject getStockDetail(String code)       { return cached("stock:" + code, "/api/stock/" + code, 600); }
+    public JSONObject getStockDetail(String code)       { return cached("stock:" + code, "/api/stock/" + code, 60); }
     public JSONObject getStockF10(String code)          { return cached("f10:" + code, "/api/stock/" + code + "/f10", 1800); }
-    public JSONObject getStockPrediction(String code)   { return cached("prediction:" + code, "/api/v2/stock/" + code + "/prediction", 600); }
-    public JSONObject getStockProSignal(String code)    { return cached("prosignal:" + code, "/api/v2/stock/" + code + "/pro-signal", 300); }
+    public JSONObject getStockPrediction(String code)   { return cached("prediction:" + code, "/api/v2/stock/" + code + "/prediction", 120); }
+    public JSONObject getStockProSignal(String code)    { return cached("prosignal:" + code, "/api/v2/stock/" + code + "/pro-signal", 60); }
 
     public JSONArray getStockKLine(String code, String period, int days) {
         return getStockKLine(code, period, days, "qfq");
@@ -90,11 +90,28 @@ public class DataService {
         String adj = (adjust == null || adjust.isEmpty()) ? "qfq" : adjust;
         String key = "kline:" + code + ":" + period + ":" + days + ":" + adj;
         String path = "/api/stock/" + code + "/kline?period=" + period + "&days=" + days + "&adjust=" + adj;
-        return cachedArr(key, path, 600);
+        return cachedArr(key, path, 120);
     }
 
     /** Strategies with a v2 → legacy fallback chain. */
     public JSONObject getStockStrategies(String code) {
+        return getStockStrategies(code, null);
+    }
+
+    /** Strategies with optional user weights. Custom configs bypass cache. */
+    public JSONObject getStockStrategies(String code, JSONObject strategyConfig) {
+        if (strategyConfig != null && !strategyConfig.isEmpty()) {
+            JSONObject body = new JSONObject();
+            body.put("strategies", strategyConfig);
+            try {
+                String resp = restTemplate.postForObject(
+                        dataServiceUrl + "/api/v2/stock/" + code + "/score", body, String.class);
+                DataTimeHolder.recordOldest(System.currentTimeMillis());
+                return resp == null ? null : JSON.parseObject(resp);
+            } catch (Exception ignored) {
+                // fall through to cached default chain
+            }
+        }
         return getCachedJsonObject("strategies:v2:" + code, () -> {
             try {
                 String resp = restTemplate.getForObject(
@@ -103,7 +120,7 @@ public class DataService {
             } catch (Exception ignored) {}
             return restTemplate.getForObject(
                     dataServiceUrl + "/api/stock/" + code + "/strategies", String.class);
-        }, 600);
+        }, 120);
     }
 
     public JSONArray searchStock(String keyword) {
@@ -121,7 +138,7 @@ public class DataService {
         // Pre-computed (code, strategy) scores read from MySQL. Refreshed by
         // the post-market scheduler — caching 5 min on top keeps response
         // sub-millisecond for the dashboard's repeated polls.
-        return cached("strategy-tops:" + limit, "/api/v2/strategy-tops?limit=" + limit, 300);
+        return cached("strategy-tops:" + limit, "/api/v2/strategy-tops?limit=" + limit, 120);
     }
     public JSONArray  runConditionScreener(JSONObject body) { return postArr("/api/v2/screen/conditions", body); }
 
@@ -176,10 +193,10 @@ public class DataService {
     public JSONArray getLhbRecent(int days, String code) {
         String key = "lhb:recent:" + days + ":" + (code == null ? "" : code);
         String path = "/api/lhb/recent?days=" + days + (code != null && !code.isEmpty() ? "&code=" + code : "");
-        return cachedArr(key, path, 300);
+        return cachedArr(key, path, 120);
     }
-    public JSONArray getLhbInstitutionRank(int days) { return cachedArr("lhb:inst:" + days, "/api/lhb/institution-rank?days=" + days, 300); }
-    public JSONArray getLhbStockRank(int days)       { return cachedArr("lhb:stock:" + days, "/api/lhb/stock-rank?days=" + days, 300); }
+    public JSONArray getLhbInstitutionRank(int days) { return cachedArr("lhb:inst:" + days, "/api/lhb/institution-rank?days=" + days, 120); }
+    public JSONArray getLhbStockRank(int days)       { return cachedArr("lhb:stock:" + days, "/api/lhb/stock-rank?days=" + days, 120); }
 
     // =====================================================================
     // Money flow
@@ -188,14 +205,14 @@ public class DataService {
     public JSONArray getMoneyFlowMainRank(int days, int limit, String direction) {
         String key = "mf:main:" + days + ":" + limit + ":" + direction;
         String path = "/api/moneyflow/main-rank?days=" + days + "&limit=" + limit + "&direction=" + direction;
-        return cachedArr(key, path, 120);
+        return cachedArr(key, path, 60);
     }
     public JSONArray getMoneyFlowNorthboundRank(int days, int limit) {
         return cachedArr("mf:nb:" + days + ":" + limit,
-                "/api/moneyflow/northbound-rank?days=" + days + "&limit=" + limit, 300);
+                "/api/moneyflow/northbound-rank?days=" + days + "&limit=" + limit, 120);
     }
-    public JSONArray getMoneyFlowSector()                     { return cachedArr("mf:sector", "/api/moneyflow/sector", 120); }
-    public JSONArray getMoneyFlowStock(String code, int days) { return cachedArr("mf:stock:" + code + ":" + days, "/api/moneyflow/stock/" + code + "?days=" + days, 300); }
+    public JSONArray getMoneyFlowSector()                     { return cachedArr("mf:sector", "/api/moneyflow/sector", 60); }
+    public JSONArray getMoneyFlowStock(String code, int days) { return cachedArr("mf:stock:" + code + ":" + days, "/api/moneyflow/stock/" + code + "?days=" + days, 120); }
 
     // =====================================================================
     // Admin (never cached — callers want real-time state)

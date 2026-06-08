@@ -17,7 +17,7 @@ from pipelines._helpers import fetch_first_nonempty
 # column DataFrame produced by the legacy `eastmoney.fetch_all_spot`) aren't
 # poisoned by our English-column shape.
 CACHE_KEY = "spot_v2"
-CACHE_TTL = 300
+CACHE_TTL = 60
 
 
 async def run() -> pd.DataFrame:

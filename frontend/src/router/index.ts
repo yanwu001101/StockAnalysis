@@ -50,6 +50,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '自选股', icon: 'Star' },
       },
       {
+        path: 'portfolio',
+        name: 'PortfolioAssistant',
+        component: () => import('@/views/PortfolioAssistant.vue'),
+        meta: { title: '持仓助手', icon: 'Wallet' },
+      },
+      {
         path: 'backtest',
         name: 'Backtest',
         component: () => import('@/views/Backtest.vue'),

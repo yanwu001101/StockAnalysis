@@ -192,3 +192,19 @@ def get_weekly(code: str, weeks: int = 200) -> pd.DataFrame:
     if df.empty:
         return eastmoney.fetch_kline(code, klt=102, count=weeks)
     return df
+
+
+def batch_get_weekly(codes, weeks: int = 200) -> dict:
+    """Weekly bars for many codes, keyed by the code string passed in.
+    Mirrors eastmoney.batch_klines semantics: codes with no/empty data are
+    omitted so callers can treat a missing key as "no trend data". Used by the
+    screener's weekly-trend enrichment (app.py)."""
+    out: dict = {}
+    for c in codes:
+        try:
+            df = get_weekly(c, weeks)
+        except Exception:
+            continue
+        if df is not None and not df.empty:
+            out[c] = df
+    return out

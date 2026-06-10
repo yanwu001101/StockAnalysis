@@ -11,6 +11,7 @@ POST /api/v2/screen
   returns the top-N. This replaces the legacy `score_multi_factor`-only path.
 """
 from __future__ import annotations
+import math
 import threading
 import time
 from typing import Optional
@@ -28,6 +29,49 @@ from strategies.base import StrategyContext
 
 
 bp = Blueprint("strategies_v2", __name__, url_prefix="/api/v2")
+
+
+def json_safe(value):
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [json_safe(v) for v in value]
+    if isinstance(value, (float, np.floating)):
+        num = float(value)
+        return num if math.isfinite(num) else 0
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    return value
+
+
+def _finite_number(value, digits: int | None = None, default=0):
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(num):
+        return default
+    return round(num, digits) if digits is not None else num
+
+
+def _latest_fundamental_metrics(ctx: StrategyContext) -> tuple[float, float]:
+    if ctx.fundamental_df is None or ctx.fundamental_df.empty:
+        return 0, 0
+    row = ctx.fundamental_df.iloc[0]
+    return (
+        _finite_number(row.get("roe"), 2, 0),
+        _finite_number(row.get("debt_ratio"), 2, 0),
+    )
+
+
+def _display_name(code: str, row_name, ctx_name: str) -> str:
+    ctx_name = str(ctx_name or "").strip()
+    row_name = str(row_name or "").strip()
+    if ctx_name and ctx_name != code:
+        return ctx_name
+    if row_name and row_name != code:
+        return row_name
+    return code
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +350,7 @@ def stock_score(code: str):
     bearish_n = sum(1 for it in effective if it.get("signal") == "bearish")
     triggered_n = sum(1 for it in effective if it.get("triggered"))
 
-    return jsonify({
+    return jsonify(json_safe({
         "code": code,
         "name": ctx.name,
         "price": ctx.price,
@@ -325,7 +369,7 @@ def stock_score(code: str):
         },
         "industry": ctx.industry,
         "signal": signal,
-    })
+    }))
 
 
 @bp.route("/screen", methods=["POST"])
@@ -342,6 +386,8 @@ def screen():
     limit = int(body.get("limit") or 50)
     filters = body.get("filters") or {}
     min_score = float(filters.get("minScore", 50))
+    min_roe = float(filters.get("minRoe", 0))
+    max_debt_ratio = float(filters.get("maxDebtRatio", 100))
     min_market_cap_yi = float(filters.get("minMarketCap", 100))   # 亿
     industries: list = filters.get("industries") or []
     weights = _parse_weights(body)
@@ -386,7 +432,8 @@ def screen():
     chg_col = "pct_change" if "pct_change" in df.columns else "涨跌幅"
 
     if cap_col:
-        df = df[pd.to_numeric(df[cap_col], errors="coerce") >= min_market_cap_yi]
+        cap_values = pd.to_numeric(df[cap_col], errors="coerce")
+        df = df[cap_values.isna() | (cap_values <= 0) | (cap_values >= min_market_cap_yi)]
     if industries and ind_col in df.columns:
         df = df[df[ind_col].astype(str).isin(industries)]
     if cap_col:
@@ -405,6 +452,11 @@ def screen():
                 ctx.market_cap_yi = float(row[cap_col] or 0)
         except Exception:
             pass
+        roe, debt_ratio = _latest_fundamental_metrics(ctx)
+        if roe < min_roe:
+            continue
+        if debt_ratio > max_debt_ratio:
+            continue
         composite, signal, _, out_list = _score_all(ctx, weights, strategy_params)
         if composite < min_score:
             continue
@@ -417,11 +469,13 @@ def screen():
         triggered_count = sum(1 for it in effective if it.get("triggered"))
         results.append({
             "code": code,
-            "name": str(row.get(name_col) or ctx.name or ""),
+            "name": _display_name(code, row.get(name_col), ctx.name),
             "industry": str(row.get(ind_col) or ctx.industry or ""),
-            "price": round(float(row.get(price_col) or 0), 2),
-            "changePercent": round(float(row.get(chg_col) or 0), 2),
-            "marketCap": round(ctx.market_cap_yi, 0),
+            "price": _finite_number(row.get(price_col) or ctx.price, 2, 0),
+            "changePercent": _finite_number(row.get(chg_col), 2, 0),
+            "marketCap": _finite_number(ctx.market_cap_yi, 0, 0),
+            "roe": roe,
+            "debtRatio": debt_ratio,
             "compositeScore": composite,
             "signal": signal,
             "strategies": {it["id"]: it["score"] for it in out_list},
@@ -436,7 +490,7 @@ def screen():
         })
 
     results.sort(key=lambda x: x["compositeScore"], reverse=True)
-    return jsonify(results[:limit])
+    return jsonify(json_safe(results[:limit]))
 
 
 @bp.route("/strategy-tops")
@@ -509,11 +563,11 @@ def strategy_tops():
         })
 
     computed_at = strategy_score_repo.latest_computed_at()
-    return jsonify({
+    return jsonify(json_safe({
         "strategies": strategies_out,
         "computed_at": computed_at.isoformat() if computed_at else None,
         "row_count": strategy_score_repo.row_count(),
-    })
+    }))
 
 
 @bp.route("/strategies")
@@ -544,7 +598,7 @@ def stock_prediction(code: str):
             "detail": d.detail,
             "subSignals": d.sub_signals,
         })
-    return jsonify({
+    return jsonify(json_safe({
         "code": result.code,
         "name": result.name,
         "price": result.price,
@@ -558,7 +612,7 @@ def stock_prediction(code: str):
         "keyDrivers": result.key_drivers,
         "riskWarnings": result.risk_warnings,
         "timeHorizon": result.time_horizon,
-    })
+    }))
 
 
 @bp.route("/stock/<code>/pro-signal")
@@ -578,7 +632,7 @@ def stock_pro_signal(code: str):
         "score": round(d.score, 4), "weight": d.weight,
         "detail": d.detail, "value": d.value,
     } for d in result.dimensions]
-    return jsonify({
+    return jsonify(json_safe({
         "code": result.code,
         "name": result.name,
         "price": result.price,
@@ -592,4 +646,4 @@ def stock_pro_signal(code: str):
         "keySignals": result.key_signals,
         "risks": result.risks,
         "horizon": result.horizon,
-    })
+    }))

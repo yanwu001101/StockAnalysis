@@ -15,6 +15,7 @@ import cache
 import eastmoney
 import kline_repo
 import scheduler
+from repo.base import fetch_df
 from strategies import (
     score_macd_ma, score_multi_factor, score_momentum_breakout,
     score_rsi_rebound, score_bollinger_squeeze, score_chip_concentration,
@@ -60,6 +61,26 @@ def to_number(series: pd.Series) -> pd.Series:
     )
 
 
+def safe_number(value, digits: int | None = None, default=None):
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(num):
+        return default
+    return round(num, digits) if digits is not None else num
+
+
+def json_safe(value):
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [json_safe(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0
+    return value
+
+
 def first_existing(columns, candidates):
     available = set(columns)
     for c in candidates:
@@ -78,6 +99,69 @@ def cached(key: str, ttl: int, fetcher):
 
 
 SPOT_MIN_ROWS = 4000
+SPOT_COLUMNS = ["代码", "名称", "行业", "最新价", "总市值", "总市值_亿", "涨跌幅", "成交量", "成交额", "换手率"]
+
+
+def empty_spot_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=SPOT_COLUMNS)
+
+
+def fetch_spot_from_db() -> pd.DataFrame:
+    sql = """
+    WITH latest_fundamental AS (
+      SELECT code, MAX(report_date) AS report_date
+      FROM stock_fundamental
+      GROUP BY code
+    ),
+    ranked_kline AS (
+      SELECT d.code,
+             d.close,
+             d.pct_change,
+             d.volume,
+             d.amount,
+             LAG(d.close) OVER (PARTITION BY d.code ORDER BY d.trade_date) AS prev_close,
+             ROW_NUMBER() OVER (PARTITION BY d.code ORDER BY d.trade_date DESC) AS rn
+      FROM stock_kline_daily d
+      WHERE d.close IS NOT NULL
+    )
+    SELECT f.code,
+           COALESCE(si.name, f.code) AS name,
+           COALESCE(si.industry, '') AS industry,
+           NULLIF(si.market_cap, 0) AS market_cap,
+           COALESCE(k.close, 0) AS latest_price,
+           COALESCE(
+             k.pct_change,
+             CASE
+               WHEN k.prev_close IS NOT NULL AND k.prev_close <> 0
+               THEN (k.close - k.prev_close) / k.prev_close * 100
+               ELSE NULL
+             END
+           ) AS pct_change,
+           k.volume,
+           k.amount
+    FROM latest_fundamental lf
+    JOIN stock_fundamental f
+      ON f.code = lf.code AND f.report_date = lf.report_date
+    LEFT JOIN stock_info si ON si.code = f.code
+    LEFT JOIN ranked_kline k ON k.code = f.code AND k.rn = 1
+    """
+    df = fetch_df(sql)
+    if df is None or df.empty:
+        return empty_spot_df()
+    out = pd.DataFrame({
+        "代码": df["code"].map(normalize_code),
+        "名称": df["name"].fillna(df["code"]).astype(str),
+        "行业": df["industry"].fillna("").astype(str),
+        "最新价": pd.to_numeric(df.get("latest_price"), errors="coerce"),
+        "总市值": pd.to_numeric(df.get("market_cap"), errors="coerce"),
+        "总市值_亿": pd.to_numeric(df.get("market_cap"), errors="coerce"),
+        "涨跌幅": pd.to_numeric(df.get("pct_change"), errors="coerce"),
+        "成交量": pd.to_numeric(df.get("volume"), errors="coerce"),
+        "成交额": pd.to_numeric(df.get("amount"), errors="coerce"),
+        "换手率": math.nan,
+    })
+    print(f"[data-service] spot fallback from DB: {len(out)} rows")
+    return out
 
 def fetch_spot() -> pd.DataFrame:
     def _fetch():
@@ -95,8 +179,13 @@ def fetch_spot() -> pd.DataFrame:
             print(f"[data-service] eastmoney spot failed, fallback to akshare: {e}")
         try:
             df = retry_call(ak.stock_zh_a_spot_em, retries=2, wait=2)
-        except Exception:
-            df = retry_call(ak.stock_zh_a_spot, retries=2, wait=2)
+        except Exception as e:
+            print(f"[data-service] akshare em spot failed, fallback to sina: {e}")
+            try:
+                df = retry_call(ak.stock_zh_a_spot, retries=2, wait=2)
+            except Exception as e2:
+                print(f"[data-service] all spot sources failed; falling back to DB snapshot: {e2}")
+                return fetch_spot_from_db()
         df = df.copy()
         code_col = first_existing(df.columns, ["代码", "证券代码"])
         name_col = first_existing(df.columns, ["名称", "证券简称"])
@@ -104,6 +193,9 @@ def fetch_spot() -> pd.DataFrame:
         price_col = first_existing(df.columns, ["最新价", "收盘"])
         cap_col = first_existing(df.columns, ["总市值"])
         change_col = first_existing(df.columns, ["涨跌幅"])
+        if not code_col or not name_col:
+            print(f"[data-service] spot response missing required columns: {list(df.columns)}")
+            return empty_spot_df()
         keep = [code_col, name_col]
         rename = {code_col: "代码", name_col: "名称"}
         if industry_col: keep.append(industry_col); rename[industry_col] = "行业"
@@ -117,7 +209,20 @@ def fetch_spot() -> pd.DataFrame:
         if "涨跌幅" in out:
             out["涨跌幅"] = to_number(out["涨跌幅"])
         return out
-    return cached("spot", 300, _fetch)
+
+    # Do not cache an empty spot snapshot. External quote providers sometimes
+    # fail transiently; caching the empty fallback makes every screener view
+    # look like the market has no stocks for the whole TTL window.
+    cached_spot = cache.get("spot")
+    if cached_spot is not None and not getattr(cached_spot, "empty", False):
+        return cached_spot
+
+    fresh = _fetch()
+    if fresh is not None and not getattr(fresh, "empty", False):
+        cache.set("spot", fresh, 300)
+        return fresh
+
+    return cached_spot if cached_spot is not None else empty_spot_df()
 
 
 def report_dates(quarters=10) -> list:
@@ -130,6 +235,40 @@ def report_dates(quarters=10) -> list:
             if report_day <= today:
                 dates.append(text)
     return dates[:quarters]
+
+
+def fetch_financial_from_db() -> pd.DataFrame:
+    sql = """
+    SELECT f.code,
+           f.report_date,
+           f.roe,
+           f.debt_ratio,
+           f.revenue_yoy,
+           f.net_profit_yoy,
+           f.gross_margin,
+           f.op_cashflow
+    FROM stock_fundamental f
+    JOIN (
+      SELECT code, MAX(report_date) AS report_date
+      FROM stock_fundamental
+      GROUP BY code
+    ) latest ON latest.code = f.code AND latest.report_date = f.report_date
+    """
+    df = fetch_df(sql)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = pd.DataFrame({
+        "代码": df["code"].map(normalize_code),
+        "净资产收益率_原始": pd.to_numeric(df.get("roe"), errors="coerce"),
+        "净资产收益率": pd.to_numeric(df.get("roe"), errors="coerce"),
+        "营收同比增长率": pd.to_numeric(df.get("revenue_yoy"), errors="coerce"),
+        "净利润同比增长率": pd.to_numeric(df.get("net_profit_yoy"), errors="coerce"),
+        "销售毛利率": pd.to_numeric(df.get("gross_margin"), errors="coerce"),
+        "经营现金流": pd.to_numeric(df.get("op_cashflow"), errors="coerce"),
+        "资产负债率": pd.to_numeric(df.get("debt_ratio"), errors="coerce"),
+    })
+    print(f"[data-service] financial fallback from DB: {len(out)} rows")
+    return out.drop_duplicates("代码")
 
 
 def fetch_financial() -> pd.DataFrame:
@@ -193,7 +332,17 @@ def fetch_financial() -> pd.DataFrame:
             zcfz_result.drop_duplicates("代码"), on="代码", how="left")
         return merged
 
-    return cached("financial", 600, _fetch)
+    cached_fin = cache.get("financial")
+    if cached_fin is not None and not getattr(cached_fin, "empty", False):
+        return cached_fin
+
+    fresh = _fetch()
+    if fresh is None or getattr(fresh, "empty", False):
+        fresh = fetch_financial_from_db()
+    if fresh is not None and not getattr(fresh, "empty", False):
+        cache.set("financial", fresh, 600)
+        return fresh
+    return cached_fin if cached_fin is not None else pd.DataFrame()
 
 
 def fetch_stock_daily(code: str, days: int = 250, adjust: str = "qfq") -> pd.DataFrame:
@@ -350,7 +499,8 @@ def market_summary():
 
         change_col = "涨跌幅" if "涨跌幅" in merged.columns else None
         if change_col:
-            chg = pd.to_numeric(merged[change_col], errors="coerce")
+            merged[change_col] = pd.to_numeric(merged[change_col], errors="coerce")
+            chg = merged[change_col]
             up = int((chg > 0).sum())
             down = int((chg < 0).sum())
             flat = int((chg == 0).sum())
@@ -363,6 +513,7 @@ def market_summary():
         else:
             up = down = flat = up_limit = down_limit = 0
             avg_change = 0
+        avg_change = safe_number(avg_change, 2, 0)
 
         # Top gainers
         if change_col:
@@ -373,9 +524,9 @@ def market_summary():
                     "code": str(r.get("代码", "")),
                     "name": str(r.get("名称", "")),
                     "industry": str(r.get("行业", "")),
-                    "price": float(r.get("最新价", 0) or 0),
-                    "changePercent": round(float(r.get(change_col, 0) or 0), 2),
-                    "marketCap": round(float(r.get("总市值_亿", 0) or 0), 0),
+                    "price": safe_number(r.get("最新价"), 2, 0),
+                    "changePercent": safe_number(r.get(change_col), 2, 0),
+                    "marketCap": safe_number(r.get("总市值_亿"), 0, 0),
                 })
         else:
             top_list = []
@@ -448,17 +599,17 @@ def top_stocks():
                 "code": str(row.get("代码", "")),
                 "name": str(row.get("名称", "")),
                 "industry": str(row.get("行业", "")),
-                "price": round(float(row.get("最新价", 0) or 0), 2),
-                "changePercent": round(float(row.get("涨跌幅", 0) or 0), 2),
-                "marketCap": round(float(row.get("总市值_亿", 0) or 0), 0),
+                "price": safe_number(row.get("最新价"), 2, 0),
+                "changePercent": safe_number(row.get("涨跌幅"), 2, 0),
+                "marketCap": safe_number(row.get("总市值_亿"), 0, 0),
                 "compositeScore": min(total, 100),
                 "signal": "bullish" if total >= 70 else "bearish" if total <= 30 else "neutral",
-                "roe": round(float(row.get("净资产收益率", 0) or 0), 2),
-                "debtRatio": round(float(row.get("资产负债率", 0) or 0), 2),
+                "roe": safe_number(row.get("净资产收益率"), 2, 0),
+                "debtRatio": safe_number(row.get("资产负债率"), 2, 0),
             })
 
         results.sort(key=lambda x: x["compositeScore"], reverse=True)
-        return jsonify(results[:limit])
+        return jsonify(json_safe(results[:limit]))
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -688,7 +839,7 @@ def screen():
             })
 
         results.sort(key=lambda x: x["compositeScore"], reverse=True)
-        return jsonify(results[:limit])
+        return jsonify(json_safe(results[:limit]))
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -820,12 +971,12 @@ def _spot_sorted_list(ascending: bool, limit: int, key_col: str = "涨跌幅") -
             "code": str(r.get("代码", "")),
             "name": str(r.get("名称", "")),
             "industry": str(r.get("行业", "")),
-            "price": round(float(r.get("最新价", 0) or 0), 2),
-            "changePercent": round(float(r.get("涨跌幅", 0) or 0), 2),
-            "volume": int(r.get("成交量", 0) or 0),
-            "amount": round(float(r.get("成交额", 0) or 0) / 1e8, 2),  # 亿元
-            "turnover": round(float(r.get("换手率", 0) or 0), 2),
-            "marketCap": round(float(r.get("总市值_亿", 0) or 0), 0),
+            "price": safe_number(r.get("最新价"), 2, 0),
+            "changePercent": safe_number(r.get("涨跌幅"), 2, 0),
+            "volume": int(safe_number(r.get("成交量"), None, 0)),
+            "amount": safe_number(safe_number(r.get("成交额"), None, 0) / 1e8, 2, 0),  # 亿元
+            "turnover": safe_number(r.get("换手率"), 2, 0),
+            "marketCap": safe_number(r.get("总市值_亿"), 0, 0),
         })
     return out
 

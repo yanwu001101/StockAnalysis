@@ -357,6 +357,6 @@ h4 { font-size: 15px; }
 
 /* — Responsive — */
 @media (max-width: 768px) {
-  :root { --sidebar-width: 0px; }
+  :root { --sidebar-width: 180px; }
   .page-container { padding: 16px; }
 }

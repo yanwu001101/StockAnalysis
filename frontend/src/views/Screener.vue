@@ -81,6 +81,7 @@
                 <th>代码</th>
                 <th>行业</th>
                 <th class="t-center">最新价</th>
+                <th class="t-center">涨跌幅</th>
                 <th class="t-center">综合分</th>
                 <th class="t-center">
                   策略评分
@@ -105,8 +106,11 @@
                 <td class="t-rank num">{{ i + 1 }}</td>
                 <td><span class="stock-name">{{ row.name }}</span></td>
                 <td class="mono dim">{{ row.code }}</td>
-                <td class="dim">{{ row.industry }}</td>
+                <td class="dim">{{ row.industry || '—' }}</td>
                 <td class="t-center num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">{{ row.price }}</td>
+                <td class="t-center num" :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
+                  {{ formatPercent(row.changePercent, 2) }}
+                </td>
                 <td class="t-center">
                   <span class="score-pill" :class="scoreCls(row.compositeScore)">{{ row.compositeScore }}</span>
                 </td>
@@ -121,7 +125,7 @@
                 </td>
                 <td class="t-center num">{{ row.roe }}%</td>
                 <td class="t-center num">{{ row.debtRatio }}%</td>
-                <td class="t-center num">{{ formatNumber(row.marketCap, 0) }}</td>
+                <td class="t-center num">{{ row.marketCap > 0 ? formatNumber(row.marketCap, 0) : '—' }}</td>
                 <td class="t-center">
                   <span class="sig" :class="row.signal">{{ sigText(row.signal) }}</span>
                 </td>
@@ -162,7 +166,7 @@ import { getStockProSignal } from '@/api/stock'
 import { useStrategyStore } from '@/stores/strategy'
 import { useSettingsStore } from '@/stores/settings'
 import { useRefreshable } from '@/composables/useRefreshable'
-import { formatNumber } from '@/utils/format'
+import { formatNumber, formatPercent } from '@/utils/format'
 import * as echarts from 'echarts'
 
 const router = useRouter()

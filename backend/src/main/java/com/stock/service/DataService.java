@@ -173,7 +173,9 @@ public class DataService {
                     dataServiceUrl + "/api/v2/screen", request, String.class);
             if (resp != null && !resp.startsWith("{\"error\"")) {
                 JSONArray arr = JSON.parseArray(resp);
-                if (arr != null) {
+                Object required = request.get("requireTriggered");
+                boolean hasRequireTriggered = required instanceof java.util.Collection<?> c && !c.isEmpty();
+                if (arr != null && (!arr.isEmpty() || hasRequireTriggered)) {
                     DataTimeHolder.recordOldest(System.currentTimeMillis());
                     return arr;
                 }

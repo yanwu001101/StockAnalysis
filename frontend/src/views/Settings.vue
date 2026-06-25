@@ -3,7 +3,7 @@
     <div class="settings-grid">
 
       <!-- 1. 数据健康面板 -->
-      <section class="card">
+      <section v-if="false" class="card">
         <header class="card-head">
           <h3>数据健康</h3>
           <div class="head-actions">
@@ -49,14 +49,14 @@
           <summary>数据库表行数 ({{ tableRows.length }})</summary>
           <div class="table-grid">
             <div v-for="t in tableRows" :key="t.name" class="kv" :class="{ 'kv-empty': !t.count }">
-              <span>{{ t.name }}</span><b>{{ t.count == null ? '—' : t.count.toLocaleString() }}</b>
+              <span>{{ t.name }}</span><b>{{ t.count == null ? '-' : (t.count ?? 0).toLocaleString() }}</b>
             </div>
           </div>
         </details>
       </section>
 
       <!-- 2. 数据管理 -->
-      <section class="card">
+      <section v-if="false" class="card">
         <header class="card-head"><h3>数据管理</h3></header>
 
         <div class="action-block">
@@ -326,10 +326,7 @@ function circuitLabel(state: string) {
   return state
 }
 
-onMounted(() => {
-  loadHealth()
-  loadRecent()
-})
+onMounted(() => {})
 onUnmounted(() => {
   if (pollTimer) window.clearTimeout(pollTimer)
 })

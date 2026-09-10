@@ -1,0 +1,7 @@
+services:
+  mysql:
+    ports: !override
+      - "127.0.0.1:23307:3306"
+  backend:
+    ports: !override
+      - "127.0.0.1:18080:8080"

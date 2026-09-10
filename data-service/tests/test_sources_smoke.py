@@ -22,6 +22,7 @@ def test_source_chain_has_kline_fallback():
     names = [s.name for s in seq]
     assert "tencent" in names
     assert "sina" in names
+    assert "ths" in names
 
 
 def test_pipelines_import():

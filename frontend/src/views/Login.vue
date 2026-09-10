@@ -41,9 +41,6 @@
         </button>
       </form>
 
-      <div class="foot">
-        <button class="link" @click="$router.push('/dashboard')">先以访客身份进入 →</button>
-      </div>
     </div>
 
     <div class="footer-meta">© {{ new Date().getFullYear() }} 智能选股</div>
@@ -172,19 +169,6 @@ async function handleSubmit() {
 }
 .submit:hover:not(:disabled) { background: var(--brand-press); }
 .submit:disabled { opacity: 0.6; cursor: wait; }
-
-.foot {
-  margin-top: 18px;
-  text-align: center;
-}
-.link {
-  background: transparent;
-  border: 0;
-  color: var(--text-3);
-  font-size: 13px;
-  cursor: pointer;
-}
-.link:hover { color: var(--brand); }
 
 .footer-meta {
   margin-top: 24px;

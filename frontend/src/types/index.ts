@@ -157,6 +157,7 @@ export interface UserInfo {
   username: string
   nickname: string
   avatar: string
+  role?: 'ADMIN' | 'USER'
   createdAt: string
 }
 

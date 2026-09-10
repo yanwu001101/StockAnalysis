@@ -48,6 +48,12 @@ export const useStrategyStore = defineStore('strategy', () => {
     if (s) s.enabled = !s.enabled
   }
 
+  function setAllStrategiesEnabled(enabled: boolean) {
+    strategies.value.forEach(s => {
+      s.enabled = enabled
+    })
+  }
+
   function resetToDefault() {
     strategies.value = DEFAULT_STRATEGIES.map(s => ({ ...s }))
   }
@@ -86,7 +92,7 @@ export const useStrategyStore = defineStore('strategy', () => {
 
   return {
     strategies, savedConfigs,
-    updateWeight, toggleStrategy, resetToDefault,
+    updateWeight, toggleStrategy, setAllStrategiesEnabled, resetToDefault,
     saveConfig, loadConfig, loadFromStorage,
     getEnabledStrategies, getConfigMap,
   }

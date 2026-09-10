@@ -213,6 +213,54 @@ def fetch_single_quote(code: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def fetch_trends(code: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
+    """东财当日分时(trends2)。做 T 判断日内位置的核心数据。
+
+    返回 (df, meta):
+      df 列 = 时间, 价, 量, 均价(逐分钟,实时到当前);
+      meta = {code, name, prev_close, day_open}。
+    push2his 分时接口对小请求量宽松,单只票单请求 → 无频控。
+    """
+    session = _new_session()
+    params = {
+        "secid": secid(code),
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f17",
+        "fields2": "f51,f53,f56,f58",   # 时间, 成交价, 成交量, 均价
+        "iscr": 0, "ndays": int(ndays),
+        "_": str(int(time.time() * 1000)),
+    }
+    for host in ("push2his", "push2"):
+        url = f"https://{host}.eastmoney.com/api/qt/stock/trends2/get"
+        try:
+            d = (session.get(url, params=params).json().get("data") or {})
+        except Exception as e:
+            log.debug("fetch_trends %s host=%s 失败: %s", code, host, e)
+            continue
+        trends = d.get("trends") or []
+        if not trends:
+            continue
+        rows = []
+        for line in trends:
+            p = str(line).split(",")
+            if len(p) < 4:
+                continue
+            rows.append({"时间": p[0], "价": p[1], "量": p[2], "均价": p[3]})
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            for c in ("价", "量", "均价"):
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            df = df.dropna(subset=["价"])
+        meta = {
+            "code": str(code).zfill(6),
+            "name": d.get("name"),
+            "prev_close": pd.to_numeric(d.get("preClose"), errors="coerce"),
+            "day_open": float(df["价"].iloc[0]) if not df.empty else None,
+        }
+        return df, meta
+    return pd.DataFrame(), {}
+
+
 if __name__ == "__main__":
     import sys
     try:

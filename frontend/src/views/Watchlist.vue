@@ -47,6 +47,15 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="做T" width="88" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="tOf(row.code) && tOf(row.code).action !== 'no_data' && tOf(row.code).action !== 'wait'"
+                    :type="tOf(row.code).action === 'positive_t' ? 'danger' : 'success'" size="small" effect="plain">
+              {{ tOf(row.code).action_label }}
+            </el-tag>
+            <span v-else style="color: var(--text-3)">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="60" align="center">
           <template #default="{ row }">
             <el-button type="danger" text size="small" @click.stop="removeStock(row.code)">
@@ -68,11 +77,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useRefreshable } from '@/composables/useRefreshable'
 import * as userApi from '@/api/user'
+import { getTSignalBatch } from '@/api/t'
 
 const userStore = useUserStore()
 const addCode = ref('')
@@ -126,6 +136,20 @@ async function reloadWatchlists() {
     activeGroup.value = String(groups.value[0].id)
   }
 }
+
+const tMap = ref<Record<string, any>>({})
+function tOf(code: any) { return tMap.value[String(code).padStart(6, '0')] }
+async function loadTSignals() {
+  const codes = (currentStocks.value || []).map((s: any) => String(s.code).padStart(6, '0'))
+  if (!codes.length) { tMap.value = {}; return }
+  try {
+    const res = await getTSignalBatch(codes)
+    const m: Record<string, any> = {}
+    res.forEach((r: any) => { m[r.code] = r })
+    tMap.value = m
+  } catch { tMap.value = {} }
+}
+watch(currentStocks, loadTSignals, { immediate: true })
 
 useRefreshable('自选股', reloadWatchlists)
 </script>

@@ -10,6 +10,7 @@ export const useUserStore = defineStore('user', () => {
   // Derive from token so it stays in sync — older versions held a stale ref
   // that lied after silent token clearing (e.g. failed hydrate on refresh).
   const isLoggedIn = computed(() => !!token.value)
+  const isAdmin = computed(() => userInfo.value?.role === 'ADMIN')
 
   async function login(username: string, password: string) {
     const res = await userApi.login(username, password)
@@ -48,5 +49,5 @@ export const useUserStore = defineStore('user', () => {
     localStorage.removeItem('token')
   }
 
-  return { token, userInfo, watchlists, isLoggedIn, login, fetchUserInfo, hydrate, fetchWatchlists, logout }
+  return { token, userInfo, watchlists, isLoggedIn, isAdmin, login, fetchUserInfo, hydrate, fetchWatchlists, logout }
 })

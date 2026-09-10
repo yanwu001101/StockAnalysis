@@ -18,7 +18,7 @@ from sources.base import AbstractSource
 
 
 KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-MIN_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/kline/mkline"
+MIN_KLINE_URL = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
 
 _PERIOD_MAP = {"daily": "day", "weekly": "week", "monthly": "month"}
 _MIN_PERIODS = {"5min": "m5", "15min": "m15", "30min": "m30", "60min": "m60"}
@@ -86,8 +86,10 @@ class TencentSource(AbstractSource):
         if period not in _MIN_PERIODS:
             return pd.DataFrame()
         sym = _tx_sym(code)
+        # mkline uses the compact `symbol,period,,count` form. The fqkline
+        # endpoint accepts daily bars but silently returns no minute payload.
         params = {
-            "param": f"{sym},{_MIN_PERIODS[period]},,,{count},qfq",
+            "param": f"{sym},{_MIN_PERIODS[period]},,{count}",
             "_var": f"m_{period}",
             "r": random.random(),
         }
@@ -116,7 +118,11 @@ class TencentSource(AbstractSource):
         df = pd.DataFrame(rows)
         if not df.empty:
             df["dt"] = pd.to_datetime(df["dt"], format="%Y%m%d%H%M", errors="coerce")
-        return df
+        if df.empty:
+            return df
+        for col in ("open", "close", "high", "low"):
+            df = df[pd.to_numeric(df[col], errors="coerce") > 0]
+        return df.reset_index(drop=True)
 
 
 _default = TencentSource()

@@ -6,6 +6,12 @@
         <p class="desc">自定义策略权重，打造专属选股模型</p>
       </div>
       <div class="header-actions">
+        <el-button size="small" type="success" plain :disabled="allEnabled" @click="enableAllStrategies">
+          全部开启
+        </el-button>
+        <el-button size="small" type="danger" plain :disabled="allDisabled" @click="disableAllStrategies">
+          全部关闭
+        </el-button>
         <el-button size="small" @click="strategyStore.resetToDefault()">恢复默认</el-button>
         <el-button size="small" @click="showSaveDialog = true">保存方案</el-button>
         <el-button type="primary" size="small" @click="previewResults">
@@ -152,6 +158,20 @@ async function loadParamSpecs() {
 const totalWeight = computed(() =>
   strategyStore.strategies.filter(s => s.enabled).reduce((sum, s) => sum + s.weight, 0)
 )
+const allEnabled = computed(() => strategyStore.strategies.every(s => s.enabled))
+const allDisabled = computed(() => strategyStore.strategies.every(s => !s.enabled))
+
+function enableAllStrategies() {
+  strategyStore.setAllStrategiesEnabled(true)
+  ElMessage.success('已开启全部策略')
+}
+
+function disableAllStrategies() {
+  strategyStore.setAllStrategiesEnabled(false)
+  requireTriggered.value = []
+  previewData.value = []
+  ElMessage.success('已关闭全部策略')
+}
 
 // Scale enabled strategy weights so they sum to exactly 100 while preserving
 // proportions. Values are rounded to integers; the residue (max ±N) is
@@ -225,7 +245,7 @@ useRefreshable('策略实验室', previewResults, { immediate: false, autoRefres
 }
 .lab-header h2 { margin: 0; font-size: 20px; color: var(--text-primary); }
 .desc { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); }
-.header-actions { display: flex; gap: 8px; }
+.header-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .strategy-list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -299,5 +319,8 @@ useRefreshable('策略实验室', previewResults, { immediate: false, autoRefres
 .signal.bullish { background: rgba(255,71,87,0.15); color: #FF4757; }
 .signal.bearish { background: rgba(42,232,164,0.15); color: #2AE8A4; }
 .signal.neutral { background: rgba(136,146,164,0.15); color: #8892A4; }
-@media (max-width: 900px) { .strategy-list { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .lab-header { align-items: flex-start; gap: 12px; }
+  .strategy-list { grid-template-columns: 1fr; }
+}
 </style>

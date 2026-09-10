@@ -39,7 +39,9 @@ request.interceptors.response.use(
       localStorage.removeItem('admin_token')
       if (location.pathname !== '/login') location.href = '/login'
     } else if (status === 403) {
+      localStorage.removeItem('admin_token')
       ElMessage.error('无权限访问')
+      if (location.pathname !== '/login') location.href = '/login'
     } else {
       ElMessage.error(error.response?.data?.message || error.message || '网络错误')
     }

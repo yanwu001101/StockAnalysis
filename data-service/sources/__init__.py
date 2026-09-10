@@ -22,8 +22,8 @@ from sources.xueqiu import default as xq_default
 
 _CHAINS: dict[str, list[AbstractSource]] = {
     "spot": [em_default(), ak_default()],
-    "kline": [tx_default(), sina_default(), ak_default()],
-    "minute_kline": [tx_default()],
+    "kline": [em_default(), tx_default(), sina_default(), ths_default(), ak_default()],
+    "minute_kline": [em_default(), tx_default()],
     "fundamental": [ts_default(), em_default(), ak_default()],
     "moneyflow": [em_default(), ak_default()],
     "northbound_holdings": [ts_default(), em_default(), ak_default()],

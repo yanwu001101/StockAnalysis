@@ -34,13 +34,17 @@ HEADERS_SINA = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://finance.s
 
 SPOT_URL_REALTIME = "http://push2.eastmoney.com/api/qt/clist/get"
 SPOT_URL_DELAYED = "http://push2delay.eastmoney.com/api/qt/clist/get"
+EM_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 SINA_KLINE_URL = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+THS_KLINE_URL = "https://d.10jqka.com.cn/v6/line/hs_{code}/{period}/last.js"
 
 SPOT_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
 SPOT_FIELDS = "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f10,f15,f16,f17,f18,f20,f21,f23,f100"
 
 KLT_MAP = {101: "day", 102: "week", 103: "month"}
+THS_PERIOD_MAP = {101: "01", 102: "11", 103: "21"}
+FQT_MAP = {"none": 0, "qfq": 1, "hfq": 2}
 
 
 def _spot_urls() -> list[str]:
@@ -214,6 +218,67 @@ def fetch_single_quote(code: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Eastmoney intraday K-line (push2his)
+# ---------------------------------------------------------------------------
+
+def _parse_em_kline_rows(rows: list[str]) -> pd.DataFrame:
+    parsed = []
+    for item in rows or []:
+        parts = str(item).split(",")
+        if len(parts) < 7:
+            continue
+        parsed.append({
+            "日期": parts[0],
+            "开盘": _num(parts[1]),
+            "收盘": _num(parts[2]),
+            "最高": _num(parts[3]),
+            "最低": _num(parts[4]),
+            "成交量": _num(parts[5]),
+            "成交额": _num(parts[6]),
+        })
+    return pd.DataFrame(parsed)
+
+
+async def _fetch_em_kline_async(code: str, klt: int = 60, count: int = 250, adjust: str = "qfq") -> pd.DataFrame:
+    code = str(code).zfill(6)
+    params = {
+        "secid": secid(code),
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": int(klt),
+        "fqt": FQT_MAP.get(adjust, 1),
+        "end": "20500101",
+        "lmt": int(count),
+        "_": str(int(random.random() * 1e13)),
+    }
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.get(EM_KLINE_URL, params=params, headers=HEADERS_EM,
+                             timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
+                text = await r.text()
+            data = json.loads(text)
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+            return pd.DataFrame()
+    if not isinstance(data, dict) or data.get("rc") != 0:
+        return pd.DataFrame()
+    rows = ((data.get("data") or {}).get("klines") or [])
+    return _parse_em_kline_rows(rows)
+
+
+def fetch_em_kline(code: str, klt: int = 60, count: int = 250, adjust: str = "qfq") -> pd.DataFrame:
+    """Fetch Eastmoney push2his K-line rows.
+
+    klt=60 is the 1-hour bar used by the UI when realtime spot data is sparse.
+    """
+    try:
+        return asyncio.run(_fetch_em_kline_async(code, klt, count, adjust))
+    except RuntimeError:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(lambda: asyncio.run(_fetch_em_kline_async(code, klt, count, adjust))).result()
+
+
+# ---------------------------------------------------------------------------
 # K-line: Tencent primary, Sina fallback
 # ---------------------------------------------------------------------------
 
@@ -243,6 +308,27 @@ def _parse_tencent_kline(text: str, symbol: str, period_key: str) -> pd.DataFram
             "成交量": float(k[5]) * 100 if k[5] else None,  # Tencent: hand -> shares
         })
     return pd.DataFrame(rows)
+
+
+def _validate_kline(df: pd.DataFrame, count: int) -> pd.DataFrame:
+    """Reject HTTP-200 empty/partial garbage before accepting a provider."""
+    required = ["日期", "开盘", "收盘", "最高", "最低", "成交量"]
+    if df is None or df.empty or any(col not in df.columns for col in required):
+        return pd.DataFrame()
+    out = df[required].copy()
+    out["日期"] = pd.to_datetime(out["日期"], errors="coerce")
+    for col in required[1:]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["日期", "开盘", "收盘", "最高", "最低"])
+    out = out[(out["开盘"] > 0) & (out["收盘"] > 0)]
+    out = out[(out["最高"] >= out[["开盘", "收盘", "最低"]].max(axis=1))]
+    out = out[(out["最低"] <= out[["开盘", "收盘", "最高"]].min(axis=1))]
+    out = out.drop_duplicates("日期", keep="last").sort_values("日期").tail(count)
+    min_rows = min(count, 5)
+    if len(out) < min_rows:
+        return pd.DataFrame()
+    out["日期"] = out["日期"].dt.strftime("%Y-%m-%d")
+    return out.reset_index(drop=True)
 
 
 async def _fetch_kline_tencent(session, sem, code: str, klt: int, count: int):
@@ -300,11 +386,47 @@ async def _fetch_kline_sina(session, sem, code: str, klt: int, count: int):
     return df if not df.empty else None
 
 
+async def _fetch_kline_ths(session, sem, code: str, klt: int, count: int):
+    period = THS_PERIOD_MAP.get(klt)
+    if period is None:
+        return None
+    normalized = re.sub(r"\D", "", str(code)).zfill(6)[-6:]
+    url = THS_KLINE_URL.format(code=normalized, period=period)
+    headers = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://stockpage.10jqka.com.cn/"}
+    async with sem:
+        await asyncio.sleep(_jitter_sleep())
+        try:
+            async with session.get(url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=TIMEOUT_S)) as r:
+                text = await r.text()
+        except Exception as e:
+            log.debug("ths kline %s failed: %s", code, e)
+            return None
+    try:
+        payload = json.loads(text[text.index("(") + 1:text.rindex(")")])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    rows = []
+    for item in str(payload.get("data") or "").split(";"):
+        fields = item.split(",")
+        if len(fields) < 7:
+            continue
+        rows.append({
+            "日期": fields[0], "开盘": fields[1], "最高": fields[2],
+            "最低": fields[3], "收盘": fields[4], "成交量": fields[5],
+        })
+    df = pd.DataFrame(rows)
+    return df.tail(count) if not df.empty else None
+
+
 async def _fetch_kline_one(session, sem, code: str, klt: int, count: int):
-    df = await _fetch_kline_tencent(session, sem, code, klt, count)
-    if df is not None and not df.empty:
-        return df
-    return await _fetch_kline_sina(session, sem, code, klt, count)
+    providers = (_fetch_kline_tencent, _fetch_kline_sina, _fetch_kline_ths)
+    for provider in providers:
+        df = await provider(session, sem, code, klt, count)
+        valid = _validate_kline(df, count)
+        if not valid.empty:
+            return valid
+    return None
 
 
 async def _batch_klines_async(codes: list, klt: int, count: int) -> dict:

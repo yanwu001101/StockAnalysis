@@ -82,6 +82,19 @@ public class DataService {
     public JSONObject getStockPrediction(String code)   { return cached("prediction:" + code, "/api/v2/stock/" + code + "/prediction", 120); }
     public JSONObject getStockProSignal(String code)    { return cached("prosignal:" + code, "/api/v2/stock/" + code + "/pro-signal", 60); }
 
+    // =====================================================================
+    // 短线做 T(日内 T+0)— 透传 data-service /api/t,TTL 短(要实时)
+    // =====================================================================
+    public JSONObject getTSignal(String code) {
+        return cached("tsignal:" + code, "/api/t/stock/" + code, 15);
+    }
+
+    public JSONArray getTSignalBatch(java.util.List<String> codes) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("codes", codes);
+        return postArr("/api/t/batch", body);
+    }
+
     public JSONArray getStockKLine(String code, String period, int days) {
         return getStockKLine(code, period, days, "qfq");
     }

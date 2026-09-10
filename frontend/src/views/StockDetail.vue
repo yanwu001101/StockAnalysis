@@ -34,6 +34,39 @@
       </div>
     </div>
 
+    <!-- 日内做 T 建议 -->
+    <div class="glass-card t-signal-card" v-if="tSignal && tSignal.action !== 'no_data'" :class="tSignal.action">
+      <div class="t-head">
+        <h3>日内做 T 建议</h3>
+        <el-tag :type="tTagType" effect="dark" size="large">{{ tSignal.action_label }}</el-tag>
+        <div class="t-strength">
+          <span class="t-strength-label">信号强度</span>
+          <el-progress :percentage="tSignal.strength" :stroke-width="8" :show-text="false" style="width:120px" />
+          <span class="t-strength-num">{{ tSignal.strength }}</span>
+        </div>
+        <span class="t-time" v-if="tSignal.data_time">{{ tSignal.data_time }}</span>
+      </div>
+      <div class="t-metrics">
+        <div class="t-metric"><span>现价</span><b>{{ tSignal.price }}</b></div>
+        <div class="t-metric"><span>分时均价</span><b>{{ tSignal.vwap }}</b></div>
+        <div class="t-metric"><span>日内位置</span><b>{{ tSignal.intraday_pos != null ? (tSignal.intraday_pos * 100).toFixed(0) + '%' : '—' }}</b></div>
+        <div class="t-metric"><span>偏离均价</span><b>{{ tSignal.vwap_dev != null ? (tSignal.vwap_dev > 0 ? '+' : '') + tSignal.vwap_dev + '%' : '—' }}</b></div>
+        <div class="t-metric"><span>日内振幅</span><b>{{ tSignal.amplitude }}%</b></div>
+        <div class="t-metric"><span>日内高/低</span><b>{{ tSignal.day_high }} / {{ tSignal.day_low }}</b></div>
+      </div>
+      <div class="t-zones" v-if="tSignal.buy_zone || tSignal.sell_zone">
+        <div class="t-zone buy" v-if="tSignal.buy_zone">建议低吸区 <b>{{ tSignal.buy_zone[0] }} ~ {{ tSignal.buy_zone[1] }}</b></div>
+        <div class="t-zone sell" v-if="tSignal.sell_zone">建议高抛区 <b>{{ tSignal.sell_zone[0] }} ~ {{ tSignal.sell_zone[1] }}</b></div>
+      </div>
+      <ul class="t-reasons">
+        <li v-for="r in tSignal.reasons" :key="r">{{ r }}</li>
+      </ul>
+      <div class="t-risks" v-if="tSignal.risks && tSignal.risks.length">
+        <el-icon><Warning /></el-icon> {{ tSignal.risks.join('；') }}
+      </div>
+      <div class="t-disclaimer">{{ tSignal.disclaimer }}</div>
+    </div>
+
     <div class="content-grid">
       <div class="glass-card kline-card">
         <div class="card-header">
@@ -207,7 +240,8 @@ import KLineChart from '@/components/charts/KLineChart.vue'
 import RadarChart from '@/components/charts/RadarChart.vue'
 import ScoreGauge from '@/components/charts/ScoreGauge.vue'
 import PredictionPanel from '@/components/charts/PredictionPanel.vue'
-import { Star, StarFilled, Aim } from '@element-plus/icons-vue'
+import { Star, StarFilled, Aim, Warning } from '@element-plus/icons-vue'
+import { getTSignal, type TSignal } from '@/api/t'
 import type { KLineData, PredictionResult } from '@/types'
 import { useSettingsStore } from '@/stores/settings'
 import { formatNumber } from '@/utils/format'
@@ -225,6 +259,11 @@ const klineAdjust = ref<'qfq' | 'hfq' | 'none'>(settings.klineAdjust)
 const compositeScore = ref(0)
 const strategyScores = ref<Record<string, number>>({})
 const prediction = ref<PredictionResult | null>(null)
+const tSignal = ref<TSignal | null>(null)
+const tTagType = computed(() => {
+  const a = tSignal.value?.action
+  return a === 'positive_t' ? 'danger' : a === 'negative_t' ? 'success' : 'info'
+})
 
 // F10 state
 const f10Tab = ref<'profile' | 'holders' | 'dividend' | 'peers'>('profile')
@@ -325,6 +364,17 @@ async function loadData() {
   } catch {}
   // F10 loads in parallel (slower akshare path).
   loadF10()
+  loadTSignal()
+}
+
+async function loadTSignal() {
+  const c = code.value
+  if (!c) return
+  try {
+    tSignal.value = await getTSignal(c)
+  } catch {
+    tSignal.value = null
+  }
 }
 
 async function loadF10() {
@@ -362,6 +412,26 @@ onBeforeUnmount(() => abortCtrl?.abort())
 </script>
 
 <style scoped>
+.t-signal-card { padding: 16px 20px; margin-bottom: 16px; }
+.t-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.t-head h3 { margin: 0; font-size: 15px; color: var(--text); }
+.t-strength { display: flex; align-items: center; gap: 8px; }
+.t-strength-label { color: var(--text-3); font-size: 12px; }
+.t-strength-num { font-weight: 700; color: var(--text); }
+.t-time { margin-left: auto; color: var(--text-3); font-size: 12px; }
+.t-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px 18px; margin-bottom: 12px; }
+.t-metric { display: flex; flex-direction: column; gap: 2px; }
+.t-metric span { color: var(--text-3); font-size: 12px; }
+.t-metric b { color: var(--text); font-size: 15px; }
+.t-zones { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.t-zone { padding: 8px 14px; border-radius: 8px; font-size: 13px; }
+.t-zone b { font-size: 15px; }
+.t-zone.buy { background: rgba(245, 108, 108, 0.12); color: #f56c6c; }
+.t-zone.sell { background: rgba(103, 194, 58, 0.12); color: #67c23a; }
+.t-reasons { margin: 0 0 10px; padding-left: 18px; }
+.t-reasons li { color: var(--text-3); font-size: 13px; line-height: 1.7; }
+.t-risks { display: flex; align-items: center; gap: 6px; color: #e6a23c; font-size: 13px; margin-bottom: 8px; }
+.t-disclaimer { color: var(--text-3); font-size: 12px; font-style: italic; }
 .kline-controls {
   display: flex;
   gap: 8px;

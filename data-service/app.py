@@ -1236,6 +1236,7 @@ try:
     from api.conditions import bp as cond_bp
     from api.expression import bp as expr_bp
     from api.admin import bp as admin_bp
+    from api.t_signal import bp as t_bp
     app.register_blueprint(backtest_bp)
     app.register_blueprint(ops_bp)
     app.register_blueprint(v2_bp)
@@ -1245,6 +1246,7 @@ try:
     app.register_blueprint(cond_bp)
     app.register_blueprint(expr_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(t_bp)
 except Exception as _bp_err:
     print(f'[data-service] blueprint registration failed: {_bp_err}')
 

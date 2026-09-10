@@ -3,7 +3,7 @@
     <div class="settings-grid">
 
       <!-- 1. 数据健康面板 -->
-      <section v-if="false" class="card">
+      <section v-if="userStore.isAdmin" class="card">
         <header class="card-head">
           <h3>数据健康</h3>
           <div class="head-actions">
@@ -56,7 +56,7 @@
       </section>
 
       <!-- 2. 数据管理 -->
-      <section v-if="false" class="card">
+      <section v-if="userStore.isAdmin" class="card">
         <header class="card-head"><h3>数据管理</h3></header>
 
         <div class="action-block">
@@ -326,7 +326,12 @@ function circuitLabel(state: string) {
   return state
 }
 
-onMounted(() => {})
+onMounted(() => {
+  if (userStore.isAdmin) {
+    loadHealth()
+    loadRecent()
+  }
+})
 onUnmounted(() => {
   if (pollTimer) window.clearTimeout(pollTimer)
 })

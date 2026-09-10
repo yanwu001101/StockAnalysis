@@ -26,15 +26,16 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const user = useUserStore()
   if (to.path === '/login') {
+    if (user.token && !user.hydrated) await user.hydrate()
     if (user.token && user.isAdmin) return '/dashboard'
     return true
   }
   if (!user.token) return '/login'
-  // role 不一定立刻知道(刷新页面瞬间);allow through, AdminLayout 再做硬校验
-  return true
+  if (!user.hydrated) await user.hydrate()
+  return user.isAdmin ? true : '/login'
 })
 
 export default router

@@ -29,9 +29,12 @@ SPOT_URL_REALTIME = "http://push2.eastmoney.com/api/qt/clist/get"
 SPOT_URL_DELAYED = "http://push2delay.eastmoney.com/api/qt/clist/get"
 DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 FFLOW_URL = "http://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
+KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 
 SPOT_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
 SPOT_FIELDS = "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f10,f15,f16,f17,f18,f20,f21,f23,f100"
+KLT_MAP = {"daily": 101, "weekly": 102, "monthly": 103}
+MIN_KLT_MAP = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60}
 
 
 def _spot_urls() -> list[str]:
@@ -97,6 +100,67 @@ class EastmoneySource(AbstractSource):
         if "market_cap" in df:
             df["market_cap_yi"] = df["market_cap"] / 1e8
         return df
+
+    # ---------- kline via push2his ----------
+    async def fetch_kline(self, code: str, period: str = "daily", count: int = 250) -> pd.DataFrame:
+        klt = KLT_MAP.get(period)
+        if not klt:
+            return pd.DataFrame()
+        return await self._fetch_push2his(code, klt=klt, count=count, date_col="trade_date", period=None)
+
+    async def fetch_minute_kline(
+        self, code: str, period: str = "5min", count: int = 240
+    ) -> pd.DataFrame:
+        klt = MIN_KLT_MAP.get(period)
+        if not klt:
+            return pd.DataFrame()
+        return await self._fetch_push2his(code, klt=klt, count=count, date_col="dt", period=period)
+
+    async def _fetch_push2his(
+        self, code: str, *, klt: int, count: int, date_col: str, period: str | None
+    ) -> pd.DataFrame:
+        params = {
+            "secid": _secid(code),
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": klt,
+            "fqt": 1,
+            "end": "20500101",
+            "lmt": count,
+            "_": str(int(random.random() * 1e13)),
+        }
+        obj = await http_client.get_json(KLINE_URL, params=params, source=self.name)
+        rows = ((obj or {}).get("data") or {}).get("klines") or []
+        if not rows:
+            return pd.DataFrame()
+        out = []
+        for line in rows:
+            parts = str(line).split(",")
+            if len(parts) < 7:
+                continue
+            row = {
+                "code": parser.normalize_code(code),
+                date_col: parts[0],
+                "open": parts[1],
+                "close": parts[2],
+                "high": parts[3],
+                "low": parts[4],
+                "volume": parts[5],
+                "amount": parts[6],
+            }
+            if period:
+                row["period"] = period
+            out.append(row)
+        df = pd.DataFrame(out)
+        if df.empty:
+            return df
+        for col in ("open", "close", "high", "low", "volume", "amount"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        if date_col == "trade_date":
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+        else:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        return df.dropna(subset=[date_col])
 
     # ---------- fundamental (业绩报表合并) ----------
     async def fetch_fundamental(self, code: str, periods: int = 8) -> pd.DataFrame:

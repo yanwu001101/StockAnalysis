@@ -50,6 +50,66 @@ def _meta_map() -> dict[str, dict]:
     return out
 
 
+def _top_codes(limit: int = 120) -> list[str]:
+    meta = _meta_map()
+    if meta:
+        return list(meta.keys())[:limit]
+    eng = db.get_engine()
+    if eng is None:
+        return []
+    with eng.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT code FROM stock_info "
+            "WHERE code IS NOT NULL ORDER BY market_cap DESC LIMIT :n"
+        ), {"n": limit}).fetchall()
+    return [str(r[0]).zfill(6) for r in rows]
+
+
+def _latest_date(table: str):
+    eng = db.get_engine()
+    if eng is None:
+        return None
+    with eng.connect() as conn:
+        row = conn.execute(text(f"SELECT MAX(trade_date) FROM {table}")).fetchone()
+    return row[0] if row else None
+
+
+def _needs_refresh(table: str, max_age_days: int) -> bool:
+    import datetime as dt
+    latest = _latest_date(table)
+    if latest is None:
+        return True
+    if hasattr(latest, "date"):
+        latest = latest.date()
+    return (dt.date.today() - latest).days > max_age_days
+
+
+def _warm_moneyflow(days: int, limit: int) -> None:
+    if not _needs_refresh("stock_moneyflow", max(2, days)):
+        return
+    try:
+        import asyncio
+        from pipelines import moneyflow as mf_pipe
+        codes = _top_codes(limit)
+        if codes:
+            asyncio.run(mf_pipe.run_batch(codes, days=max(days, 10)))
+    except Exception as e:
+        print(f"[moneyflow] warm moneyflow failed: {e}")
+
+
+def _warm_northbound(days: int, limit: int) -> None:
+    if not _needs_refresh("stock_northbound", max(7, days * 2)):
+        return
+    try:
+        import asyncio
+        from pipelines import northbound as nb_pipe
+        codes = _top_codes(limit)
+        if codes:
+            asyncio.run(nb_pipe.run_batch(codes, days=max(days, 30)))
+    except Exception as e:
+        print(f"[moneyflow] warm northbound failed: {e}")
+
+
 @bp.route("/main-rank")
 def main_rank():
     """Rank by main_net (主力净额) accumulated over the window.
@@ -62,6 +122,7 @@ def main_rank():
     eng = db.get_engine()
     if eng is None:
         return jsonify([])
+    _warm_moneyflow(days, min(max(limit * 4, 80), 240))
     order = "DESC" if direction == "inflow" else "ASC"
     with eng.connect() as conn:
         rows = conn.execute(text(
@@ -102,11 +163,11 @@ def northbound_rank():
     eng = db.get_engine()
     if eng is None:
         return jsonify([])
+    _warm_northbound(days, min(max(limit * 4, 80), 240))
     # Two simple JOINs against the per-code first/last trade_date pair —
     # avoids the implicit cross-join + CASE-WHEN MAX trick which is opaque
     # to the optimiser and forces a full scan.
-    with eng.connect() as conn:
-        rows = conn.execute(text(
+    query = (
             "SELECT t1.code, "
             "  (t1.hold_shares - t0.hold_shares) AS shares_diff, "
             "  t1.hold_shares AS last_shares, "
@@ -123,7 +184,18 @@ def northbound_rank():
             "JOIN stock_northbound t1 ON t1.code = m.code AND t1.trade_date = m.maxd "
             "WHERE t0.hold_shares IS NOT NULL AND t1.hold_shares IS NOT NULL "
             "ORDER BY shares_diff DESC LIMIT :n"
-        ), {"d": days, "n": limit}).fetchall()
+    )
+    with eng.connect() as conn:
+        rows = conn.execute(text(query), {"d": days, "n": limit}).fetchall()
+        stale = False
+        if not rows:
+            latest = conn.execute(text("SELECT MAX(trade_date) FROM stock_northbound")).scalar()
+            if latest:
+                stale = True
+                rows = conn.execute(text(query.replace(
+                    "trade_date >= (CURDATE() - INTERVAL :d DAY)",
+                    "trade_date >= (:latest - INTERVAL :d DAY) AND trade_date <= :latest"
+                )), {"d": days, "n": limit, "latest": latest}).fetchall()
     meta = _meta_map()
     out = []
     for r in rows:
@@ -140,6 +212,7 @@ def northbound_rank():
             "currentRatio": float(r[3] or 0),
             "firstDate": r[4].isoformat() if r[4] else None,
             "lastDate": r[5].isoformat() if r[5] else None,
+            "stale": stale,
         })
     return jsonify(out)
 

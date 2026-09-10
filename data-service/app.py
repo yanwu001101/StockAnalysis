@@ -108,12 +108,11 @@ def empty_spot_df() -> pd.DataFrame:
 
 def fetch_spot_from_db() -> pd.DataFrame:
     sql = """
-    WITH latest_fundamental AS (
-      SELECT code, MAX(report_date) AS report_date
-      FROM stock_fundamental
-      GROUP BY code
-    ),
-    ranked_kline AS (
+    WITH universe AS (
+      SELECT code FROM stock_info
+      UNION SELECT code FROM stock_fundamental
+      UNION SELECT code FROM stock_kline_daily
+    ), ranked_kline AS (
       SELECT d.code,
              d.close,
              d.pct_change,
@@ -124,8 +123,8 @@ def fetch_spot_from_db() -> pd.DataFrame:
       FROM stock_kline_daily d
       WHERE d.close IS NOT NULL
     )
-    SELECT f.code,
-           COALESCE(si.name, f.code) AS name,
+    SELECT u.code,
+           COALESCE(si.name, u.code) AS name,
            COALESCE(si.industry, '') AS industry,
            NULLIF(si.market_cap, 0) AS market_cap,
            COALESCE(k.close, 0) AS latest_price,
@@ -139,11 +138,9 @@ def fetch_spot_from_db() -> pd.DataFrame:
            ) AS pct_change,
            k.volume,
            k.amount
-    FROM latest_fundamental lf
-    JOIN stock_fundamental f
-      ON f.code = lf.code AND f.report_date = lf.report_date
-    LEFT JOIN stock_info si ON si.code = f.code
-    LEFT JOIN ranked_kline k ON k.code = f.code AND k.rn = 1
+    FROM universe u
+    LEFT JOIN stock_info si ON si.code = u.code
+    LEFT JOIN ranked_kline k ON k.code = u.code AND k.rn = 1
     """
     df = fetch_df(sql)
     if df is None or df.empty:
@@ -166,15 +163,34 @@ def fetch_spot_from_db() -> pd.DataFrame:
 def fetch_spot() -> pd.DataFrame:
     def _fetch():
         print("[data-service] Fetching market spot (eastmoney push2)...")
-        try:
-            df = eastmoney.fetch_all_spot()
+
+        def _accept(df):
+            """规范化并校验行数;达标返回 DataFrame,否则 None。"""
             n = 0 if df is None else len(df)
             if df is not None and "代码" in df.columns and n >= SPOT_MIN_ROWS:
                 df["代码"] = df["代码"].map(normalize_code)
                 if "涨跌幅" in df.columns:
                     df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
                 return df
-            print(f"[data-service] eastmoney spot incomplete ({n} rows); falling back to akshare")
+            return None
+
+        # 0) curl_cffi 指纹破甲实时源:push2delay 对A股实时且可翻满全市场 (~5900 行)
+        try:
+            import em_realtime
+            df = _accept(em_realtime.fetch_all_spot())
+            if df is not None:
+                print(f"[data-service] spot via em_realtime (curl_cffi push2delay): {len(df)} rows")
+                return df
+            print("[data-service] em_realtime spot incomplete; falling back to eastmoney aiohttp")
+        except Exception as e:
+            print(f"[data-service] em_realtime spot failed, fallback to eastmoney aiohttp: {e}")
+
+        # 1) 原 eastmoney aiohttp 源
+        try:
+            df = _accept(eastmoney.fetch_all_spot())
+            if df is not None:
+                return df
+            print("[data-service] eastmoney spot incomplete; falling back to akshare")
         except Exception as e:
             print(f"[data-service] eastmoney spot failed, fallback to akshare: {e}")
         try:
@@ -223,6 +239,45 @@ def fetch_spot() -> pd.DataFrame:
         return fresh
 
     return cached_spot if cached_spot is not None else empty_spot_df()
+
+
+def upsert_stock_info_from_spot(df: pd.DataFrame) -> int:
+    if df is None or df.empty or "代码" not in df.columns:
+        return 0
+    try:
+        import db
+        from sqlalchemy import text
+        eng = db.get_engine()
+        if eng is None:
+            return 0
+        rows = []
+        for _, r in df.iterrows():
+            code = normalize_code(r.get("代码"))
+            if not code:
+                continue
+            name = str(r.get("名称") or code)
+            rows.append({
+                "code": code,
+                "name": name[:50],
+                "industry": str(r.get("行业") or "")[:50],
+                "market_cap": safe_number(r.get("总市值_亿"), 2, 0),
+                "latest_price": safe_number(r.get("最新价"), 2, 0),
+            })
+        if not rows:
+            return 0
+        sql = text(
+            "INSERT INTO stock_info (code, name, industry, market_cap, latest_price) "
+            "VALUES (:code, :name, :industry, :market_cap, :latest_price) "
+            "ON DUPLICATE KEY UPDATE "
+            "name=VALUES(name), industry=VALUES(industry), "
+            "market_cap=VALUES(market_cap), latest_price=VALUES(latest_price)"
+        )
+        with eng.begin() as conn:
+            conn.execute(sql, rows)
+        return len(rows)
+    except Exception as e:
+        print(f"[data-service] upsert stock_info from spot failed: {e}")
+        return 0
 
 
 def report_dates(quarters=10) -> list:
@@ -428,6 +483,19 @@ def fetch_stock_weekly(code: str, days: int = 900, adjust: str = "qfq") -> pd.Da
     return cached(key, 600, _fetch)
 
 
+def fetch_stock_hourly(code: str, count: int = 250, adjust: str = "qfq") -> pd.DataFrame:
+    key = f"hourly:{code}:{count}:{adjust}"
+
+    def _fetch():
+        try:
+            return eastmoney.fetch_em_kline(code, klt=60, count=count, adjust=adjust)
+        except Exception as e:
+            print(f"[data-service] eastmoney hourly kline {code} failed: {e}")
+            return pd.DataFrame()
+
+    return cached(key, 60, _fetch)
+
+
 def fetch_weekly_trend(code: str) -> dict:
     df = fetch_stock_weekly(code)
     if df is None or df.empty or "收盘" not in df:
@@ -631,7 +699,14 @@ def stock_detail(code):
 
         if row.empty:
             try:
-                single = eastmoney.fetch_single_quote(code)
+                single = None
+                try:
+                    import em_realtime
+                    single = em_realtime.fetch_single_quote(code)  # push2 破甲实时单股
+                except Exception:
+                    single = None
+                if single is None or single.empty:
+                    single = eastmoney.fetch_single_quote(code)
                 if single is not None and not single.empty:
                     row = single
             except Exception as _e:
@@ -698,8 +773,12 @@ def stock_kline(code):
         if adjust not in ("qfq", "hfq", "none"):
             adjust = "qfq"
 
-        df = fetch_stock_daily(code, days, adjust) if period == "daily" \
-            else fetch_stock_weekly(code, days, adjust)
+        if period in ("hourly", "60min", "60m", "1h"):
+            df = fetch_stock_hourly(code, days, adjust)
+        elif period == "weekly":
+            df = fetch_stock_weekly(code, days, adjust)
+        else:
+            df = fetch_stock_daily(code, days, adjust)
         if df is None or df.empty:
             return jsonify([])
 
@@ -880,8 +959,65 @@ def sector_rotation():
 def northbound_flow():
     try:
         days = int(request.args.get("days", 30))
-        # Placeholder - northbound flow data
-        return jsonify([])
+        eng = None
+        try:
+            import db
+            eng = db.get_engine()
+        except Exception:
+            eng = None
+        if eng is None:
+            return jsonify([])
+        from sqlalchemy import text
+
+        def _query_rows():
+            with eng.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT trade_date, SUM(net_buy) AS net_buy, "
+                    "SUM(hold_market_cap) AS hold_market_cap "
+                    "FROM stock_northbound "
+                    "WHERE trade_date >= (CURDATE() - INTERVAL :d DAY) "
+                    "GROUP BY trade_date ORDER BY trade_date ASC"
+                ), {"d": days}).fetchall()
+                if rows:
+                    return rows, False
+                latest = conn.execute(text("SELECT MAX(trade_date) FROM stock_northbound")).scalar()
+                if not latest:
+                    return [], False
+                rows = conn.execute(text(
+                    "SELECT trade_date, SUM(net_buy) AS net_buy, "
+                    "SUM(hold_market_cap) AS hold_market_cap "
+                    "FROM stock_northbound "
+                    "WHERE trade_date >= (:latest - INTERVAL :d DAY) AND trade_date <= :latest "
+                    "GROUP BY trade_date ORDER BY trade_date ASC"
+                ), {"d": days, "latest": latest}).fetchall()
+                return rows, True
+
+        rows, stale = _query_rows()
+        if not rows:
+            try:
+                import asyncio
+                from pipelines import northbound as nb_pipe
+                spot = fetch_spot()
+                codes = []
+                if spot is not None and not spot.empty and "代码" in spot.columns:
+                    sort_col = "总市值_亿" if "总市值_亿" in spot.columns else "总市值"
+                    if sort_col in spot.columns:
+                        codes = (
+                            spot.sort_values(sort_col, ascending=False, na_position="last")
+                            .head(120)["代码"].astype(str).str.zfill(6).tolist()
+                        )
+                if codes:
+                    asyncio.run(nb_pipe.run_batch(codes, days=max(days, 30)))
+                    rows, stale = _query_rows()
+            except Exception as warm_err:
+                print(f"[data-service] northbound-flow warm failed: {warm_err}")
+
+        return jsonify([{
+            "date": r[0].isoformat() if r[0] else None,
+            "netBuy": safe_number(r[1], 2, 0),
+            "holdMarketCap": safe_number(r[2], 2, 0),
+            "stale": stale,
+        } for r in rows])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -960,7 +1096,7 @@ def market_indices():
 def _spot_sorted_list(ascending: bool, limit: int, key_col: str = "涨跌幅") -> list:
     spot = fetch_spot()
     if spot is None or spot.empty or key_col not in spot.columns:
-        return []
+        return _spot_sorted_list_from_db(ascending, limit, key_col)
     df = spot.copy()
     df[key_col] = pd.to_numeric(df[key_col], errors="coerce")
     df = df.dropna(subset=[key_col])
@@ -979,6 +1115,57 @@ def _spot_sorted_list(ascending: bool, limit: int, key_col: str = "涨跌幅") -
             "marketCap": safe_number(r.get("总市值_亿"), 0, 0),
         })
     return out
+
+
+def _spot_sorted_list_from_db(ascending: bool, limit: int, key_col: str = "涨跌幅") -> list:
+    try:
+        import db
+        from sqlalchemy import text
+        eng = db.get_engine()
+        if eng is None:
+            return []
+        metric = "amount" if key_col == "成交额" else "pct_change" if key_col == "涨跌幅" else "volume"
+        order = "ASC" if ascending else "DESC"
+        with eng.connect() as conn:
+            latest = conn.execute(text(
+                f"SELECT MAX(trade_date) FROM stock_kline_daily WHERE {metric} IS NOT NULL"
+            )).scalar()
+            if latest is None and metric == "amount":
+                metric = "volume"
+                latest = conn.execute(text(
+                    "SELECT MAX(trade_date) FROM stock_kline_daily WHERE volume IS NOT NULL"
+                )).scalar()
+            if latest is None:
+                return []
+            rows = conn.execute(text(
+                f"SELECT k.code, COALESCE(si.name, k.code) AS name, COALESCE(si.industry, '') AS industry, "
+                f"k.close, "
+                f"CASE WHEN prev.close IS NOT NULL AND prev.close <> 0 "
+                f"THEN (k.close - prev.close) / prev.close * 100 ELSE k.pct_change END AS pct_change, "
+                f"k.volume, k.amount, si.market_cap "
+                f"FROM stock_kline_daily k "
+                f"LEFT JOIN stock_kline_daily prev ON prev.code = k.code AND prev.trade_date = ("
+                f"  SELECT MAX(p.trade_date) FROM stock_kline_daily p "
+                f"  WHERE p.code = k.code AND p.trade_date < k.trade_date"
+                f") "
+                f"LEFT JOIN stock_info si ON si.code = k.code "
+                f"WHERE k.trade_date = :latest AND k.{metric} IS NOT NULL "
+                f"ORDER BY k.{metric} {order} LIMIT :n"
+            ), {"n": limit, "latest": latest}).fetchall()
+        return [{
+            "code": str(r[0]).zfill(6),
+            "name": str(r[1] or ""),
+            "industry": str(r[2] or ""),
+            "price": safe_number(r[3], 2, 0),
+            "changePercent": safe_number(r[4], 2, 0),
+            "volume": int(safe_number(r[5], None, 0)),
+            "amount": safe_number(safe_number(r[6], None, 0) / 1e8, 2, 0),
+            "turnover": 0,
+            "marketCap": safe_number(r[7], 0, 0),
+        } for r in rows]
+    except Exception as e:
+        print(f"[data-service] spot sorted DB fallback failed: {e}")
+        return []
 
 
 @app.route("/api/market/gainers")
@@ -1003,8 +1190,8 @@ def market_losers():
 def market_most_active():
     try:
         limit = int(request.args.get("limit", 20))
-        key_col = "成交额" if "成交额" in fetch_spot().columns else "成交量"
-        return jsonify(_spot_sorted_list(ascending=False, limit=limit, key_col=key_col))
+        db_rows = _spot_sorted_list_from_db(ascending=False, limit=limit, key_col="成交额")
+        return jsonify(db_rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

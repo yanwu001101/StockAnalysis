@@ -6,6 +6,7 @@ gunicorn>=21.2.0
 # --- HTTP clients ---
 httpx[http2]>=0.27.0           # async + HTTP/2, preferred client
 aiohttp>=3.9.0                 # legacy paths in eastmoney.py
+curl_cffi>=0.7.0               # TLS/JA3 impersonation — breaks push2 fingerprint anti-bot (em_realtime.py)
 fake-useragent>=1.4.0          # UA pool
 
 # --- Browser automation (for JS-encrypted endpoints e.g. 同花顺 hexin-v) ---

@@ -89,9 +89,29 @@ public class DataService {
         return cached("tsignal:" + code, "/api/t/stock/" + code, 15);
     }
 
+    /** 带持仓的做 T:拼 query 转发,实时计算不缓存(避免串不同持仓/用户)。 */
+    public JSONObject getTSignalWithPosition(String code, Double shares, Double avgCost, Double available) {
+        if (shares == null && avgCost == null && available == null) {
+            return getTSignal(code);
+        }
+        StringBuilder path = new StringBuilder("/api/t/stock/").append(code);
+        boolean first = true;
+        if (shares != null)    { path.append(first ? "?" : "&").append("shares=").append(shares); first = false; }
+        if (avgCost != null)   { path.append(first ? "?" : "&").append("avg_cost=").append(avgCost); first = false; }
+        if (available != null) { path.append(first ? "?" : "&").append("available=").append(available); }
+        return getObjNoCache(path.toString());
+    }
+
     public JSONArray getTSignalBatch(java.util.List<String> codes) {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("codes", codes);
+        return postArr("/api/t/batch", body);
+    }
+
+    /** 批量带持仓:positions=[{code,shares,avg_cost,available}] 透传。 */
+    public JSONArray getTSignalBatchPositions(java.util.List<?> positions) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("positions", positions);
         return postArr("/api/t/batch", body);
     }
 

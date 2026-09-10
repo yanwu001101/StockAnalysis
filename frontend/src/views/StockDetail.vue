@@ -46,6 +46,10 @@
         </div>
         <span class="t-time" v-if="tSignal.data_time">{{ tSignal.data_time }}</span>
       </div>
+
+      <!-- 分时图 + 买卖区 + 支撑压力 + 成本线 -->
+      <IntradayTChart v-if="tSignal.trend && tSignal.trend.length" :signal="tSignal" :height="300" />
+
       <div class="t-metrics">
         <div class="t-metric"><span>现价</span><b>{{ tSignal.price }}</b></div>
         <div class="t-metric"><span>分时均价</span><b>{{ tSignal.vwap }}</b></div>
@@ -53,11 +57,58 @@
         <div class="t-metric"><span>偏离均价</span><b>{{ tSignal.vwap_dev != null ? (tSignal.vwap_dev > 0 ? '+' : '') + tSignal.vwap_dev + '%' : '—' }}</b></div>
         <div class="t-metric"><span>日内振幅</span><b>{{ tSignal.amplitude }}%</b></div>
         <div class="t-metric"><span>日内高/低</span><b>{{ tSignal.day_high }} / {{ tSignal.day_low }}</b></div>
+        <div class="t-metric" v-if="tSignal.active_buy_ratio != null"><span>主动买占比</span><b>{{ (tSignal.active_buy_ratio * 100).toFixed(0) }}%</b></div>
+        <div class="t-metric" v-if="pvLabel"><span>量价</span><b>{{ pvLabel }}</b></div>
+        <div class="t-metric" v-if="tSignal.index_ctx"><span>大盘</span><b :class="tSignal.index_ctx.pct_change >= 0 ? 'up' : 'down'">{{ tSignal.index_ctx.name }} {{ tSignal.index_ctx.pct_change > 0 ? '+' : '' }}{{ tSignal.index_ctx.pct_change }}%</b></div>
       </div>
+
+      <!-- 四因子评分(去魔法数字,可解释) -->
+      <div class="t-factors" v-if="tSignal.strength > 0">
+        <div class="t-factor" v-for="f in factorList" :key="f.key">
+          <span class="t-factor-label">{{ f.label }}</span>
+          <el-progress :percentage="f.val" :stroke-width="6" :show-text="false" :color="f.color" />
+          <b>{{ f.val }}</b>
+        </div>
+      </div>
+
       <div class="t-zones" v-if="tSignal.buy_zone || tSignal.sell_zone">
         <div class="t-zone buy" v-if="tSignal.buy_zone">建议低吸区 <b>{{ tSignal.buy_zone[0] }} ~ {{ tSignal.buy_zone[1] }}</b></div>
         <div class="t-zone sell" v-if="tSignal.sell_zone">建议高抛区 <b>{{ tSignal.sell_zone[0] }} ~ {{ tSignal.sell_zone[1] }}</b></div>
       </div>
+
+      <!-- 结合持仓的真 T 建议 -->
+      <div class="t-position-plan" v-if="tSignal.has_position">
+        <div class="tp-head"><el-icon><Wallet /></el-icon> 结合持仓做 T</div>
+        <div class="tp-body" v-if="tSignal.t_shares > 0">
+          <template v-if="tSignal.t_mode === 'reverse_t'">
+            反T·先高抛:卖出可用底仓 <b>{{ tSignal.t_shares }}</b> 股,回补参考 <b>{{ tSignal.cover_price }}</b>,预计兑现价差 <b class="up">{{ tSignal.est_profit }}</b> 元
+          </template>
+          <template v-else-if="tSignal.t_mode === 'positive_t_add'">
+            正T·补仓降本:补 <b>{{ tSignal.t_shares }}</b> 股,摊薄成本至 <b>{{ tSignal.new_avg_cost }}</b>(降 <b class="down">{{ tSignal.cost_impact != null ? Math.abs(tSignal.cost_impact).toFixed(2) : '' }}</b>)
+          </template>
+          <template v-else-if="tSignal.t_mode === 'positive_t_roundtrip'">
+            正T·日内闭环:低吸买入 <b>{{ tSignal.t_shares }}</b> 股,反弹至 <b>{{ tSignal.cover_price }}</b> 卖出等量可用底仓
+          </template>
+        </div>
+        <div class="tp-body warn" v-else-if="tSignal.t_mode === 'blocked_no_available'">
+          有底仓但无可用(可卖)份额,T+1 当日不可高抛
+        </div>
+        <div class="tp-pnl" v-if="tSignal.position">
+          持仓 {{ tSignal.position.shares }} 股 · 成本 {{ tSignal.position.avg_cost }} · 浮盈
+          <span :class="(tSignal.position.pnl_pct || 0) >= 0 ? 'up' : 'down'">{{ tSignal.position.pnl_pct != null ? (tSignal.position.pnl_pct > 0 ? '+' : '') + tSignal.position.pnl_pct + '%' : '—' }}</span>
+        </div>
+      </div>
+
+      <!-- 持仓输入:填成本后按底仓实时重算真 T -->
+      <div class="t-pos-input">
+        <span class="tpi-label">持仓做 T:</span>
+        <el-input-number v-model="posShares" :min="0" :step="100" :controls="false" size="small" placeholder="持仓股数" />
+        <el-input-number v-model="posCost" :min="0" :precision="2" :step="0.01" :controls="false" size="small" placeholder="成本价" />
+        <el-input-number v-model="posAvail" :min="0" :step="100" :controls="false" size="small" placeholder="可用股数" />
+        <el-button type="primary" size="small" @click="recalcWithPosition">按持仓重算</el-button>
+        <el-button v-if="tSignal.has_position" text size="small" @click="clearPosition">清除</el-button>
+      </div>
+
       <ul class="t-reasons">
         <li v-for="r in tSignal.reasons" :key="r">{{ r }}</li>
       </ul>
@@ -240,8 +291,9 @@ import KLineChart from '@/components/charts/KLineChart.vue'
 import RadarChart from '@/components/charts/RadarChart.vue'
 import ScoreGauge from '@/components/charts/ScoreGauge.vue'
 import PredictionPanel from '@/components/charts/PredictionPanel.vue'
-import { Star, StarFilled, Aim, Warning } from '@element-plus/icons-vue'
-import { getTSignal, type TSignal } from '@/api/t'
+import IntradayTChart from '@/components/charts/IntradayTChart.vue'
+import { Star, StarFilled, Aim, Warning, Wallet } from '@element-plus/icons-vue'
+import { getTSignal, PV_LABEL, type TSignal } from '@/api/t'
 import type { KLineData, PredictionResult } from '@/types'
 import { useSettingsStore } from '@/stores/settings'
 import { formatNumber } from '@/utils/format'
@@ -264,6 +316,21 @@ const tTagType = computed(() => {
   const a = tSignal.value?.action
   return a === 'positive_t' ? 'danger' : a === 'negative_t' ? 'success' : 'info'
 })
+const pvLabel = computed(() => PV_LABEL[tSignal.value?.pv_pattern || ''] || '')
+const factorList = computed(() => {
+  const s = tSignal.value?.subscores
+  if (!s) return []
+  return [
+    { key: 'position', label: '位置', val: s.position, color: '#00D4FF' },
+    { key: 'volume', label: '量能', val: s.volume, color: '#2AE8A4' },
+    { key: 'momentum', label: '动量', val: s.momentum, color: '#FFC312' },
+    { key: 'index', label: '大盘', val: s.index, color: '#A78BFA' },
+  ]
+})
+// 持仓做 T 输入(填成本后按底仓重算真 T)
+const posShares = ref<number | undefined>()
+const posCost = ref<number | undefined>()
+const posAvail = ref<number | undefined>()
 
 // F10 state
 const f10Tab = ref<'profile' | 'holders' | 'dividend' | 'peers'>('profile')
@@ -371,10 +438,28 @@ async function loadTSignal() {
   const c = code.value
   if (!c) return
   try {
-    tSignal.value = await getTSignal(c)
+    const pos = (posShares.value && posCost.value)
+      ? { shares: posShares.value, avg_cost: posCost.value, available: posAvail.value ?? posShares.value }
+      : undefined
+    tSignal.value = await getTSignal(c, pos)
   } catch {
     tSignal.value = null
   }
+}
+
+function recalcWithPosition() {
+  if (!posShares.value || !posCost.value) {
+    ElMessage.warning('请填写持仓数量与成本价')
+    return
+  }
+  loadTSignal()
+}
+
+function clearPosition() {
+  posShares.value = undefined
+  posCost.value = undefined
+  posAvail.value = undefined
+  loadTSignal()
 }
 
 async function loadF10() {
@@ -388,7 +473,13 @@ async function loadF10() {
   }
 }
 
-watch(() => code.value, loadData)
+watch(() => code.value, () => {
+  // 切换股票时清空持仓输入,避免把上一只的持仓成本带到新股票(定时刷新则保留)
+  posShares.value = undefined
+  posCost.value = undefined
+  posAvail.value = undefined
+  loadData()
+})
 
 // Re-fetch only the K-line when the user changes period or adjustment. Debounce
 // so rapid clicks (日/周/前/后/不) don't fire three overlapping requests.
@@ -432,6 +523,22 @@ onBeforeUnmount(() => abortCtrl?.abort())
 .t-reasons li { color: var(--text-3); font-size: 13px; line-height: 1.7; }
 .t-risks { display: flex; align-items: center; gap: 6px; color: #e6a23c; font-size: 13px; margin-bottom: 8px; }
 .t-disclaimer { color: var(--text-3); font-size: 12px; font-style: italic; }
+.t-factors { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
+.t-factor { display: flex; align-items: center; gap: 8px; min-width: 150px; flex: 1; }
+.t-factor-label { color: var(--text-3); font-size: 12px; width: 28px; flex-shrink: 0; }
+.t-factor :deep(.el-progress) { flex: 1; }
+.t-factor b { color: var(--text); font-size: 13px; width: 24px; text-align: right; flex-shrink: 0; }
+.t-position-plan { background: rgba(167, 139, 250, 0.08); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
+.tp-head { display: flex; align-items: center; gap: 6px; color: #A78BFA; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.tp-body { color: var(--text); font-size: 14px; line-height: 1.6; }
+.tp-body.warn { color: #e6a23c; }
+.tp-body b { font-size: 15px; margin: 0 2px; }
+.tp-pnl { color: var(--text-3); font-size: 12px; margin-top: 6px; }
+.t-pos-input { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.t-pos-input .tpi-label { color: var(--text-3); font-size: 13px; }
+.t-pos-input :deep(.el-input-number) { width: 110px; }
+.t-metric b.up, .tp-body b.up, .tp-pnl .up { color: #FF4757; }
+.t-metric b.down, .tp-body b.down, .tp-pnl .down { color: #2AE8A4; }
 .kline-controls {
   display: flex;
   gap: 8px;

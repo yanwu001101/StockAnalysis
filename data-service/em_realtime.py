@@ -76,7 +76,39 @@ def _spot_hosts() -> list[str]:
 
 def secid(code: str) -> str:
     c = str(code).zfill(6)
+    if c.startswith("92"):        # 北交所新代码段 92xxxx 属深圳体系,前缀 0.
+        return f"0.{c}"
     return f"1.{c}" if c[0] in ("6", "9") else f"0.{c}"
+
+
+# 指数 secid 不能由 secid() 推导(指数编码固定),硬映射
+INDEX_SECID = {
+    "sh": "1.000001",     # 上证指数
+    "sz": "0.399001",     # 深证成指
+    "cyb": "0.399006",    # 创业板指
+    "kc": "1.000688",     # 科创 50
+    "hs300": "1.000300",  # 沪深 300
+}
+
+
+def board_of(code: str) -> str:
+    """代码前缀 → 板块:kc 科创 / bj 北交所 / cyb 创业板 / sh 沪主板 / sz 深主板。"""
+    c = str(code).zfill(6)
+    if c.startswith("688"):
+        return "kc"
+    if c[0] in ("4", "8") or c.startswith("920"):
+        return "bj"
+    if c[0] == "3":
+        return "cyb"
+    if c[0] == "6":
+        return "sh"
+    return "sz"
+
+
+def benchmark_key(code: str) -> str:
+    """个股 → 基准指数 key(用于大盘闸门)。北交所无独立分时,退深证成指。"""
+    b = board_of(code)
+    return "sz" if b == "bj" else b
 
 
 def _new_session() -> creq.Session:
@@ -213,17 +245,15 @@ def fetch_single_quote(code: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def fetch_trends(code: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
-    """东财当日分时(trends2)。做 T 判断日内位置的核心数据。
+def _trends2(secid_str: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
+    """底层分时(trends2)拉取。secid_str 形如 '1.600519' / '1.000001'(指数)。
 
-    返回 (df, meta):
-      df 列 = 时间, 价, 量, 均价(逐分钟,实时到当前);
-      meta = {code, name, prev_close, day_open}。
-    push2his 分时接口对小请求量宽松,单只票单请求 → 无频控。
+    返回 (df, meta):df 列=[时间,价,量,均价];meta={name, prev_close, day_open}。
+    push2his 分时接口对小请求量宽松,单请求 → 无频控。
     """
     session = _new_session()
     params = {
-        "secid": secid(code),
+        "secid": secid_str,
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f17",
         "fields2": "f51,f53,f56,f58",   # 时间, 成交价, 成交量, 均价
@@ -235,7 +265,7 @@ def fetch_trends(code: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
         try:
             d = (session.get(url, params=params).json().get("data") or {})
         except Exception as e:
-            log.debug("fetch_trends %s host=%s 失败: %s", code, host, e)
+            log.debug("_trends2 %s host=%s 失败: %s", secid_str, host, e)
             continue
         trends = d.get("trends") or []
         if not trends:
@@ -252,13 +282,77 @@ def fetch_trends(code: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             df = df.dropna(subset=["价"])
         meta = {
-            "code": str(code).zfill(6),
             "name": d.get("name"),
             "prev_close": pd.to_numeric(d.get("preClose"), errors="coerce"),
             "day_open": float(df["价"].iloc[0]) if not df.empty else None,
         }
         return df, meta
     return pd.DataFrame(), {}
+
+
+def fetch_trends(code: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
+    """东财当日分时(trends2)。做 T 判断日内位置的核心数据。
+
+    返回 (df, meta):
+      df 列 = 时间, 价, 量, 均价(逐分钟,实时到当前);
+      meta = {code, name, prev_close, day_open}。
+    """
+    df, meta = _trends2(secid(code), ndays)
+    meta["code"] = str(code).zfill(6)
+    return df, meta
+
+
+def fetch_index_trends(index_key: str, ndays: int = 1) -> tuple[pd.DataFrame, dict]:
+    """指数当日分时。index_key ∈ INDEX_SECID(sh/sz/cyb/kc/hs300)。
+
+    返回 (df, meta):df 列同 fetch_trends;meta 增加 key。
+    """
+    sid = INDEX_SECID.get(index_key)
+    if not sid:
+        return pd.DataFrame(), {}
+    df, meta = _trends2(sid, ndays)
+    meta["key"] = index_key
+    return df, meta
+
+
+def fetch_details(code: str, count: int = 240) -> pd.DataFrame:
+    """逐笔成交明细(push2 details)。做 T 量能分析(主动买卖/大单)的核心数据。
+
+    df 列 = [时间, 价, 量(手), 笔数, 性质];性质 1=主动买 2=主动卖 4=中性。
+    pos=-count 取最近 count 笔;量单位为手(A 股 1 手=100 股),金额≈价*量*100。
+    """
+    session = _new_session()
+    params = {
+        "secid": secid(code),
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        "fields1": "f1,f2,f3,f4,f5",
+        "fields2": "f51,f52,f53,f54,f55",   # 时间, 价, 量, 笔数, 性质
+        "pos": f"-{int(count)}",
+        "_": str(int(time.time() * 1000)),
+    }
+    for host in ("push2", "push2his"):
+        url = f"https://{host}.eastmoney.com/api/qt/stock/details/get"
+        try:
+            d = (session.get(url, params=params).json().get("data") or {})
+        except Exception as e:
+            log.debug("fetch_details %s host=%s 失败: %s", code, host, e)
+            continue
+        details = d.get("details") or []
+        if not details:
+            continue
+        rows = []
+        for line in details:
+            p = str(line).split(",")
+            if len(p) < 5:
+                continue
+            rows.append({"时间": p[0], "价": p[1], "量": p[2], "笔数": p[3], "性质": p[4]})
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            for c in ("价", "量", "笔数", "性质"):
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            df = df.dropna(subset=["价", "量"])
+        return df
+    return pd.DataFrame()
 
 
 if __name__ == "__main__":

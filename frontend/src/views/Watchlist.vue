@@ -47,12 +47,14 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="做T" width="88" align="center">
+        <el-table-column label="做T" width="130" align="center">
           <template #default="{ row }">
-            <el-tag v-if="tOf(row.code) && tOf(row.code).action !== 'no_data' && tOf(row.code).action !== 'wait'"
-                    :type="tOf(row.code).action === 'positive_t' ? 'danger' : 'success'" size="small" effect="plain">
-              {{ tOf(row.code).action_label }}
-            </el-tag>
+            <el-tooltip v-if="tOf(row.code) && tOf(row.code).action !== 'no_data' && tOf(row.code).action !== 'wait'"
+                        :content="(tOf(row.code).reasons || []).join('；')" placement="top" :show-after="200">
+              <el-tag :type="tOf(row.code).action === 'positive_t' ? 'danger' : 'success'" size="small" effect="plain">
+                {{ tOf(row.code).action_label }} · {{ tOf(row.code).strength }}
+              </el-tag>
+            </el-tooltip>
             <span v-else style="color: var(--text-3)">—</span>
           </template>
         </el-table-column>

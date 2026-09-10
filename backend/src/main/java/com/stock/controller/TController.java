@@ -25,12 +25,19 @@ public class TController {
     }
 
     @GetMapping("/stock/{code}")
-    public ApiResponse<?> stock(@PathVariable String code) {
-        return ApiResponse.ok(dataService.getTSignal(code));
+    public ApiResponse<?> stock(@PathVariable String code,
+                                @RequestParam(required = false) Double shares,
+                                @RequestParam(name = "avg_cost", required = false) Double avgCost,
+                                @RequestParam(required = false) Double available) {
+        return ApiResponse.ok(dataService.getTSignalWithPosition(code, shares, avgCost, available));
     }
 
     @PostMapping("/batch")
     public ApiResponse<?> batch(@RequestBody Map<String, Object> body) {
+        Object positions = body == null ? null : body.get("positions");
+        if (positions instanceof List<?> && !((List<?>) positions).isEmpty()) {
+            return ApiResponse.ok(dataService.getTSignalBatchPositions((List<?>) positions));
+        }
         List<String> codes = new ArrayList<>();
         Object raw = body == null ? null : body.get("codes");
         if (raw instanceof List<?>) {

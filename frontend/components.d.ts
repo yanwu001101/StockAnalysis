@@ -40,6 +40,7 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     Header: typeof import('./src/components/layout/Header.vue')['default']
+    IntradayTChart: typeof import('./src/components/charts/IntradayTChart.vue')['default']
     KLineChart: typeof import('./src/components/charts/KLineChart.vue')['default']
     PredictionPanel: typeof import('./src/components/charts/PredictionPanel.vue')['default']
     RadarChart: typeof import('./src/components/charts/RadarChart.vue')['default']

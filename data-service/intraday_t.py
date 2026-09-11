@@ -30,6 +30,11 @@ try:
 except Exception:  # pragma: no cover - 缓存不可用时降级为无缓存
     cache = None
 
+try:
+    from sector_data import fetch_sector_rotation_from_db
+except Exception:  # pragma: no cover - 板块数据不可用时降级
+    fetch_sector_rotation_from_db = None
+
 log = logging.getLogger(__name__)
 
 DISCLAIMER = "仅供研究参考,不构成投资建议;做 T 盈亏自负"
@@ -373,6 +378,54 @@ def get_index_ctx(keys) -> dict:
     return out
 
 
+def _build_sector_ctx():
+    """全市场板块强弱 {行业: {change, up_ratio, rank_pct}}。复用 app 缓存的 spot(冷则 None)。"""
+    if fetch_sector_rotation_from_db is None or cache is None:
+        return None
+    spot = cache.get("spot")
+    if spot is None or getattr(spot, "empty", True):
+        return None
+    try:
+        sectors = fetch_sector_rotation_from_db(spot)
+    except Exception as e:
+        log.debug("板块数据计算失败: %s", e)
+        return None
+    if not sectors:
+        return None
+    changes = sorted(s["change"] for s in sectors)
+    n = len(changes)
+    out = {}
+    for s in sectors:
+        rank_pct = sum(1 for c in changes if c <= s["change"]) / n
+        out[s["name"]] = {"change": s["change"], "up_ratio": s.get("upRatio", 0.0),
+                          "rank_pct": round(rank_pct, 3)}
+    return out
+
+
+def get_sector_ctx() -> dict:
+    """带缓存(120s)的板块强弱表;不可用(无 DB/spot 冷)时返回 {}。"""
+    if cache is None:
+        return _build_sector_ctx() or {}
+    try:
+        return cache.get_or_fetch("t:sectors", 120, _build_sector_ctx) or {}
+    except Exception:
+        return {}
+
+
+def _stock_industry(code):
+    """从 app 缓存的 spot 取个股所属行业(不额外查库/请求);无则 None。"""
+    if cache is None:
+        return None
+    spot = cache.get("spot")
+    if spot is None or getattr(spot, "empty", True) or "行业" not in getattr(spot, "columns", []):
+        return None
+    hit = spot[spot["代码"] == str(code).zfill(6)]
+    if hit.empty:
+        return None
+    ind = hit.iloc[0].get("行业")
+    return str(ind) if ind and str(ind) not in ("", "-", "nan", "其他") else None
+
+
 def _env_gate(ictx, direction):
     """大盘对做 T 方向的调节:返回 (sizing 乘子, 风险语)。只影响 T 股数与降级。"""
     risks = []
@@ -538,7 +591,7 @@ def _score_momentum(direction, tf: TrendFeatures):
 
 def _score_index(direction, ictx, sector_adj=0):
     if not ictx:
-        return 50.0
+        return _clamp(50.0 + sector_adj, 0, 100)
     strong = ictx.get("regime") == "strong"
     weak = ictx.get("regime") == "weak"
     sl = ictx.get("slope_30m", 0) or 0
@@ -703,12 +756,28 @@ def signal(code, shares=None, avg_cost=None, available=None,
     subs = {"position": 0, "volume": 0, "momentum": 0, "index": 0}
     strength = 0
     gate_mult = 1.0
+    sector_note = None
     if direction != "wait":
+        # 板块闸门(仅 full):所属板块强势 → 低吸加分/高抛减分,弱势反之
+        sector_adj = 0
+        if detail_level == "full":
+            ind = _stock_industry(code)
+            info = get_sector_ctx().get(ind) if ind else None
+            if info:
+                rp = info["rank_pct"]
+                if rp >= 0.7:
+                    sector_adj = 10 if direction == "positive_t" else -10
+                    sector_note = f"所属板块「{ind}」今日强势(板块涨幅居前 {round((1 - rp) * 100)}%)"
+                elif rp <= 0.3:
+                    sector_adj = -10 if direction == "positive_t" else 10
+                    sector_note = f"所属板块「{ind}」今日弱势(板块涨幅居后 {round(rp * 100)}%)"
+                else:
+                    sector_note = f"所属板块「{ind}」强弱中性"
         subs = {
             "position": round(_score_position(direction, tf)),
             "volume": round(_score_volume(direction, vf)),
             "momentum": round(_score_momentum(direction, tf)),
-            "index": round(_score_index(direction, ictx)),
+            "index": round(_score_index(direction, ictx, sector_adj)),
         }
         w = dict(WEIGHTS)
         if vf.degraded:
@@ -742,6 +811,8 @@ def signal(code, shares=None, avg_cost=None, available=None,
 
     if direction != "wait":
         reasons += _reasons(direction, tf, vf, ictx, pos, plan, subs)
+        if sector_note:
+            reasons.append(sector_note)
     elif not reasons:
         reasons.append(f"现价处日内中位(位置 {tf.pos_pctile*100:.0f}%),做 T 信号不明确")
 

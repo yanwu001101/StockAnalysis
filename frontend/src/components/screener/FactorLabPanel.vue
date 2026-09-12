@@ -52,17 +52,31 @@
     </div>
 
     <div class="result-area" v-if="result">
-      <AppCard title="检验结论">
-        <div class="verdict" :class="verdictCls">
-          <el-icon :size="20"><component :is="verdictIcon" /></el-icon>
-          <div class="verdict-text">
-            <div class="verdict-main">{{ verdictText }}</div>
-            <div class="verdict-sub">
-              RankIC 均值 {{ fmtPct(result.ic_summary.mean) }} · ICIR {{ result.ic_summary.icir }} ·
-              样本 {{ result.ic_summary.n }} 期 · 覆盖 {{ result.codes_analyzed }} 只 ·
-              多空年化差 {{ fmtPct(result.top_minus_bottom_annualized) }}
+      <AppCard title="因子评级" sub="方向性 · 稳定性 · 显著性 · 分层表现 · 样本量 → 综合评级">
+        <div class="rating-row">
+          <div class="grade-badge" :class="'grade-' + (rating?.grade || 'D')">
+            <span class="grade-letter">{{ rating?.grade || '—' }}</span>
+            <span class="grade-score">{{ rating?.composite ?? '—' }}</span>
+          </div>
+          <div class="rating-dims">
+            <div class="dim" v-for="d in dimRows" :key="d.key">
+              <span class="dim-label">{{ d.label }}</span>
+              <div class="dim-bar"><div class="dim-fill" :style="{ width: d.value + '%' }" /></div>
+              <span class="dim-val">{{ d.value }}</span>
             </div>
           </div>
+        </div>
+        <div class="flag-row" v-if="rating?.flags?.length">
+          <span v-for="f in rating.flags" :key="f" class="flag-chip">{{ f }}</span>
+        </div>
+        <div class="rating-meta">
+          <span>净多空年化 <b>{{ fmtPct(rating?.net_spread_ann) }}</b>（毛 {{ fmtPct(result.top_minus_bottom_annualized) }}，摩擦 {{ ((rating?.cost_per_turnover || 0) * 100).toFixed(2) }}%/次换手 × 年换手 {{ result.turnover_annualized ?? '—' }}x）</span>
+          <span v-if="result.ic_neutral_summary">行业中性 IC {{ result.ic_neutral_summary.mean.toFixed(4) }}（原始 {{ result.ic_summary.mean.toFixed(4) }}）</span>
+          <span v-if="result.regime">牛市 IC {{ result.regime.bull.ic_mean.toFixed(3) }} / 熊市 IC {{ result.regime.bear.ic_mean.toFixed(3) }}</span>
+        </div>
+        <div class="verdict" :class="verdictCls">
+          <el-icon :size="18"><component :is="verdictIcon" /></el-icon>
+          <div class="verdict-main">{{ verdictText }}</div>
         </div>
       </AppCard>
 
@@ -176,7 +190,20 @@ function verdictOf(s: { icir: number; t_stat: number }): { text: string; cls: st
   return { text: '无效', cls: 'bad' }
 }
 
+const rating = computed(() => result.value?.rating)
 const absIcir = computed(() => Math.abs(result.value?.ic_summary.icir ?? 0))
+const DIM_LABELS: [string, string][] = [
+  ['direction', '方向性'], ['stability', '稳定性'], ['significance', '显著性'],
+  ['layering', '分层表现'], ['sample', '样本量'],
+]
+const dimRows = computed(() => {
+  const dims = rating.value?.dimensions || {}
+  return DIM_LABELS.map(([key, label]) => ({ key, label, value: Math.round(dims[key] || 0) }))
+})
+const gradeCls = computed(() => {
+  const g = rating.value?.grade || 'D'
+  return g === 'A' ? 'good' : g === 'B' ? 'mid' : 'bad'
+})
 const verdictCls = computed(() => {
   const s = result.value?.ic_summary
   return s ? verdictOf(s).cls : 'mid'
@@ -186,15 +213,20 @@ const verdictIcon = computed(() =>
 )
 const verdictText = computed(() => {
   const s = result.value?.ic_summary
+  const g = rating.value?.grade || 'D'
+  const reverse = !!rating.value?.flags.some(f => f.startsWith('反向因子'))
   if (!s) return ''
   const significant = Math.abs(s.t_stat) >= 2
-  if (absIcir.value >= 0.3 && significant) return '因子有效 — 排序能力较强且统计显著，可给更高权重'
-  if (absIcir.value >= 0.1) {
-    return significant
-      ? '因子弱有效 — 有一定排序能力，建议低权重'
-      : '方向有迹象但统计不显著（|t| < 2）— 建议拉长时间窗口再判断，暂不加权'
+  if (reverse) {
+    const use = significant ? '可作为反向信号或排除名单使用' : '方向有迹象但统计不显著，先观察'
+    return `强反向因子（${g} 级）— 得分越高越差，${use}`
   }
-  return '因子无效 — 得分与未来收益几乎无关，建议关闭或重做'
+  if (g === 'A') return '评级 A — 多维证据充分，可配置较高权重'
+  if (g === 'B') return '评级 B — 有可用信号，建议中等权重并持续跟踪'
+  if (g === 'C') return significant
+    ? '评级 C — 证据薄弱，建议低权重'
+    : '评级 C — 证据薄弱且统计不显著，建议拉长窗口再判断'
+  return '评级 D — 得分与未来收益几乎无关，建议关闭或重做'
 })
 
 const icItems = computed<StatItem[]>(() => {
@@ -251,6 +283,8 @@ interface SweepRow {
   spread: number
   n: number
   verdict: { text: string; cls: string }
+  grade?: string
+  composite?: number
   error?: string
 }
 
@@ -276,6 +310,7 @@ const sweepColumns: StockColumn[] = [
   { key: 'positive_ratio', label: 'IC>0', align: 'center', mobile: 'secondary', format: (r: any) => `${(r.positive_ratio * 100).toFixed(0)}%` },
   { key: 'spread', label: '多空年化', type: 'num', digits: 4, colored: true, format: (r: any) => r.spread, mobile: 'secondary' },
   { key: 't_stat', label: 't 值', type: 'num', digits: 2, mobile: 'hidden' },
+  { key: 'grade', label: '评级', align: 'center', mobile: 'secondary', format: (r: any) => (r.grade === '—' ? '—' : `${r.grade} · ${r.composite}`) },
   { key: 'verdict', label: '结论', align: 'center', mobile: 'primary' },
   { key: 'view', label: '', align: 'center', mobile: 'hidden' },
 ]
@@ -367,6 +402,8 @@ async function runSweep() {
         spread: r.top_minus_bottom_annualized,
         n: r.ic_summary.n,
         verdict: v,
+        grade: r.rating?.grade || "—",
+        composite: r.rating?.composite ?? 0,
       })
       }
     } catch {
@@ -467,7 +504,32 @@ const icOption = computed<EChartsOption | null>(() => {
 .verdict-chip.mid { background: var(--warn-soft); color: var(--warn-text); }
 .verdict-chip.bad { background: var(--color-red-soft); color: var(--color-red); }
 
-.verdict { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
+.rating-row { display: flex; align-items: center; gap: 18px; }
+.grade-badge {
+  width: 72px; height: 72px; border-radius: 14px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.grade-badge.grade-A { background: var(--color-green-soft); color: var(--color-green); }
+.grade-badge.grade-B { background: var(--brand-soft); color: var(--brand); }
+.grade-badge.grade-C { background: var(--warn-soft); color: var(--warn-text); }
+.grade-badge.grade-D { background: var(--color-red-soft); color: var(--color-red); }
+.grade-letter { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.grade-score { font-size: 12px; opacity: 0.8; }
+.rating-dims { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.dim { display: grid; grid-template-columns: 60px 1fr 34px; align-items: center; gap: 10px; }
+.dim-label { font-size: 12px; color: var(--text-3); }
+.dim-bar { height: 8px; border-radius: 4px; background: var(--bg-2); overflow: hidden; }
+.dim-fill { height: 100%; border-radius: 4px; background: var(--brand); }
+.dim-val { font-size: 12px; color: var(--text-2); text-align: right; font-variant-numeric: tabular-nums; }
+.flag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.flag-chip { font-size: 11px; padding: 3px 10px; border-radius: var(--radius-pill);
+  background: var(--warn-soft); color: var(--warn-text); }
+.rating-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 12px;
+  font-size: 12px; color: var(--text-3); }
+.rating-meta b { color: var(--text); }
+
+.verdict { display: flex; align-items: center; gap: 12px; padding: 4px 2px; margin-top: 12px; }
 .verdict.good { color: var(--color-green); }
 .verdict.mid { color: var(--warn-text); }
 .verdict.bad { color: var(--color-red); }

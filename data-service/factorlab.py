@@ -23,6 +23,7 @@ rebalance date re-scores the universe with only data visible on that date
 """
 from __future__ import annotations
 import datetime as dt
+import time
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,23 @@ from strategies import by_id
 
 DEFAULT_HORIZONS = (1, 5, 10, 20)
 
+
+# ---- 面板缓存：连续检验多个策略时免掉重复的批量加载（TTL 10 分钟）----
+_PANEL_CACHE: dict = {}
+_PANEL_TTL_S = 600.0
+
+
+def _get_panel(codes: list[str], end: dt.date) -> dict:
+    key = (end.isoformat(), tuple(codes))
+    now = time.time()
+    hit = _PANEL_CACHE.get(key)
+    if hit and now - hit[0] < _PANEL_TTL_S:
+        return hit[1]
+    panel = engine._load_panel(codes, end)
+    if panel:
+        _PANEL_CACHE.clear()   # 只保留最近一份，防止内存膨胀
+        _PANEL_CACHE[key] = (now, panel)
+    return panel
 
 def _winsorize_zscore(scores: pd.Series) -> pd.Series:
     """MAD 去极值(3 倍) + z-score 标准化。截面至少要有几分散度，否则返回全 0。"""
@@ -92,7 +110,7 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
     # 交易日位置索引，用于衰减分析的 +N 日前向窗口
     day_pos = {d: i for i, d in enumerate(trading_days)}
 
-    panel = engine._load_panel(codes, end)
+    panel = _get_panel(codes, end)
     if not panel:
         return {"error": "panel load failed"}
 

@@ -34,7 +34,7 @@ def run_factorlab():
         max_codes = int(body.get("max_codes") or body.get("maxCodes") or 300)
         result = analyze(strategy_id, start, end,
                          rebalance=rebalance, layers=layers, max_codes=max_codes)
-        status = 500 if "error" in result else 200
-        return jsonify(result), status
+        # 检验类错误（如评分覆盖不足）随 200 返回，由前端展示原因
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

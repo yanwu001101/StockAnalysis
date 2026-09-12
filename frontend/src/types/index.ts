@@ -132,6 +132,7 @@ export interface BacktestResult {
 }
 
 export interface FactorLabResult {
+  error?: string
   strategy_id: string
   start: string
   end: string

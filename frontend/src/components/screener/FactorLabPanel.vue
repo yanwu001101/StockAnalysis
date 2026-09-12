@@ -29,9 +29,25 @@
           </el-button>
           <p class="method-note">
             每个调仓日只用当日可见数据重新评分（无前视），截面做去极值+标准化后
-            按得分分 {{ config.layers }} 层，检验排序能力。分层为等权纸面组合，不计成本。
+            按得分分层，检验排序能力。分层为等权纸面组合，不计成本。
           </p>
         </el-form>
+      </AppCard>
+
+      <AppCard title="全策略体检" sub="顺序检验全部策略，按 |ICIR| 排序，约 10 分钟" compact>
+        <div class="sweep-actions">
+          <el-button type="primary" size="small" :loading="sweep.running" @click="runSweep">开始体检</el-button>
+          <el-button v-if="sweep.running" size="small" @click="sweep.stopped = true">停止</el-button>
+          <el-button v-if="!sweep.running && sweep.summaries.length" size="small" @click="clearSweep">清空</el-button>
+        </div>
+        <div v-if="sweep.running || sweep.total" class="sweep-progress">
+          <el-progress :percentage="sweep.total ? Math.round(sweep.done / sweep.total * 100) : 0" :stroke-width="8" />
+          <div class="sweep-status">
+            {{ sweep.done }}/{{ sweep.total }}
+            <span v-if="sweep.current" class="sweep-current">· 正在检验 {{ sweep.current }}</span>
+            <span v-if="sweep.stopped && sweep.running" class="sweep-stop">· 停止中</span>
+          </div>
+        </div>
       </AppCard>
     </div>
 
@@ -67,14 +83,38 @@
       </AppCard>
     </div>
 
-    <EmptyState v-if="!loading && !result && !isMobile" title="选择策略开始检验"
+    <!-- 全策略体检结果 -->
+    <div class="result-area sweep-area" v-if="sweep.summaries.length">
+      <AppCard title="体检结果" sub="按 |ICIR| 从高到低 · 点击「查看」载入单策略详情">
+        <template #actions>
+          <span class="sweep-meta">体检窗口 {{ config.startDate }} ~ {{ config.endDate }}</span>
+        </template>
+        <StockTable
+          :rows="sweepRowsSorted"
+          :columns="sweepColumns"
+          :stock="false"
+          :clickable="false"
+          dense
+          row-key="strategyId"
+        >
+          <template #cell-verdict="{ row }">
+            <span class="verdict-chip" :class="row.verdict.cls">{{ row.verdict.text }}</span>
+          </template>
+          <template #cell-view="{ row }">
+            <el-button link size="small" @click="viewStrategy(row.strategyId)">查看</el-button>
+          </template>
+        </StockTable>
+      </AppCard>
+    </div>
+
+    <EmptyState v-if="!loading && !result && !sweep.summaries.length && !isMobile" title="选择策略开始检验"
         description="检验策略得分对未来收益的排序能力：IC、分层净值与衰减分析"
         class="empty-hint" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, CircleCheckFilled, WarningFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import type { EChartsOption } from 'echarts'
@@ -125,11 +165,24 @@ function fmtPct(v: number | undefined, d = 2): string {
   return `${v >= 0 ? '+' : ''}${(v * 100).toFixed(d)}%`
 }
 
-// 方向判定：反转类策略（负 IC）同样有效，看 |ICIR| 与分层单调性
+// ---- 判定：|ICIR| 分档 + t 检验显著性；反转类策略（负 IC）看绝对值 ----
+function verdictOf(s: { icir: number; t_stat: number }): { text: string; cls: string } {
+  const abs = Math.abs(s.icir)
+  const significant = Math.abs(s.t_stat) >= 2
+  if (abs >= 0.3 && significant) return { text: '有效', cls: 'good' }
+  if (abs >= 0.1) return significant
+    ? { text: '弱有效', cls: 'mid' }
+    : { text: '不显著', cls: 'mid' }
+  return { text: '无效', cls: 'bad' }
+}
+
 const absIcir = computed(() => Math.abs(result.value?.ic_summary.icir ?? 0))
-const verdictCls = computed(() => (absIcir.value >= 0.3 ? 'good' : absIcir.value >= 0.1 ? 'mid' : 'bad'))
+const verdictCls = computed(() => {
+  const s = result.value?.ic_summary
+  return s ? verdictOf(s).cls : 'mid'
+})
 const verdictIcon = computed(() =>
-  absIcir.value >= 0.3 ? CircleCheckFilled : absIcir.value >= 0.1 ? WarningFilled : CircleCloseFilled
+  verdictCls.value === 'good' ? CircleCheckFilled : verdictCls.value === 'mid' ? WarningFilled : CircleCloseFilled
 )
 const verdictText = computed(() => {
   const s = result.value?.ic_summary
@@ -166,7 +219,7 @@ const decayRows = computed(() => result.value?.decay ?? [])
 async function run() {
   loading.value = true
   try {
-    result.value = await runFactorLab({
+    const r = await runFactorLab({
       strategyId: config.strategyId,
       startDate: config.startDate,
       endDate: config.endDate,
@@ -174,6 +227,11 @@ async function run() {
       layers: config.layers,
       maxCodes: 300,
     })
+    if (r.error) {
+      ElMessage.warning(r.error)
+      return
+    }
+    result.value = r
     ElMessage.success('因子检验完成')
   } catch {
     ElMessage.error('因子检验失败')
@@ -181,6 +239,154 @@ async function run() {
     loading.value = false
   }
 }
+
+// ---- 全策略体检 ----
+interface SweepRow {
+  strategyId: string
+  name: string
+  ic_mean: number
+  icir: number
+  positive_ratio: number
+  t_stat: number
+  spread: number
+  n: number
+  verdict: { text: string; cls: string }
+  error?: string
+}
+
+const SWEEP_KEY = 'factorlab_sweep_v1'
+const fullResults = new Map<string, FactorLabResult>()
+const sweep = reactive({
+  running: false,
+  stopped: false,
+  current: '',
+  done: 0,
+  total: 0,
+  summaries: [] as SweepRow[],
+})
+
+const sweepRowsSorted = computed(() =>
+  [...sweep.summaries].sort((a, b) => Math.abs(b.icir) - Math.abs(a.icir))
+)
+
+const sweepColumns: StockColumn[] = [
+  { key: 'name', label: '策略', mobile: 'title' },
+  { key: 'ic_mean', label: 'RankIC', type: 'num', digits: 4, colored: true, mobile: 'primary' },
+  { key: 'icir', label: 'ICIR', type: 'num', digits: 3 },
+  { key: 'positive_ratio', label: 'IC>0', align: 'center', mobile: 'secondary', format: (r: any) => `${(r.positive_ratio * 100).toFixed(0)}%` },
+  { key: 'spread', label: '多空年化', type: 'num', digits: 4, colored: true, format: (r: any) => r.spread, mobile: 'secondary' },
+  { key: 't_stat', label: 't 值', type: 'num', digits: 2, mobile: 'hidden' },
+  { key: 'verdict', label: '结论', align: 'center', mobile: 'primary' },
+  { key: 'view', label: '', align: 'center', mobile: 'hidden' },
+]
+
+function saveSweep() {
+  try {
+    localStorage.setItem(SWEEP_KEY, JSON.stringify({
+      startDate: config.startDate, endDate: config.endDate, rows: sweep.summaries,
+    }))
+  } catch { /* 存不下就算了 */ }
+}
+
+function loadSweep() {
+  try {
+    const raw = localStorage.getItem(SWEEP_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (parsed?.rows?.length) {
+      sweep.summaries = parsed.rows
+      sweep.total = parsed.rows.length
+      sweep.done = parsed.rows.length
+      config.startDate = parsed.startDate || config.startDate
+      config.endDate = parsed.endDate || config.endDate
+    }
+  } catch { /* ignore */ }
+}
+
+function clearSweep() {
+  sweep.summaries = []
+  sweep.done = 0
+  sweep.total = 0
+  fullResults.clear()
+  localStorage.removeItem(SWEEP_KEY)
+}
+
+function viewStrategy(id: string) {
+  const full = fullResults.get(id)
+  if (full) {
+    result.value = full
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    return
+  }
+  // 刷新后 full result 不在内存 — 重跑该策略
+  config.strategyId = id
+  run()
+}
+
+async function runSweep() {
+  const list = strategyStore.strategies
+  if (!list.length) return
+  sweep.running = true
+  sweep.stopped = false
+  sweep.done = 0
+  sweep.total = list.length
+  sweep.summaries = []
+  fullResults.clear()
+
+  for (const s of list) {
+    if (sweep.stopped) break
+    sweep.current = s.name
+    try {
+      const r = await runFactorLab({
+        strategyId: s.id,
+        startDate: config.startDate,
+        endDate: config.endDate,
+        rebalance: config.rebalance,
+        layers: config.layers,
+        maxCodes: 300,
+      })
+      if (r.error) {
+        const covered = r.error.includes('截面不足')
+        sweep.summaries.push({
+          strategyId: s.id,
+          name: s.name,
+          ic_mean: 0, icir: 0, positive_ratio: 0, t_stat: 0, spread: 0, n: 0,
+          verdict: { text: covered ? '覆盖不足' : '失败', cls: 'mid' },
+          error: r.error,
+        })
+      } else {
+      fullResults.set(s.id, r)
+      const v = verdictOf(r.ic_summary)
+      sweep.summaries.push({
+        strategyId: s.id,
+        name: s.name,
+        ic_mean: r.ic_summary.mean,
+        icir: r.ic_summary.icir,
+        positive_ratio: r.ic_summary.positive_ratio,
+        t_stat: r.ic_summary.t_stat,
+        spread: r.top_minus_bottom_annualized,
+        n: r.ic_summary.n,
+        verdict: v,
+      })
+      }
+    } catch {
+      sweep.summaries.push({
+        strategyId: s.id,
+        name: s.name,
+        ic_mean: 0, icir: 0, positive_ratio: 0, t_stat: 0, spread: 0, n: 0,
+        verdict: { text: '失败', cls: 'bad' },
+        error: '分析失败',
+      })
+    }
+    sweep.done++
+    saveSweep()
+  }
+  sweep.running = false
+  sweep.current = ''
+  ElMessage.success(sweep.stopped ? '体检已停止（保留已完成部分）' : '全策略体检完成')
+}
+
+onMounted(loadSweep)
 
 const layerOption = computed<EChartsOption | null>(() => {
   const rows = result.value?.layer_curves
@@ -247,6 +453,19 @@ const icOption = computed<EChartsOption | null>(() => {
 .result-area { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .factor-lab.mobile .result-area { gap: 12px; }
 .empty-hint { grid-column: 1 / -1; }
+.sweep-area { grid-column: 1 / -1; }
+
+.sweep-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sweep-progress { margin-top: 10px; }
+.sweep-status { margin-top: 6px; font-size: 12px; color: var(--text-3); }
+.sweep-current { color: var(--text-2); }
+.sweep-stop { color: var(--warn-text); }
+.sweep-meta { font-size: 12px; color: var(--text-3); }
+
+.verdict-chip { font-size: 11px; padding: 2px 10px; border-radius: var(--radius-pill); }
+.verdict-chip.good { background: var(--color-green-soft); color: var(--color-green); }
+.verdict-chip.mid { background: var(--warn-soft); color: var(--warn-text); }
+.verdict-chip.bad { background: var(--color-red-soft); color: var(--color-red); }
 
 .verdict { display: flex; align-items: center; gap: 12px; padding: 4px 2px; }
 .verdict.good { color: var(--color-green); }

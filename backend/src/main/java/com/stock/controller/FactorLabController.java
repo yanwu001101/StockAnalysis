@@ -25,9 +25,7 @@ public class FactorLabController {
     public ApiResponse<?> factorlab(@RequestBody JSONObject body) {
         JSONObject data = dataService.runFactorLab(body);
         if (data == null) throw new BusinessException("因子检验无数据");
-        if (data.containsKey("error")) {
-            throw new BusinessException("因子检验失败: " + data.getString("error"));
-        }
+        // error 字段（如「评分覆盖不足」）原样透传，前端展示具体原因
         return ApiResponse.ok(data);
     }
 }

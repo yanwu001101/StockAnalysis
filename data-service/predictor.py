@@ -24,7 +24,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from indicators import calc_macd, calc_rsi, calc_kdj, calc_bollinger, calc_atr, calc_ema
+from indicators import calc_macd, calc_rsi, calc_kdj, calc_bollinger, calc_atr, calc_ema
+from core.trace import logger
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +57,8 @@ class PredictionResult:
     key_drivers: list[str] = field(default_factory=list)
     risk_warnings: list[str] = field(default_factory=list)
     time_horizon: str = "短期 (3-5个交易日)"
+    calibration: dict | None = None   # 历史校准：相似信号的真实胜率/样本
+    raw_score_100: float | None = None  # 未校准的模型评分（composite×100）
 
 
 # ---------------------------------------------------------------------------
@@ -940,6 +943,23 @@ def predict(ctx) -> PredictionResult:
     if not risk_warnings:
         risk_warnings.append("暂无明显风险信号")
 
+    # 历史校准（Skill §4：只有经过校准的概率才能称为概率）。
+    # 同 composite 历史桶的真实 T+5 胜率替换 sigmoid 评分；
+    # 样本不足时保留 sigmoid 值并标注「未校准·模型评分」。
+    calibration = None
+    try:
+        from predict_calibration import calibrate
+        calibration = calibrate(composite, horizon=5)
+        if calibration and not calibration.get("insufficient"):
+            prob_up = round(calibration["win_rate"] * 100, 1)
+            prob_down = round(100 - prob_up, 1)
+            if prob_up >= 62 and signal != "bullish":
+                signal, signal_label = "bullish", "看多"
+            elif prob_up <= 38 and signal != "bearish":
+                signal, signal_label = "bearish", "看空"
+    except Exception as e:
+        logger.debug("[predict] calibration skipped: %s", e)
+
     return PredictionResult(
         code=ctx.code,
         name=ctx.name,
@@ -954,4 +974,6 @@ def predict(ctx) -> PredictionResult:
         key_drivers=key_drivers,
         risk_warnings=risk_warnings,
         time_horizon="短期 (3-5个交易日)",
+        calibration=calibration,
+        raw_score_100=round(composite * 100, 1),
     )

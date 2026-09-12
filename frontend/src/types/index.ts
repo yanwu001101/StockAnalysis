@@ -238,4 +238,14 @@ export interface PredictionResult {
   keyDrivers: string[]
   riskWarnings: string[]
   timeHorizon: string
+  calibration?: {
+    insufficient: boolean
+    win_rate?: number
+    avg_return?: number
+    n?: number
+    bucket?: [number, number]
+    cal_date?: string
+    universe?: number
+  } | null
+  rawScore100?: number
 }

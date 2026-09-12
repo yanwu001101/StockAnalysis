@@ -7,6 +7,17 @@
 
     <!-- Probability display -->
     <div class="prob-section">
+      <div class="cal-line" :class="calibrated ? 'cal-ok' : 'cal-warn'">
+        <template v-if="calibration">
+          ✅ 历史校准：相似信号 n={{ calibration.n }} · T+5 胜率
+          {{ ((calibration.win_rate ?? 0) * 100).toFixed(1) }}% · 平均
+          {{ ((calibration.avg_return ?? 0) >= 0 ? '+' : '') + ((calibration.avg_return ?? 0) * 100).toFixed(2) }}%
+          <span class="cal-date">（{{ calibration.cal_date }} 前 · 全市场 {{ calibration.universe }} 只回放）</span>
+        </template>
+        <template v-else>
+          ⚠ 下方百分比为模型评分（未校准），非历史胜率
+        </template>
+      </div>
       <div class="prob-bar">
         <div class="prob-fill prob-up" :style="{ width: prediction.probabilityUp + '%' }">
           <span v-if="prediction.probabilityUp > 15">{{ prediction.probabilityUp }}%</span>
@@ -78,10 +89,16 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Top, Bottom, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
 import type { PredictionResult } from '@/types'
 
-defineProps<{ prediction: PredictionResult }>()
+// Skill §4：只有经过历史校准的概率才能称为概率
+const props = defineProps<{ prediction: PredictionResult }>()
+const calibration = computed(() =>
+  (props.prediction.calibration && !props.prediction.calibration.insufficient)
+    ? props.prediction.calibration : null)
+const calibrated = computed(() => !!calibration.value)
 </script>
 
 <style scoped>
@@ -90,6 +107,11 @@ defineProps<{ prediction: PredictionResult }>()
 h5 { margin: 0 0 8px; font-size: 13px; color: var(--text-2); font-weight: 600; display: flex; align-items: center; gap: 4px; }
 
 .prob-section { margin-bottom: 18px; }
+.cal-line { font-size: 11px; padding: 5px 10px; border-radius: var(--radius-sm);
+  margin-bottom: 10px; line-height: 1.5; }
+.cal-line.cal-ok { background: var(--color-green-soft); color: var(--color-green); }
+.cal-line.cal-warn { background: var(--warn-soft); color: var(--warn-text); }
+.cal-date { opacity: 0.75; }
 .prob-bar {
   display: flex;
   height: 32px;

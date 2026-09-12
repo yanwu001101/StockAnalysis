@@ -612,6 +612,8 @@ def stock_prediction(code: str):
         "keyDrivers": result.key_drivers,
         "riskWarnings": result.risk_warnings,
         "timeHorizon": result.time_horizon,
+        "calibration": result.calibration,
+        "rawScore100": result.raw_score_100,
     }))
 
 

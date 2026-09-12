@@ -51,7 +51,8 @@ mysql_data/
 redis_data/
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/skills/
 
 # 本地工具与产物（不入库）
 .design-skills/

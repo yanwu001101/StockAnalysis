@@ -122,6 +122,13 @@ export interface BacktestResult {
   tradeCount: number
   equityCurve: { date: string; value: number }[]
   trades: TradeRecord[]
+  /** P0: 基准对比与交易摩擦（后端有数据才返回） */
+  benchmarkReturn?: number
+  excessReturn?: number
+  turnoverRate?: number
+  totalCosts?: number
+  benchmarkCurve?: { date: string; value: number }[]
+  costs?: Record<string, number>
 }
 
 export interface TradeRecord {

@@ -1,16 +1,28 @@
 <template>
-  <div class="page-container">
+  <div class="page-container settings-page">
+    <PageHeader title="设置" sub="显示偏好、通用选项与账户" />
     <div class="settings-grid">
 
-      <!-- 1. 数据健康面板 -->
-      <section v-if="userStore.isAdmin" class="card">
-        <header class="card-head">
-          <h3>数据健康</h3>
-          <div class="head-actions">
-            <span v-if="health.timestamp" class="ts">{{ health.timestamp }}</span>
-            <el-button size="small" :loading="loadingHealth" @click="loadHealth">刷新</el-button>
+      <!-- 账户（手机上放最前，像"我的"页） -->
+      <AppCard v-if="isMobile" title="账户">
+        <div class="account-row">
+          <div class="account-info">
+            <UserAvatar :name="userStore.userInfo?.nickname || userStore.userInfo?.username" :size="44" />
+            <div>
+              <div class="account-name">{{ userStore.userInfo?.nickname || userStore.userInfo?.username || '未登录' }}</div>
+              <div class="account-sub">{{ userStore.userInfo?.username || '' }}</div>
+            </div>
           </div>
-        </header>
+          <el-button type="danger" plain size="small" @click="handleLogout">退出登录</el-button>
+        </div>
+      </AppCard>
+
+      <!-- 1. 数据健康面板 -->
+      <AppCard v-if="userStore.isAdmin" title="数据健康">
+        <template #actions>
+          <span v-if="health.timestamp" class="ts">{{ health.timestamp }}</span>
+          <el-button size="small" :loading="loadingHealth" @click="loadHealth">刷新</el-button>
+        </template>
 
         <div class="status-row">
           <div class="status-pill" :class="health.mysql.connected ? 'ok' : 'bad'">
@@ -53,12 +65,10 @@
             </div>
           </div>
         </details>
-      </section>
+      </AppCard>
 
       <!-- 2. 数据管理 -->
-      <section v-if="userStore.isAdmin" class="card">
-        <header class="card-head"><h3>数据管理</h3></header>
-
+      <AppCard v-if="userStore.isAdmin" title="数据管理">
         <div class="action-block">
           <div class="action-title">手动预热数据</div>
           <div class="action-desc">触发一次后台数据采集任务,完成前页面可继续使用。</div>
@@ -84,81 +94,70 @@
 
         <div class="action-block" v-if="recentRuns.length">
           <div class="action-title">最近任务</div>
-          <el-table :data="recentRuns" size="small" :border="false" stripe>
-            <el-table-column prop="job" label="任务" width="110" />
-            <el-table-column label="状态" width="80">
-              <template #default="{ row }">
-                <span class="status-tag" :class="`s-${row.status}`">{{ runStatusLabel(row.status) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="started_at" label="开始" width="170" />
-            <el-table-column label="耗时" width="80">
-              <template #default="{ row }">{{ row.duration_s != null ? row.duration_s + ' 秒' : '—' }}</template>
-            </el-table-column>
-            <el-table-column prop="error" label="错误" show-overflow-tooltip />
-          </el-table>
+          <StockTable :rows="recentRuns" :columns="runColumns" :stock="false" :clickable="false" dense row-key="id">
+            <template #cell-status="{ row }">
+              <span class="status-tag" :class="`s-${row.status}`">{{ runStatusLabel(row.status) }}</span>
+            </template>
+          </StockTable>
         </div>
-      </section>
+      </AppCard>
 
       <!-- 3. 显示偏好 -->
-      <section class="card">
-        <header class="card-head"><h3>显示偏好</h3></header>
+      <AppCard title="显示偏好">
         <el-form label-position="top" size="default" class="pref-form">
+          <el-form-item label="主题">
+            <SegmentTabs v-model="settings.theme" :options="themeOptions" />
+          </el-form-item>
+
+          <el-form-item label="显示模式">
+            <SegmentTabs v-model="viewModeModel" :options="viewOptions" />
+            <span class="hint">自动：按屏幕宽度与设备判断，手机自动使用手机版页面。</span>
+          </el-form-item>
+
           <el-form-item label="涨跌颜色">
-            <el-radio-group v-model="settings.colorScheme">
-              <el-radio-button value="red-up">
-                <span class="up-sample">红涨</span><span class="down-sample">绿跌</span>
-                <span class="hint-sm">A 股习惯</span>
-              </el-radio-button>
-              <el-radio-button value="red-down">
-                <span class="up-sample">绿涨</span><span class="down-sample">红跌</span>
-                <span class="hint-sm">国际习惯</span>
-              </el-radio-button>
-            </el-radio-group>
+            <SegmentTabs v-model="settings.colorScheme" :options="colorOptions" />
+            <span class="hint"><span class="up-sample">红涨</span> 绿跌 为 A 股习惯；反之为国际习惯。</span>
           </el-form-item>
 
           <el-form-item label="金额单位">
-            <el-radio-group v-model="settings.amountUnit">
-              <el-radio-button value="yi">亿元</el-radio-button>
-              <el-radio-button value="wan">万元</el-radio-button>
-            </el-radio-group>
-            <span class="hint">影响个股资金流、龙虎榜等大额数据的显示。</span>
+            <SegmentTabs v-model="settings.amountUnit" :options="unitOptions" />
+            <span class="hint">影响资金流、龙虎榜等大额数据的显示。</span>
           </el-form-item>
 
           <el-form-item label="K 线默认复权">
-            <el-radio-group v-model="settings.klineAdjust">
-              <el-radio-button value="qfq">前复权</el-radio-button>
-              <el-radio-button value="hfq">后复权</el-radio-button>
-              <el-radio-button value="none">不复权</el-radio-button>
-            </el-radio-group>
+            <SegmentTabs v-model="settings.klineAdjust" :options="adjustOptions" />
             <span class="hint">个股详情 K 线打开时的默认选项。</span>
           </el-form-item>
         </el-form>
-      </section>
+      </AppCard>
 
       <!-- 4. 通用 -->
-      <section class="card">
-        <header class="card-head"><h3>通用</h3></header>
+      <AppCard title="通用">
         <el-form label-position="top" size="default" class="pref-form">
+          <el-form-item label="服务器地址">
+            <el-input v-model="apiBaseInput" :placeholder="DEFAULT_API_BASE" clearable class="api-input" @change="applyApiBase">
+              <template #append><el-button @click="applyApiBase">保存</el-button></template>
+            </el-input>
+            <span class="hint">当前：{{ currentApiBase }}。装成 App 后填后端地址，如 192.168.10.18:18080；留空恢复默认。</span>
+          </el-form-item>
           <el-form-item label="行情刷新间隔 (秒)">
             <el-input-number v-model="settings.refreshInterval" :min="5" :max="60" :step="5" />
-            <span class="hint">仪表盘按此频率自动刷新。</span>
+            <span class="hint">盘面页按此频率自动刷新。</span>
           </el-form-item>
           <el-form-item label="默认选股数量">
             <el-input-number v-model="settings.defaultLimit" :min="10" :max="200" :step="10" />
-            <span class="hint">智能选股页"输出数量"的初始值。</span>
+            <span class="hint">评分选股"输出数量"的初始值。</span>
           </el-form-item>
         </el-form>
-      </section>
+      </AppCard>
 
-      <!-- 5. 账户 -->
-      <section class="card">
-        <header class="card-head"><h3>账户</h3></header>
+      <!-- 5. 账户（桌面） -->
+      <AppCard v-if="!isMobile" title="账户">
         <div class="account-row">
           <span class="account-name">{{ userStore.userInfo?.username || '未登录' }}</span>
           <el-button type="danger" plain @click="handleLogout">退出登录</el-button>
         </div>
-      </section>
+      </AppCard>
     </div>
   </div>
 </template>
@@ -169,6 +168,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useSettingsStore } from '@/stores/settings'
+import { useDevice, type ViewMode } from '@/composables/useDevice'
+import { DEFAULT_API_BASE, getApiBase, setApiBase } from '@/api/request'
 import {
   getAdminHealth,
   clearAdminCache,
@@ -177,16 +178,59 @@ import {
   type AdminHealth,
   type WarmupRun,
 } from '@/api/admin'
+import type { SegmentOption, StockColumn } from '@/types/ui'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import AppCard from '@/components/ui/AppCard.vue'
+import SegmentTabs from '@/components/ui/SegmentTabs.vue'
+import StockTable from '@/components/stock/StockTable.vue'
+import UserAvatar from '@/components/ui/UserAvatar.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
 const settings = useSettingsStore()
+const { isMobile, viewMode, setViewMode } = useDevice()
+
+const viewModeModel = computed<ViewMode>({
+  get: () => viewMode.value,
+  set: (v) => setViewMode(v),
+})
+
+const currentApiBase = ref(getApiBase())
+const apiBaseInput = ref(localStorage.getItem('apiBase') || '')
+function applyApiBase() {
+  setApiBase(apiBaseInput.value)
+  currentApiBase.value = getApiBase()
+  apiBaseInput.value = localStorage.getItem('apiBase') || ''
+  ElMessage.success(`已切换到 ${currentApiBase.value}`)
+}
+
+const themeOptions: SegmentOption<'auto' | 'light' | 'dark'>[] = [
+  { label: '跟随系统', value: 'auto' }, { label: '浅色', value: 'light' }, { label: '深色', value: 'dark' },
+]
+const viewOptions: SegmentOption<ViewMode>[] = [
+  { label: '自动', value: 'auto' }, { label: '手机版', value: 'mobile' }, { label: '桌面版', value: 'desktop' },
+]
+const colorOptions: SegmentOption<'red-up' | 'red-down'>[] = [
+  { label: '红涨绿跌', value: 'red-up' }, { label: '绿涨红跌', value: 'red-down' },
+]
+const unitOptions: SegmentOption<'yi' | 'wan'>[] = [{ label: '亿元', value: 'yi' }, { label: '万元', value: 'wan' }]
+const adjustOptions: SegmentOption<'qfq' | 'hfq' | 'none'>[] = [
+  { label: '前复权', value: 'qfq' }, { label: '后复权', value: 'hfq' }, { label: '不复权', value: 'none' },
+]
 
 const JOBS: { id: 'postmarket' | 'weekend' | 'premarket' | 'intraday'; label: string }[] = [
   { id: 'postmarket', label: '盘后 (K线/资金流/北向/龙虎榜)' },
   { id: 'weekend', label: '周末 (财务/股东/分红/概念)' },
   { id: 'premarket', label: '盘前' },
   { id: 'intraday', label: '盘中' },
+]
+
+const runColumns: StockColumn[] = [
+  { key: 'job', label: '任务', mobile: 'title' },
+  { key: 'status', label: '状态', align: 'center', mobile: 'primary' },
+  { key: 'started_at', label: '开始', mobile: 'secondary' },
+  { key: 'duration_s', label: '耗时', format: r => (r.duration_s != null ? r.duration_s + ' 秒' : '—'), mobile: 'secondary' },
+  { key: 'error', label: '错误', mobile: 'secondary' },
 ]
 
 const emptyHealth: AdminHealth = {
@@ -257,7 +301,6 @@ function pollUntilDone(id: string) {
     try {
       const r: any = await getWarmupStatus(id)
       const run = r as WarmupRun
-      // refresh recent list
       const idx = recentRuns.value.findIndex(x => x.id === id)
       if (idx >= 0) recentRuns.value[idx] = run
       else await loadRecent()
@@ -338,25 +381,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page-container { padding: 16px; }
 .settings-grid {
   display: grid;
   gap: 16px;
   grid-template-columns: 1fr;
   max-width: 920px;
 }
-.card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: 18px 20px;
-}
-.card-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 14px;
-}
-.card-head h3 { margin: 0; font-size: 15px; color: var(--text); font-weight: 600; }
-.head-actions { display: flex; align-items: center; gap: 10px; }
 .ts { font-size: 12px; color: var(--text-3); }
 
 .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
@@ -369,7 +399,7 @@ onUnmounted(() => {
 }
 .status-pill.ok { background: var(--brand-soft); color: var(--brand); }
 .status-pill.bad { background: var(--up-soft); color: var(--up); }
-.status-pill.warn { background: var(--warn-soft); color: #b07a00; }
+.status-pill.warn { background: var(--warn-soft); color: var(--warn-text); }
 
 .kv-grid {
   display: grid;
@@ -398,15 +428,10 @@ onUnmounted(() => {
 }
 .circuit-tag.cb-closed { background: var(--brand-soft); color: var(--brand); }
 .circuit-tag.cb-open { background: var(--up-soft); color: var(--up); }
-.circuit-tag.cb-half_open { background: var(--warn-soft); color: #b07a00; }
+.circuit-tag.cb-half_open { background: var(--warn-soft); color: var(--warn-text); }
 
 .tables-fold { margin-top: 12px; }
-.tables-fold summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text-3);
-  padding: 4px 0;
-}
+.tables-fold summary { cursor: pointer; font-size: 12px; color: var(--text-3); padding: 4px 0; }
 .table-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -426,21 +451,24 @@ onUnmounted(() => {
   font-size: 12px;
 }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.action-row :deep(.el-button) { margin-left: 0; }
 
 .status-tag { font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill); }
-.s-running { background: var(--warn-soft); color: #b07a00; }
+.s-running { background: var(--warn-soft); color: var(--warn-text); }
 .s-success { background: var(--brand-soft); color: var(--brand); }
 .s-failed  { background: var(--up-soft); color: var(--up); }
 
 .pref-form :deep(.el-form-item) { margin-bottom: 16px; }
-.hint { margin-left: 12px; font-size: 12px; color: var(--text-3); }
-.hint-sm { margin-left: 6px; font-size: 11px; color: var(--text-3); opacity: 0.8; }
+.pref-form :deep(.el-form-item__content) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.hint { font-size: 12px; color: var(--text-3); }
+.api-input { width: 100%; max-width: 420px; }
+.up-sample { color: var(--up); font-weight: 600; }
 
-.up-sample   { color: var(--up); font-weight: 600; }
-.down-sample { color: var(--down); font-weight: 600; margin-left: 4px; }
-
-.account-row {
-  display: flex; align-items: center; justify-content: space-between;
+.account-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.account-info { display: flex; align-items: center; gap: 12px; }
+.account-name { font-size: 15px; color: var(--text); font-weight: 500; }
+.account-sub { font-size: 12px; color: var(--text-3); }
+@media (max-width: 768px) {
+  .settings-grid { gap: 12px; }
 }
-.account-name { font-size: 14px; color: var(--text-2); }
 </style>

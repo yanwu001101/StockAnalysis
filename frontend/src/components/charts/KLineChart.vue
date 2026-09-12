@@ -3,9 +3,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import { ref } from 'vue'
+import type { EChartsOption } from 'echarts'
 import type { KLineData } from '@/types'
+import { useEcharts, useChartTokens, baseTooltip, hexToRgba } from '@/composables/useEcharts'
 
 const props = withDefaults(defineProps<{
   data: KLineData[]
@@ -19,33 +20,35 @@ const props = withDefaults(defineProps<{
 })
 
 const chartRef = ref<HTMLElement>()
-let chart: echarts.ECharts | null = null
+const tokens = useChartTokens()
 
-function buildOption() {
-  if (!props.data?.length) return {}
+function buildOption(): EChartsOption | null {
+  if (!props.data?.length) return null
+  const t = tokens.value
+  const MA_COLORS = t.ma
+  const compact = (chartRef.value?.clientWidth || 800) < 560
+  const left = compact ? 44 : 60
+  const right = compact ? 12 : 40
 
   const dates = props.data.map(d => d.date)
   const ohlc = props.data.map(d => [d.open, d.close, d.low, d.high])
   const volumes = props.data.map(d => d.volume)
   const closes = props.data.map(d => d.close)
 
-  // Calculate MAs
   const ma5 = calcMA(closes, 5)
   const ma10 = calcMA(closes, 10)
   const ma20 = calcMA(closes, 20)
   const ma60 = calcMA(closes, 60)
-
-  // Calculate MACD
   const { dif, dea, macdHist } = calcMACD(closes)
 
   const grids: any[] = [
-    { left: 60, right: 40, top: 60, height: props.showVolume ? '40%' : '60%' },
+    { left, right, top: 40, height: props.showVolume ? '42%' : '62%' },
   ]
   const xAxes: any[] = [
-    { type: 'category', data: dates, gridIndex: 0, axisLabel: { show: false }, axisLine: { lineStyle: { color: '#2A3A4A' } } },
+    { type: 'category', data: dates, gridIndex: 0, axisLabel: { show: false }, axisLine: { lineStyle: { color: t.line } } },
   ]
   const yAxes: any[] = [
-    { gridIndex: 0, scale: true, splitLine: { lineStyle: { color: 'rgba(42,58,74,0.5)' } }, axisLabel: { color: '#8892A4' } },
+    { gridIndex: 0, scale: true, splitLine: { lineStyle: { color: t.line, type: 'dashed' } }, axisLabel: { color: t.text3, fontSize: 10 } },
   ]
 
   let gridIndex = 1
@@ -56,29 +59,24 @@ function buildOption() {
       data: ohlc,
       xAxisIndex: 0,
       yAxisIndex: 0,
-      itemStyle: {
-        color: '#FF4757',
-        color0: '#2AE8A4',
-        borderColor: '#FF4757',
-        borderColor0: '#2AE8A4',
-      },
+      itemStyle: { color: t.up, color0: t.down, borderColor: t.up, borderColor0: t.down },
     },
-    { name: 'MA5', type: 'line', data: ma5, xAxisIndex: 0, yAxisIndex: 0, smooth: true, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: '#FFC312' } },
-    { name: 'MA10', type: 'line', data: ma10, xAxisIndex: 0, yAxisIndex: 0, smooth: true, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: '#00D4FF' } },
-    { name: 'MA20', type: 'line', data: ma20, xAxisIndex: 0, yAxisIndex: 0, smooth: true, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: '#A78BFA' } },
-    { name: 'MA60', type: 'line', data: ma60, xAxisIndex: 0, yAxisIndex: 0, smooth: true, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: '#FF6B81' } },
+    ...[['MA5', ma5], ['MA10', ma10], ['MA20', ma20], ['MA60', ma60]].map(([name, data], i) => ({
+      name, type: 'line', data, xAxisIndex: 0, yAxisIndex: 0, smooth: true,
+      lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: MA_COLORS[i] },
+    })),
   ]
 
   if (props.showVolume) {
-    grids.push({ left: 60, right: 40, top: '58%', height: '10%' })
-    xAxes.push({ type: 'category', data: dates, gridIndex: gridIndex, axisLabel: { show: false }, axisLine: { lineStyle: { color: '#2A3A4A' } } })
-    yAxes.push({ gridIndex: gridIndex, scale: true, splitLine: { show: false }, axisLabel: { show: false } })
+    grids.push({ left, right, top: '60%', height: '10%' })
+    xAxes.push({ type: 'category', data: dates, gridIndex, axisLabel: { show: false }, axisLine: { lineStyle: { color: t.line } } })
+    yAxes.push({ gridIndex, scale: true, splitLine: { show: false }, axisLabel: { show: false } })
     series.push({
       name: '成交量',
       type: 'bar',
       data: volumes.map((v, i) => ({
         value: v,
-        itemStyle: { color: props.data[i].close >= props.data[i].open ? 'rgba(255,71,87,0.5)' : 'rgba(42,232,164,0.5)' },
+        itemStyle: { color: props.data[i].close >= props.data[i].open ? hexToRgba(t.up, 0.5) : hexToRgba(t.down, 0.5) },
       })),
       xAxisIndex: gridIndex,
       yAxisIndex: gridIndex,
@@ -87,16 +85,16 @@ function buildOption() {
   }
 
   if (props.showMacd) {
-    grids.push({ left: 60, right: 40, top: props.showVolume ? '73%' : '65%', height: '12%' })
-    xAxes.push({ type: 'category', data: dates, gridIndex: gridIndex, axisLabel: { color: '#8892A4', fontSize: 10 }, axisLine: { lineStyle: { color: '#2A3A4A' } } })
-    yAxes.push({ gridIndex: gridIndex, scale: true, splitLine: { show: false }, axisLabel: { show: false } })
+    grids.push({ left, right, top: props.showVolume ? '74%' : '66%', height: '12%' })
+    xAxes.push({ type: 'category', data: dates, gridIndex, axisLabel: { color: t.text3, fontSize: 10 }, axisLine: { lineStyle: { color: t.line } } })
+    yAxes.push({ gridIndex, scale: true, splitLine: { show: false }, axisLabel: { show: false } })
     series.push(
-      { name: 'DIF', type: 'line', data: dif, xAxisIndex: gridIndex, yAxisIndex: gridIndex, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: '#00D4FF' } },
-      { name: 'DEA', type: 'line', data: dea, xAxisIndex: gridIndex, yAxisIndex: gridIndex, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: '#FFC312' } },
+      { name: 'DIF', type: 'line', data: dif, xAxisIndex: gridIndex, yAxisIndex: gridIndex, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: MA_COLORS[1] } },
+      { name: 'DEA', type: 'line', data: dea, xAxisIndex: gridIndex, yAxisIndex: gridIndex, lineStyle: { width: 1 }, symbol: 'none', itemStyle: { color: MA_COLORS[0] } },
       {
         name: 'MACD',
         type: 'bar',
-        data: macdHist.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#FF4757' : '#2AE8A4' } })),
+        data: macdHist.map(v => ({ value: v, itemStyle: { color: v >= 0 ? t.up : t.down } })),
         xAxisIndex: gridIndex,
         yAxisIndex: gridIndex,
       },
@@ -106,22 +104,24 @@ function buildOption() {
   return {
     backgroundColor: 'transparent',
     animation: false,
+    textStyle: { fontFamily: t.font },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' },
-      backgroundColor: 'rgba(15,32,53,0.95)',
-      borderColor: 'rgba(0,212,255,0.2)',
-      textStyle: { color: '#E8EDF3', fontSize: 12 },
+      axisPointer: { type: 'cross', label: { backgroundColor: t.text3 } },
+      ...baseTooltip(t),
+      confine: true,
     },
     legend: {
       data: ['MA5', 'MA10', 'MA20', 'MA60'],
-      top: 10,
-      textStyle: { color: '#8892A4', fontSize: 11 },
-      inactiveColor: '#5A6577',
+      top: 6,
+      textStyle: { color: t.text3, fontSize: 11 },
+      inactiveColor: t.text4,
     },
     dataZoom: [
-      { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: 60, end: 100 },
-      { type: 'slider', xAxisIndex: xAxes.map((_, i) => i), bottom: 5, height: 20, borderColor: 'transparent', backgroundColor: 'rgba(0,212,255,0.05)', fillerColor: 'rgba(0,212,255,0.1)', handleStyle: { color: '#00D4FF' }, textStyle: { color: '#8892A4' } },
+      { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: compact ? 70 : 60, end: 100 },
+      { type: 'slider', xAxisIndex: xAxes.map((_, i) => i), bottom: 4, height: 18,
+        borderColor: 'transparent', backgroundColor: t.surface2, fillerColor: hexToRgba(t.brand, 0.15),
+        handleStyle: { color: t.brand }, textStyle: { color: t.text3 }, dataBackground: { lineStyle: { color: t.line }, areaStyle: { color: t.line } } },
     ],
     grid: grids,
     xAxis: xAxes,
@@ -159,31 +159,9 @@ function calcEMA(data: number[], period: number): number[] {
   return result.map(v => +v.toFixed(4))
 }
 
-onMounted(() => {
-  nextTick(() => {
-    if (chartRef.value) {
-      chart = echarts.init(chartRef.value)
-      chart.setOption(buildOption())
-      window.addEventListener('resize', () => chart?.resize())
-    }
-  })
-})
-
-onUnmounted(() => {
-  chart?.dispose()
-  window.removeEventListener('resize', () => chart?.resize())
-})
-
-watch(() => props.data, () => {
-  chart?.setOption(buildOption(), true)
-}, { deep: true })
+useEcharts(chartRef, buildOption, () => [props.data, tokens.value, props.showMacd, props.showVolume])
 </script>
 
 <style scoped>
-.kline-chart {
-  width: 100%;
-  background: var(--bg-card);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--glass-border);
-}
+.kline-chart { width: 100%; }
 </style>

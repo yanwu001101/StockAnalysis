@@ -14,10 +14,7 @@
         </div>
       </div>
 
-      <div class="seg">
-        <button :class="['seg-btn', { active: mode === 'login' }]" @click="mode = 'login'">登 录</button>
-        <button :class="['seg-btn', { active: mode === 'register' }]" @click="mode = 'register'">注 册</button>
-      </div>
+      <SegmentTabs v-model="mode" :options="modeOptions" block class="mode-tabs" />
 
       <form @submit.prevent="handleSubmit" class="form">
         <div class="field">
@@ -36,9 +33,9 @@
           </el-input>
         </div>
 
-        <button type="submit" class="submit" :disabled="loading">
-          {{ loading ? '处理中…' : (mode === 'login' ? '登 录' : '注 册') }}
-        </button>
+        <el-button type="primary" size="large" native-type="submit" class="submit" :loading="loading">
+          {{ mode === 'login' ? '登录' : '注册' }}
+        </el-button>
       </form>
 
     </div>
@@ -51,13 +48,20 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { User, UserFilled, Lock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { register } from '@/api/user'
+import SegmentTabs from '@/components/ui/SegmentTabs.vue'
+import type { SegmentOption } from '@/types/ui'
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const mode = ref<'login' | 'register'>('login')
+const modeOptions: SegmentOption<'login' | 'register'>[] = [
+  { label: '登录', value: 'login' },
+  { label: '注册', value: 'register' },
+]
 const loading = ref(false)
 const form = reactive({ username: '', password: '', nickname: '' })
 
@@ -109,7 +113,7 @@ async function handleSubmit() {
   width: 44px; height: 44px;
   border-radius: 12px;
   background: var(--brand);
-  color: #FFFFFF;
+  color: var(--on-brand);
   display: flex; align-items: center; justify-content: center;
 }
 .brand-name {
@@ -124,31 +128,7 @@ async function handleSubmit() {
   margin-top: 3px;
 }
 
-.seg {
-  display: flex;
-  background: var(--bg-2);
-  border-radius: 10px;
-  padding: 4px;
-  margin-bottom: 18px;
-}
-.seg-btn {
-  flex: 1;
-  background: transparent;
-  border: 0;
-  padding: 9px 0;
-  border-radius: 8px;
-  color: var(--text-3);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  letter-spacing: 0.04em;
-  transition: background 0.18s ease, color 0.18s ease;
-}
-.seg-btn.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-card);
-}
+.mode-tabs { margin-bottom: 18px; }
 
 .form { display: flex; flex-direction: column; gap: 14px; }
 .field { width: 100%; }
@@ -156,19 +136,8 @@ async function handleSubmit() {
 .submit {
   width: 100%;
   margin-top: 4px;
-  background: var(--brand);
-  color: #FFFFFF;
-  border: 0;
-  border-radius: var(--radius);
-  padding: 13px 0;
-  font-size: 15px;
-  font-weight: 500;
-  cursor: pointer;
   letter-spacing: 0.05em;
-  transition: background 0.15s ease;
 }
-.submit:hover:not(:disabled) { background: var(--brand-press); }
-.submit:disabled { opacity: 0.6; cursor: wait; }
 
 .footer-meta {
   margin-top: 24px;

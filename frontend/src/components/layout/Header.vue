@@ -4,17 +4,7 @@
       <button class="ghost-btn" @click="$emit('toggle-sidebar')" aria-label="toggle">
         <el-icon :size="18"><Fold /></el-icon>
       </button>
-
-      <el-autocomplete
-        v-model="searchText"
-        :fetch-suggestions="querySearch"
-        placeholder="搜索股票代码或名称"
-        class="search-input"
-        @select="handleSelect"
-        clearable
-      >
-        <template #prefix><el-icon><Search /></el-icon></template>
-      </el-autocomplete>
+      <StockSearch variant="inline" />
     </div>
 
     <div class="right">
@@ -47,7 +37,7 @@
 
       <el-dropdown trigger="click" v-if="userStore.isLoggedIn">
         <div class="user-chip">
-          <div class="avatar">{{ userStore.userInfo?.nickname?.[0] || 'U' }}</div>
+          <UserAvatar :name="userStore.userInfo?.nickname || userStore.userInfo?.username" :size="32" />
         </div>
         <template #dropdown>
           <el-dropdown-menu>
@@ -70,7 +60,8 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMarketStore } from '@/stores/market'
 import { useUserStore } from '@/stores/user'
-import { searchStock } from '@/api/stock'
+import StockSearch from '@/components/stock/StockSearch.vue'
+import UserAvatar from '@/components/ui/UserAvatar.vue'
 
 defineEmits(['toggle-sidebar'])
 
@@ -78,20 +69,7 @@ const router = useRouter()
 const marketStore = useMarketStore()
 const userStore = useUserStore()
 
-const searchText = ref('')
 const refreshing = ref(false)
-
-async function querySearch(query: string, cb: Function) {
-  if (!query || query.length < 1) { cb([]); return }
-  try {
-    const results = await searchStock(query)
-    cb(results.map((r: any) => ({ value: `${r.code} ${r.name}`, code: r.code })))
-  } catch { cb([]) }
-}
-
-function handleSelect(item: any) {
-  if (item.code) { router.push(`/stock/${item.code}`); searchText.value = '' }
-}
 
 async function refreshData() {
   refreshing.value = true
@@ -122,7 +100,6 @@ function formatFlow(val: number) {
   flex-shrink: 0;
 }
 .left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
-.search-input { width: 320px; max-width: 100%; }
 
 .right { display: flex; align-items: center; gap: 12px; }
 
@@ -163,19 +140,9 @@ function formatFlow(val: number) {
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.user-chip { cursor: pointer; }
-.avatar {
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  background: var(--brand);
-  color: #FFFFFF;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 600;
-  font-size: 13px;
-}
+.user-chip { cursor: pointer; display: flex; align-items: center; }
 
 @media (max-width: 900px) {
   .market-pill { display: none; }
-  .search-input { width: 180px; }
 }
 </style>

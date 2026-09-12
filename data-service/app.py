@@ -1251,6 +1251,14 @@ except Exception as _bp_err:
     print(f'[data-service] blueprint registration failed: {_bp_err}')
 
 
+# 启动时幂等迁移：财务公告日期列 + 指数日线表（已存在则跳过）
+try:
+    from migrations import ensure_schema
+    ensure_schema()
+except Exception as _mig_err:
+    print(f'[data-service] startup migrations skipped: {_mig_err}')
+
+
 if __name__ == "__main__":
     print("Starting stock data service on port 5000...")
     app.run(host="0.0.0.0", port=5001, debug=False)

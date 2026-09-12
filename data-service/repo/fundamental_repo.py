@@ -13,7 +13,8 @@ COLS = [
     "revenue", "net_profit", "op_cashflow", "ebit",
     "total_assets", "total_liab", "total_equity",
     "current_assets", "current_liab", "fixed_assets",
-    "roe", "gross_margin", "debt_ratio", "current_ratio",
+    "roe", "gross_margin", "debt_ratio",
+    "ann_date", "current_ratio",
     "revenue_yoy", "net_profit_yoy", "eps", "bvps",
 ]
 

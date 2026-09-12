@@ -24,8 +24,9 @@ export const useUserStore = defineStore('user', () => {
     if (!token.value) return
     try {
       userInfo.value = await userApi.getUserInfo()
-    } catch {
-      logout()
+    } catch (e: any) {
+      // 只有明确 401（token 失效）才登出；网络抖动 / 5xx 不能把用户踢下线
+      if (e?.response?.status === 401) logout()
     }
   }
 

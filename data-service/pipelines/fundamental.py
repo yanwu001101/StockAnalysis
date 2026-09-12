@@ -42,6 +42,17 @@ def _quarter_ends(today: dt.date, n: int) -> list[dt.date]:
     return out
 
 
+def _parse_ann_date(v):
+    """akshare 业绩报表的『最新公告日期』列 → datetime.date，解析失败返回 None。"""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    try:
+        ts = pd.to_datetime(str(v)[:10], errors="coerce")
+        return None if pd.isna(ts) else ts.date()
+    except Exception:
+        return None
+
+
 def _safe(fn, **kw) -> pd.DataFrame:
     try:
         return fn(**kw)
@@ -116,6 +127,8 @@ async def run_batch(codes: Iterable[str], periods: int = 4) -> int:
                 "op_cashflow": r.get("每股经营现金流量"),
                 "bvps": r.get("每股净资产"),
                 "debt_ratio": debt_map.get(c),
+                # 最新公告日期 = point-in-time 可知时间；缺失时引擎按法定披露截止日兜底
+                "ann_date": _parse_ann_date(r.get("最新公告日期")),
             })
 
     if not rows:

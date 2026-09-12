@@ -2,6 +2,18 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    title?: string
+    icon?: string
+    /** 不进侧栏 / 底栏（详情页） */
+    hidden?: boolean
+    /** 手机底栏文案 / 图标，不填则沿用 title / icon */
+    mobileTitle?: string
+    mobileIcon?: string
+  }
+}
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
@@ -12,25 +24,31 @@ const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/Dashboard.vue'),
-        meta: { title: '仪表盘', icon: 'Odometer' },
+        meta: { title: '盘面', icon: 'Odometer', mobileIcon: 'DataLine' },
       },
       {
         path: 'screener',
         name: 'Screener',
         component: () => import('@/views/Screener.vue'),
-        meta: { title: '智能选股', icon: 'Search' },
+        meta: { title: '选股', icon: 'Search' },
       },
       {
-        path: 'conditions',
-        name: 'ConditionScreener',
-        component: () => import('@/views/ConditionScreener.vue'),
-        meta: { title: '条件选股', icon: 'Filter' },
+        path: 'market',
+        name: 'Market',
+        component: () => import('@/views/Market.vue'),
+        meta: { title: '资金', icon: 'Money' },
       },
       {
-        path: 'expression',
-        name: 'ExpressionScreener',
-        component: () => import('@/views/ExpressionScreener.vue'),
-        meta: { title: '表达式选股', icon: 'EditPen' },
+        path: 'my',
+        name: 'My',
+        component: () => import('@/views/My.vue'),
+        meta: { title: '自选', icon: 'Star' },
+      },
+      {
+        path: 'settings',
+        name: 'Settings',
+        component: () => import('@/views/Settings.vue'),
+        meta: { title: '设置', icon: 'Setting', mobileTitle: '我的', mobileIcon: 'User' },
       },
       {
         path: 'stock/:code',
@@ -38,53 +56,19 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/StockDetail.vue'),
         meta: { title: '个股详情', icon: 'DataLine', hidden: true },
       },
-      {
-        path: 'strategy',
-        name: 'StrategyLab',
-        component: () => import('@/views/StrategyLab.vue'),
-        meta: { title: '策略实验室', icon: 'SetUp' },
-      },
-      {
-        path: 'watchlist',
-        name: 'Watchlist',
-        component: () => import('@/views/Watchlist.vue'),
-        meta: { title: '自选股', icon: 'Star' },
-      },
-      {
-        path: 'portfolio',
-        name: 'PortfolioAssistant',
-        component: () => import('@/views/PortfolioAssistant.vue'),
-        meta: { title: '持仓助手', icon: 'Wallet' },
-      },
-      {
-        path: 'backtest',
-        name: 'Backtest',
-        component: () => import('@/views/Backtest.vue'),
-        meta: { title: '策略回测', icon: 'TrendCharts' },
-      },
+
+      // ---- 旧路由：全部重定向到合并后的页面 / tab，保证收藏与外链可用 ----
+      { path: 'conditions', redirect: { path: '/screener', query: { tab: 'condition' } } },
+      { path: 'expression', redirect: { path: '/screener', query: { tab: 'expression' } } },
+      { path: 'strategy', redirect: { path: '/screener', query: { tab: 'lab', sub: 'weights' } } },
+      { path: 'backtest', redirect: { path: '/screener', query: { tab: 'lab', sub: 'backtest' } } },
+      { path: 'moneyflow', redirect: { path: '/market' } },
+      { path: 'lhb', redirect: { path: '/market', query: { tab: 'lhb' } } },
+      { path: 'watchlist', redirect: { path: '/my' } },
+      { path: 'portfolio', redirect: { path: '/my', query: { tab: 'portfolio' } } },
       {
         path: 'pro-signal/:code',
-        name: 'ProSignal',
-        component: () => import('@/views/ProSignal.vue'),
-        meta: { title: '专业预测', icon: 'Aim', hidden: true },
-      },
-      {
-        path: 'lhb',
-        name: 'Lhb',
-        component: () => import('@/views/Lhb.vue'),
-        meta: { title: '龙虎榜', icon: 'Trophy' },
-      },
-      {
-        path: 'moneyflow',
-        name: 'MoneyFlow',
-        component: () => import('@/views/MoneyFlow.vue'),
-        meta: { title: '资金流', icon: 'Money' },
-      },
-      {
-        path: 'settings',
-        name: 'Settings',
-        component: () => import('@/views/Settings.vue'),
-        meta: { title: '设置', icon: 'Setting' },
+        redirect: to => ({ path: `/stock/${to.params.code}`, query: { tab: 'predict' } }),
       },
     ],
   },

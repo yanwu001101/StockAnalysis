@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS `stock_kline_minute` (
 CREATE TABLE IF NOT EXISTS `stock_fundamental` (
     `code` VARCHAR(10) NOT NULL,
     `report_date` DATE NOT NULL,
+    `ann_date` DATE NULL COMMENT '公告日期（point-in-time 可知时间，缺失由读取方按法定披露截止日兜底）',
     `period_type` VARCHAR(8) NOT NULL DEFAULT 'Q',
     `revenue` DECIMAL(20,2),
     `net_profit` DECIMAL(20,2),
@@ -389,4 +390,19 @@ CREATE TABLE IF NOT EXISTS `ai_analysis_run` (
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     INDEX `idx_ai_user_time` (`user_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 指数日线（基准对比 + 交易日历来源：指数的交易日即权威交易日历）
+CREATE TABLE IF NOT EXISTS `index_kline_daily` (
+    `code` VARCHAR(10) NOT NULL COMMENT '指数代码，如 000300',
+    `trade_date` DATE NOT NULL,
+    `open` DECIMAL(12,3),
+    `close` DECIMAL(12,3),
+    `high` DECIMAL(12,3),
+    `low` DECIMAL(12,3),
+    `volume` DECIMAL(20,2),
+    `amount` DECIMAL(20,2),
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`, `trade_date`),
+    INDEX `idx_ikl_date` (`trade_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

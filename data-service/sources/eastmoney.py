@@ -116,11 +116,20 @@ class EastmoneySource(AbstractSource):
             return pd.DataFrame()
         return await self._fetch_push2his(code, klt=klt, count=count, date_col="dt", period=period)
 
+    async def fetch_index_kline(self, secid: str, count: int = 900) -> pd.DataFrame:
+        """Index daily bars — secid 形如 '1.000300'（沪市指数）/ '0.399001'（深市指数）。"""
+        return await self._fetch_push2his(
+            None, klt=101, count=count, date_col="trade_date", period=None, secid=secid,
+        )
+
     async def _fetch_push2his(
-        self, code: str, *, klt: int, count: int, date_col: str, period: str | None
+        self, code, *, klt, count, date_col, period=None, secid=None,
     ) -> pd.DataFrame:
+        resolved = secid or (_secid(code) if code else None)
+        if not resolved:
+            return pd.DataFrame()
         params = {
-            "secid": _secid(code),
+            "secid": resolved,
             "fields1": "f1,f2,f3,f4,f5,f6",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
             "klt": klt,

@@ -52,3 +52,9 @@ redis_data/
 
 # Claude Code
 .claude/
+
+# 本地工具与产物（不入库）
+.design-skills/
+.playwright-cli/
+_console_check/
+release/

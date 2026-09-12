@@ -1,139 +1,234 @@
 /* =====================================================================
-   微信简约风 · WeChat-style minimal
-   - Soft neutral surfaces, gentle rounded corners
-   - WeChat green accent (#07C160), single committed color
-   - Light & dark via prefers-color-scheme; manual override via
-     <html data-theme="light|dark|auto"> (default auto)
-   - System font stack — no decorative web fonts
+   现代金融终端 · Modern Financial Terminal
+   - Cool graphite neutrals (no purple tint), single steel-blue accent
+   - Accent deliberately avoids the up/down hue families (A-share red
+     rises, green falls), so blue is the only non-conflicting choice
+   - Light & dark via <html data-theme="light|dark|auto"> (default auto)
+   - Direction colors (--up/--down) resolve from --color-red/--color-green
+     and flip as a pair with data-color-scheme="red-down"
+   - System font stack; tabular figures for all numeric data
    ===================================================================== */
 
 :root, :root[data-theme="light"] {
-  /* — Surface — */
-  --bg:           #EDEDED;   /* WeChat chat-list bg */
-  --bg-2:         #F7F7F7;
-  --surface:      #FFFFFF;
-  --surface-2:    #FAFAFA;
-  --surface-hover:#F3F3F3;
+  color-scheme: light;
+
+  /* — Surface (cool, slate-tinted neutrals) — */
+  --bg:            #F4F5F7;
+  --bg-2:          #EEF0F3;
+  --surface:       #FFFFFF;
+  --surface-2:     #F8F9FB;
+  --surface-hover: #F0F2F5;
 
   /* — Text — */
-  --text:         #191919;
-  --text-2:       #353535;
-  --text-3:       #888888;
-  --text-4:       #B2B2B2;
+  --text:          #171C21;
+  --text-2:        #434B54;
+  --text-3:        #67707A;
+  --text-4:        #9AA2AB;
 
   /* — Lines — */
-  --line:         #E5E5E5;
-  --line-strong:  #D9D9D9;
+  --line:          #E3E6EA;
+  --line-strong:   #D2D7DD;
 
-  /* — Accent (WeChat green) — */
-  --brand:        #07C160;
-  --brand-press:  #06AD56;
-  --brand-soft:   rgba(7, 193, 96, 0.12);
+  /* — Accent (steel blue, hue 200 — separate from up/down families) — */
+  --brand:         #0C7BC0;
+  --brand-press:   #0A66A0;
+  --brand-soft:    rgba(12, 123, 192, 0.11);
+  --on-brand:      #FFFFFF;
 
-  /* — Semantic — */
-  --up:           #FA5151;   /* A-share: red up */
-  --up-soft:      rgba(250, 81, 81, 0.10);
-  --down:         #07C160;   /* A-share: green down (same as brand visually) */
-  --down-soft:    rgba(7, 193, 96, 0.10);
-  --warn:         #FFC300;
-  --warn-soft:    rgba(255, 195, 0, 0.14);
+  /* — Direction colors (text-grade contrast on this theme) — */
+  --color-red:     #D8402F;
+  --color-red-soft:  rgba(216, 64, 47, 0.10);
+  --color-green:   #0E8148;
+  --color-green-soft: rgba(14, 129, 72, 0.10);
 
-  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-pop:   0 6px 24px rgba(0, 0, 0, 0.08);
+  /* — Semantic (up/down follow A-share by default) — */
+  --up:            var(--color-red);
+  --up-soft:       var(--color-red-soft);
+  --down:          var(--color-green);
+  --down-soft:     var(--color-green-soft);
+  --warn:          #F0A03C;          /* graphic use: bars, dots, charts */
+  --warn-text:     #956A00;          /* text-grade warning on light bg */
+  --warn-soft:     rgba(240, 160, 60, 0.14);
+
+  /* — Shadows — */
+  --shadow-sm:     0 1px 2px rgba(23, 28, 33, 0.05);
+  --shadow-card:   0 1px 2px rgba(23, 28, 33, 0.05), 0 1px 3px rgba(23, 28, 33, 0.04);
+  --shadow-pop:    0 8px 28px rgba(23, 28, 33, 0.13);
 
   /* — Geometry — */
   --sidebar-width: 220px;
   --sidebar-collapsed-width: 64px;
   --header-height: 56px;
-  --radius-lg:    14px;
-  --radius:       10px;
-  --radius-sm:    6px;
-  --radius-pill:  999px;
+  --tabbar-height: 56px;
+  --mobile-header-height: 48px;
+  --radius-lg:     12px;
+  --radius:        8px;
+  --radius-sm:     6px;
+  --radius-pill:   999px;
+
+  /* — Type scale — */
+  --text-2xl: 22px;   /* page title */
+  --text-xl:  18px;   /* section title */
+  --text-lg:  16px;
+  --text-md:  15px;
+  --text-base: 14px;  /* body default */
+  --text-sm:  13px;   /* table body, secondary */
+  --text-xs:  12px;   /* caption, label */
+
+  /* — Spacing (4px base) — */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* — Chart palette (theme-aware, consumed via useChartTheme) — */
+  --chart-1: #0C7BC0;
+  --chart-2: #F0A03C;
+  --chart-3: #8677D6;
+  --chart-4: #2FB99E;
+  --chart-5: #D9697F;
+  --chart-6: #7A8BA6;
+  --ma-1: #F0A03C;
+  --ma-2: #3D8FE8;
+  --ma-3: #C255B8;
+  --ma-4: #2FB99E;
+  --chart-grid:  #ECEFF2;
+  --chart-axis:  #C6CCD3;
+  --chart-label: #67707A;
 
   /* — Font — */
-  --font-sans:    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
-                  "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-num:     "SF Mono", "JetBrains Mono", "PingFang SC", Menlo, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+               "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-num:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+               "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 /* Optional override: international convention — red = down, green = up.
-   User toggles this via Settings → ColorScheme. */
+   User toggles this via Settings → ColorScheme. Swaps the pair cleanly,
+   danger/destructive styling keeps using --color-red. */
 :root[data-color-scheme="red-down"] {
-  --up:           #07C160;
-  --up-soft:      rgba(7, 193, 96, 0.10);
-  --down:         #FA5151;
-  --down-soft:    rgba(250, 81, 81, 0.10);
+  --up:            var(--color-green);
+  --up-soft:       var(--color-green-soft);
+  --down:          var(--color-red);
+  --down-soft:     var(--color-red-soft);
 }
 
-/* — Dark theme — */
+/* — Dark theme (cool graphite, blue-grey tint, no purple) — */
 :root[data-theme="dark"] {
-  --bg:           #111111;
-  --bg-2:         #1A1A1A;
-  --surface:      #1F1F1F;
-  --surface-2:    #232323;
-  --surface-hover:#2A2A2A;
+  color-scheme: dark;
 
-  --text:         #ECECEC;
-  --text-2:       #C9C9C9;
-  --text-3:       #8A8A8A;
-  --text-4:       #5C5C5C;
+  --bg:            #131518;
+  --bg-2:          #191C20;
+  --surface:       #1E2227;
+  --surface-2:     #252A30;
+  --surface-hover: #2E343B;
 
-  --line:         #2A2A2A;
-  --line-strong:  #353535;
+  --text:          #E6E9EC;
+  --text-2:        #C3C9CF;
+  --text-3:        #8B959F;
+  --text-4:        #606A74;
 
-  --brand:        #2DD27C;
-  --brand-press:  #26B96E;
-  --brand-soft:   rgba(45, 210, 124, 0.16);
+  --line:          #2D333A;
+  --line-strong:   #3D444D;
 
-  --up:           #F66767;
-  --up-soft:      rgba(246, 103, 103, 0.16);
-  --down:         #2DD27C;
-  --down-soft:    rgba(45, 210, 124, 0.16);
-  --warn:         #FFD43B;
-  --warn-soft:    rgba(255, 212, 59, 0.14);
+  --brand:         #47A8F0;
+  --brand-press:   #2E90DB;
+  --brand-soft:    rgba(71, 168, 240, 0.14);
+  --on-brand:      #0B1218;
 
-  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-pop:   0 6px 24px rgba(0, 0, 0, 0.45);
+  --color-red:     #FF7263;
+  --color-red-soft:  rgba(255, 114, 99, 0.15);
+  --color-green:   #3DCA85;
+  --color-green-soft: rgba(61, 202, 133, 0.14);
+
+  --warn:          #F5B04D;
+  --warn-text:     #FFC94D;
+  --warn-soft:     rgba(245, 176, 77, 0.15);
+
+  --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-card:   0 1px 3px rgba(0, 0, 0, 0.40);
+  --shadow-pop:    0 8px 28px rgba(0, 0, 0, 0.50);
+
+  --chart-1: #47A8F0;
+  --chart-2: #F5B04D;
+  --chart-3: #9D8FE8;
+  --chart-4: #3ECCAF;
+  --chart-5: #E58395;
+  --chart-6: #8FA3C0;
+  --ma-1: #F5B04D;
+  --ma-2: #47A8F0;
+  --ma-3: #E06FD4;
+  --ma-4: #3ECCAF;
+  --chart-grid:  #262B31;
+  --chart-axis:  #3D444D;
+  --chart-label: #8B959F;
 }
 
 /* — Follow OS when data-theme is unset or "auto" — */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg:           #111111;
-    --bg-2:         #1A1A1A;
-    --surface:      #1F1F1F;
-    --surface-2:    #232323;
-    --surface-hover:#2A2A2A;
-    --text:         #ECECEC;
-    --text-2:       #C9C9C9;
-    --text-3:       #8A8A8A;
-    --text-4:       #5C5C5C;
-    --line:         #2A2A2A;
-    --line-strong:  #353535;
-    --brand:        #2DD27C;
-    --brand-press:  #26B96E;
-    --brand-soft:   rgba(45, 210, 124, 0.16);
-    --up:           #F66767;
-    --up-soft:      rgba(246, 103, 103, 0.16);
-    --down:         #2DD27C;
-    --down-soft:    rgba(45, 210, 124, 0.16);
-    --warn:         #FFD43B;
-    --warn-soft:    rgba(255, 212, 59, 0.14);
-    --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.5);
-    --shadow-pop:   0 6px 24px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+
+    --bg:            #131518;
+    --bg-2:          #191C20;
+    --surface:       #1E2227;
+    --surface-2:     #252A30;
+    --surface-hover: #2E343B;
+    --text:          #E6E9EC;
+    --text-2:        #C3C9CF;
+    --text-3:        #8B959F;
+    --text-4:        #606A74;
+    --line:          #2D333A;
+    --line-strong:   #3D444D;
+    --brand:         #47A8F0;
+    --brand-press:   #2E90DB;
+    --brand-soft:    rgba(71, 168, 240, 0.14);
+    --on-brand:      #0B1218;
+    --color-red:     #FF7263;
+    --color-red-soft:  rgba(255, 114, 99, 0.15);
+    --color-green:   #3DCA85;
+    --color-green-soft: rgba(61, 202, 133, 0.14);
+    --warn:          #F5B04D;
+    --warn-text:     #FFC94D;
+    --warn-soft:     rgba(245, 176, 77, 0.15);
+    --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.40);
+    --shadow-card:   0 1px 3px rgba(0, 0, 0, 0.40);
+    --shadow-pop:    0 8px 28px rgba(0, 0, 0, 0.50);
+    --chart-1: #47A8F0;
+    --chart-2: #F5B04D;
+    --chart-3: #9D8FE8;
+    --chart-4: #3ECCAF;
+    --chart-5: #E58395;
+    --chart-6: #8FA3C0;
+    --ma-1: #F5B04D;
+    --ma-2: #47A8F0;
+    --ma-3: #E06FD4;
+    --ma-4: #3ECCAF;
+    --chart-grid:  #262B31;
+    --chart-axis:  #3D444D;
+    --chart-label: #8B959F;
   }
 }
 
-/* — Element Plus token mapping — */
-:root, :root[data-theme="light"], :root[data-theme="dark"] {
+/* — Element Plus token mapping —
+   html:root 提高一级特异性：按需引入的组件样式（el-var.css）会在本文件之后
+   再次以 :root 声明 --el-color-primary: #409eff，否则 switch / slider 等会回到蓝色。 */
+html:root, html:root[data-theme="light"], html:root[data-theme="dark"] {
   --el-color-primary: var(--brand);
   --el-color-primary-light-3: var(--brand);
   --el-color-primary-light-5: var(--brand);
   --el-color-primary-light-7: var(--brand-soft);
   --el-color-primary-light-9: var(--brand-soft);
   --el-color-primary-dark-2: var(--brand-press);
-  --el-color-success: var(--brand);
-  --el-color-danger: var(--up);
+  --el-color-success: var(--color-green);
+  --el-color-danger: var(--color-red);
+  --el-color-error: var(--color-red);
   --el-color-warning: var(--warn);
   --el-bg-color: var(--surface);
   --el-bg-color-page: var(--bg);
@@ -186,7 +281,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -198,15 +293,30 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--text);
   letter-spacing: -0.005em;
 }
-h1 { font-size: 22px; }
-h2 { font-size: 18px; }
-h3 { font-size: 16px; }
-h4 { font-size: 15px; }
+h1 { font-size: var(--text-2xl); }
+h2 { font-size: var(--text-xl); }
+h3 { font-size: var(--text-lg); }
+h4 { font-size: var(--text-md); }
 
-.num, .mono {
+/* Numeric data: same face as UI, tabular figures — aligns columns
+   like a terminal without the typewriter look of a mono font. */
+.num {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
 }
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keyboard focus ring (pointer clicks stay clean) */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection { background: var(--brand-soft); }
 
 /* — Card primitive — */
 .card {
@@ -225,15 +335,15 @@ h4 { font-size: 15px; }
 }
 .glass-card:hover { box-shadow: var(--shadow-card); }
 
-/* — Price colors (A-share) — */
+/* — Price colors (direction-aware) — */
 .price-up   { color: var(--up) !important; }
 .price-down { color: var(--down) !important; }
 .price-flat { color: var(--text-3) !important; }
 .score-high   { color: var(--brand); }
-.score-medium { color: var(--warn); }
-.score-low    { color: var(--up); }
+.score-medium { color: var(--warn-text); }
+.score-low    { color: var(--color-red); }
 .brand-text { color: var(--brand); }
-.warn-text  { color: var(--warn); }
+.warn-text  { color: var(--warn-text); }
 
 /* — Scrollbar — */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -260,6 +370,16 @@ h4 { font-size: 15px; }
 .rise-3 { animation-delay: 0.12s; }
 .rise-4 { animation-delay: 0.20s; }
 
+/* Skeleton shimmer — one synchronized cycle for the whole group */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in, .rise { animation: none; }
+  * { scroll-behavior: auto !important; }
+}
+
 /* — Element Plus polish — */
 .el-button {
   border-radius: var(--radius) !important;
@@ -273,7 +393,7 @@ h4 { font-size: 15px; }
 .el-button--primary {
   background: var(--brand) !important;
   border-color: var(--brand) !important;
-  color: #FFFFFF !important;
+  color: var(--on-brand) !important;
 }
 .el-button--primary:hover {
   background: var(--brand-press) !important;
@@ -318,7 +438,7 @@ h4 { font-size: 15px; }
   background: var(--surface-2) !important;
   color: var(--text-3) !important;
   font-weight: 500;
-  font-size: 13px;
+  font-size: var(--text-sm);
   border-bottom: 1px solid var(--line) !important;
 }
 .el-table td.el-table__cell {
@@ -335,16 +455,17 @@ h4 { font-size: 15px; }
   height: 22px !important;
   line-height: 22px !important;
 }
-.el-tag--success { background: var(--brand-soft) !important; color: var(--brand) !important; }
-.el-tag--warning { background: var(--warn-soft) !important; color: #B88800 !important; }
-.el-tag--danger  { background: var(--up-soft) !important; color: var(--up) !important; }
+.el-tag--success { background: var(--color-green-soft) !important; color: var(--color-green) !important; }
+.el-tag--warning { background: var(--warn-soft) !important; color: var(--warn-text) !important; }
+.el-tag--danger  { background: var(--color-red-soft) !important; color: var(--color-red) !important; }
 
 .el-slider__runway { background: var(--surface-2); height: 4px; border-radius: 2px; }
 .el-slider__bar { background: var(--brand); height: 4px; }
 .el-slider__button {
-  border: 2px solid var(--brand); background: #FFF;
+  border: 2px solid var(--brand); background: var(--surface);
   width: 16px; height: 16px;
 }
+.el-switch { --el-switch-on-color: var(--brand); }
 
 .el-empty { color: var(--text-3); }
 .el-empty__description p { color: var(--text-3); }
@@ -357,6 +478,22 @@ h4 { font-size: 15px; }
 
 /* — Responsive — */
 @media (max-width: 768px) {
-  :root { --sidebar-width: 180px; }
-  .page-container { padding: 16px; }
+  .page-container {
+    padding: 12px 12px 24px;
+    min-height: auto;
+  }
+  /* 顶栏高度内，toast 不再盖住标题/刷新按钮 */
+  .el-message {
+    top: calc(var(--mobile-header-height) + env(safe-area-inset-top) + 10px) !important;
+    max-width: min(92vw, 360px);
+    box-sizing: border-box;
+  }
+  /* 手机上弹窗贴边 */
+  .el-dialog { --el-dialog-width: 92% !important; margin-top: 8vh !important; }
+  .el-message-box { max-width: 92vw; }
+  /* 触控目标不低于 40px */
+  .el-button--small { min-height: 34px; padding-left: 12px; padding-right: 12px; }
+  .el-input--small .el-input__wrapper { min-height: 34px; }
+  .el-input__inner { font-size: 16px; }   /* iOS 输入框聚焦不放大页面 */
+  .el-radio-button--small .el-radio-button__inner { padding: 8px 12px; }
 }

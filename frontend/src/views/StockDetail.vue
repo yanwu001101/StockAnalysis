@@ -1,408 +1,121 @@
 <template>
-  <div class="page-container">
-    <div class="stock-header glass-card">
-      <div class="header-left">
-        <h2 class="stock-title">
-          <span class="stock-name">{{ stockInfo.name }}</span>
-          <span class="stock-code">{{ stockInfo.code }}</span>
-          <el-tag size="small" type="info">{{ stockInfo.industry }}</el-tag>
-        </h2>
-        <div class="price-row">
-          <span class="current-price" :class="stockInfo.change >= 0 ? 'price-up' : 'price-down'">
-            {{ stockInfo.price }}
-          </span>
-          <span class="price-change" :class="stockInfo.change >= 0 ? 'price-up' : 'price-down'">
-            {{ stockInfo.change >= 0 ? '+' : '' }}{{ stockInfo.change }}
-            ({{ stockInfo.changePercent >= 0 ? '+' : '' }}{{ stockInfo.changePercent }}%)
-          </span>
-        </div>
-      </div>
-      <div class="header-right">
-        <ScoreGauge :score="compositeScore" :size="90" />
-        <div class="action-btns">
-          <el-button type="success" size="small" @click="$router.push(`/pro-signal/${code}`)">
-            <el-icon><Aim /></el-icon>专业预测
-          </el-button>
-          <el-button v-if="!isInWatchlist" type="primary" plain size="small" @click="addToWatchlist">
-            <el-icon><Star /></el-icon>加自选
-          </el-button>
-          <el-button v-else type="warning" plain size="small" @click="removeFromWatchlistAction">
-            <el-icon><StarFilled /></el-icon>已自选 · 移除
-          </el-button>
-          <el-button size="small" @click="$router.back()">返回</el-button>
-        </div>
-      </div>
-    </div>
+  <div class="page-container stock-detail" :class="{ mobile: isMobile }">
+    <StockHeader :info="stockInfo" :code="code" :score="compositeScore" class="detail-header" @predict="goPredict" />
 
-    <!-- 日内做 T 建议 -->
-    <div class="glass-card t-signal-card" v-if="tSignal && tSignal.action !== 'no_data'" :class="tSignal.action">
-      <div class="t-head">
-        <h3>日内做 T 建议</h3>
-        <el-tag :type="tTagType" effect="dark" size="large">{{ tSignal.action_label }}</el-tag>
-        <div class="t-strength">
-          <span class="t-strength-label">信号强度</span>
-          <el-progress :percentage="tSignal.strength" :stroke-width="8" :show-text="false" style="width:120px" />
-          <span class="t-strength-num">{{ tSignal.strength }}</span>
-        </div>
-        <span class="t-time" v-if="tSignal.data_time">{{ tSignal.data_time }}</span>
-      </div>
+    <SegmentTabs v-model="tab" :options="tabOptions" block class="detail-tabs" />
 
-      <!-- 分时图 + 买卖区 + 支撑压力 + 成本线 -->
-      <IntradayTChart v-if="tSignal.trend && tSignal.trend.length" :signal="tSignal" :height="300" />
+    <!-- 主数据加载失败：明确报错 + 重试，不与"暂无数据"混淆 -->
+    <EmptyState
+      v-if="pageError"
+      variant="error"
+      title="个股数据加载失败"
+      description="无法获取该股票的行情与策略数据，请检查后端服务后重试"
+      @retry="loadData"
+    />
 
-      <div class="t-metrics">
-        <div class="t-metric"><span>现价</span><b>{{ tSignal.price }}</b></div>
-        <div class="t-metric"><span>分时均价</span><b>{{ tSignal.vwap }}</b></div>
-        <div class="t-metric"><span>日内位置</span><b>{{ tSignal.intraday_pos != null ? (tSignal.intraday_pos * 100).toFixed(0) + '%' : '—' }}</b></div>
-        <div class="t-metric"><span>偏离均价</span><b>{{ tSignal.vwap_dev != null ? (tSignal.vwap_dev > 0 ? '+' : '') + tSignal.vwap_dev + '%' : '—' }}</b></div>
-        <div class="t-metric"><span>日内振幅</span><b>{{ tSignal.amplitude }}%</b></div>
-        <div class="t-metric"><span>日内高/低</span><b>{{ tSignal.day_high }} / {{ tSignal.day_low }}</b></div>
-        <div class="t-metric" v-if="tSignal.active_buy_ratio != null"><span>主动买占比</span><b>{{ (tSignal.active_buy_ratio * 100).toFixed(0) }}%</b></div>
-        <div class="t-metric" v-if="pvLabel"><span>量价</span><b>{{ pvLabel }}</b></div>
-        <div class="t-metric" v-if="tSignal.index_ctx"><span>大盘</span><b :class="tSignal.index_ctx.pct_change >= 0 ? 'up' : 'down'">{{ tSignal.index_ctx.name }} {{ tSignal.index_ctx.pct_change > 0 ? '+' : '' }}{{ tSignal.index_ctx.pct_change }}%</b></div>
-      </div>
+    <template v-else>
+      <!-- 做 T -->
+      <TSignalCard v-if="tab === 't'" ref="tCardRef" :signal="tSignal" :code="code" @recalc="onRecalc" />
 
-      <!-- 四因子评分(去魔法数字,可解释) -->
-      <div class="t-factors" v-if="tSignal.strength > 0">
-        <div class="t-factor" v-for="f in factorList" :key="f.key">
-          <span class="t-factor-label">{{ f.label }}</span>
-          <el-progress :percentage="f.val" :stroke-width="6" :show-text="false" :color="f.color" />
-          <b>{{ f.val }}</b>
-        </div>
-      </div>
-
-      <div class="t-zones" v-if="tSignal.buy_zone || tSignal.sell_zone">
-        <div class="t-zone buy" v-if="tSignal.buy_zone">建议低吸区 <b>{{ tSignal.buy_zone[0] }} ~ {{ tSignal.buy_zone[1] }}</b></div>
-        <div class="t-zone sell" v-if="tSignal.sell_zone">建议高抛区 <b>{{ tSignal.sell_zone[0] }} ~ {{ tSignal.sell_zone[1] }}</b></div>
-      </div>
-
-      <!-- 结合持仓的真 T 建议 -->
-      <div class="t-position-plan" v-if="tSignal.has_position">
-        <div class="tp-head"><el-icon><Wallet /></el-icon> 结合持仓做 T</div>
-        <div class="tp-body" v-if="tSignal.t_shares > 0">
-          <template v-if="tSignal.t_mode === 'reverse_t'">
-            反T·先高抛:卖出可用底仓 <b>{{ tSignal.t_shares }}</b> 股,回补参考 <b>{{ tSignal.cover_price }}</b>,预计兑现价差 <b class="up">{{ tSignal.est_profit }}</b> 元
+      <!-- 概览（K线 + 核心指标）/ K线 -->
+      <section v-if="overviewVisible || klineVisible" class="content-grid" :class="{ 'overview-only': overviewVisible && !klineVisible }">
+        <AppCard v-if="klineVisible" title="K线图">
+          <template #actions>
+            <SegmentTabs v-model="klinePeriod" :options="periodOptions" small />
+            <SegmentTabs v-model="klineAdjust" :options="adjustOptions" small />
           </template>
-          <template v-else-if="tSignal.t_mode === 'positive_t_add'">
-            正T·补仓降本:补 <b>{{ tSignal.t_shares }}</b> 股,摊薄成本至 <b>{{ tSignal.new_avg_cost }}</b>(降 <b class="down">{{ tSignal.cost_impact != null ? Math.abs(tSignal.cost_impact).toFixed(2) : '' }}</b>)
-          </template>
-          <template v-else-if="tSignal.t_mode === 'positive_t_roundtrip'">
-            正T·日内闭环:低吸买入 <b>{{ tSignal.t_shares }}</b> 股,反弹至 <b>{{ tSignal.cover_price }}</b> 卖出等量可用底仓
-          </template>
+          <KLineChart :data="klineData" :height="isMobile ? 380 : 480" />
+        </AppCard>
+
+        <div v-if="overviewVisible" class="side-panel">
+          <CoreMetricsCard :info="stockInfo" />
+          <StrategyScoresCard :scores="strategyScores" />
         </div>
-        <div class="tp-body warn" v-else-if="tSignal.t_mode === 'blocked_no_available'">
-          有底仓但无可用(可卖)份额,T+1 当日不可高抛
-        </div>
-        <div class="tp-pnl" v-if="tSignal.position">
-          持仓 {{ tSignal.position.shares }} 股 · 成本 {{ tSignal.position.avg_cost }} · 浮盈
-          <span :class="(tSignal.position.pnl_pct || 0) >= 0 ? 'up' : 'down'">{{ tSignal.position.pnl_pct != null ? (tSignal.position.pnl_pct > 0 ? '+' : '') + tSignal.position.pnl_pct + '%' : '—' }}</span>
-        </div>
-      </div>
+      </section>
 
-      <!-- 持仓输入:填成本后按底仓实时重算真 T -->
-      <div class="t-pos-input">
-        <span class="tpi-label">持仓做 T:</span>
-        <el-input-number v-model="posShares" :min="0" :step="100" :controls="false" size="small" placeholder="持仓股数" />
-        <el-input-number v-model="posCost" :min="0" :precision="2" :step="0.01" :controls="false" size="small" placeholder="成本价" />
-        <el-input-number v-model="posAvail" :min="0" :step="100" :controls="false" size="small" placeholder="可用股数" />
-        <el-button type="primary" size="small" @click="recalcWithPosition">按持仓重算</el-button>
-        <el-button v-if="tSignal.has_position" text size="small" @click="clearPosition">清除</el-button>
-      </div>
+      <!-- 预测：涨跌概率 ⇄ 专业预测 -->
+      <PredictionCard v-if="tab === 'predict'" ref="predictRef" :prediction="prediction" :code="code" :initial-mode="predictMode" />
 
-      <ul class="t-reasons">
-        <li v-for="r in tSignal.reasons" :key="r">{{ r }}</li>
-      </ul>
-      <div class="t-risks" v-if="tSignal.risks && tSignal.risks.length">
-        <el-icon><Warning /></el-icon> {{ tSignal.risks.join('；') }}
-      </div>
-      <div class="t-disclaimer">{{ tSignal.disclaimer }}</div>
-    </div>
-
-    <div class="content-grid">
-      <div class="glass-card kline-card">
-        <div class="card-header">
-          <h3>K线图</h3>
-          <div class="kline-controls">
-            <el-radio-group v-model="klinePeriod" size="small">
-              <el-radio-button value="daily">日K</el-radio-button>
-              <el-radio-button value="weekly">周K</el-radio-button>
-            </el-radio-group>
-            <el-radio-group v-model="klineAdjust" size="small">
-              <el-radio-button value="qfq">前复权</el-radio-button>
-              <el-radio-button value="hfq">后复权</el-radio-button>
-              <el-radio-button value="none">不复权</el-radio-button>
-            </el-radio-group>
-          </div>
-        </div>
-        <KLineChart :data="klineData" :height="480" />
-      </div>
-
-      <div class="strategy-panel">
-        <div class="glass-card radar-card">
-          <h3>策略评分雷达</h3>
-          <RadarChart :indicators="radarIndicators" :values="radarValues" :height="420" />
-        </div>
-
-        <div class="glass-card detail-card">
-          <h3>核心指标</h3>
-          <div class="metrics-grid">
-            <div class="metric-item" v-for="m in coreMetrics" :key="m.label">
-              <span class="metric-label">{{ m.label }}</span>
-              <span class="metric-value" :style="{ color: m.color }">{{ m.value }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="glass-card strategies-card">
-      <h3>多策略评分详情</h3>
-      <div class="strategy-grid">
-        <div class="strategy-item glass-card" v-for="(score, id) in strategyScores" :key="id">
-          <div class="strategy-header">
-            <span class="strategy-name">{{ getStrategyName(id) }}</span>
-            <el-tag :type="getScoreType(score)" size="small" effect="dark">{{ score }}</el-tag>
-          </div>
-          <el-progress :percentage="score" :color="getProgressColor(score)" :show-text="false" :stroke-width="6" />
-        </div>
-      </div>
-    </div>
-
-    <PredictionPanel v-if="prediction" :prediction="prediction" />
-
-    <div class="glass-card f10-card" v-loading="f10Loading">
-      <div class="card-header">
-        <h3>F10 公司资料</h3>
-        <el-radio-group v-model="f10Tab" size="small">
-          <el-radio-button value="profile">公司概况</el-radio-button>
-          <el-radio-button value="holders">十大股东</el-radio-button>
-          <el-radio-button value="dividend">分红送转</el-radio-button>
-          <el-radio-button value="peers">同业比较</el-radio-button>
-        </el-radio-group>
-      </div>
-
-      <div v-if="f10Tab === 'profile'" class="f10-profile">
-        <div class="profile-grid" v-if="f10Data?.profile && Object.keys(f10Data.profile).length">
-          <div class="profile-item" v-for="(v, k) in f10Data.profile" :key="k">
-            <span class="profile-label">{{ k }}</span>
-            <span class="profile-value">{{ v }}</span>
-          </div>
-        </div>
-        <el-empty v-else description="暂无公司概况数据" :image-size="80" />
-      </div>
-
-      <el-table v-else-if="f10Tab === 'holders'" :data="f10Data?.topHolders || []" size="small" stripe
-                empty-text="暂无股东数据">
-        <el-table-column prop="rank" label="名次" width="60" align="center" />
-        <el-table-column prop="name" label="股东名称" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="type" label="股东性质" width="120" />
-        <el-table-column label="持股数量(万)" align="right">
-          <template #default="{ row }">{{ (row.shares / 10000).toFixed(2) }}</template>
-        </el-table-column>
-        <el-table-column prop="ratio" label="持股比例(%)" width="120" align="right">
-          <template #default="{ row }">{{ row.ratio?.toFixed(2) || '—' }}</template>
-        </el-table-column>
-        <el-table-column prop="change" label="持股变动" width="100" />
-      </el-table>
-
-      <el-table v-else-if="f10Tab === 'dividend'" :data="f10Data?.dividends || []" size="small" stripe
-                empty-text="暂无分红数据">
-        <el-table-column prop="annDate" label="公告日" width="110" />
-        <el-table-column prop="exDate" label="除权日" width="110" />
-        <el-table-column label="现金分红(每10股/元)" align="right">
-          <template #default="{ row }">{{ row.cashPer10 ?? '—' }}</template>
-        </el-table-column>
-        <el-table-column label="送股(每10股)" align="right">
-          <template #default="{ row }">{{ row.sharePer10 ?? '—' }}</template>
-        </el-table-column>
-        <el-table-column label="转增(每10股)" align="right">
-          <template #default="{ row }">{{ row.transferPer10 ?? '—' }}</template>
-        </el-table-column>
-      </el-table>
-
-      <div v-else-if="f10Tab === 'peers'">
-        <div class="peer-ranks" v-if="f10Data?.peers?.ranks">
-          <div class="rank-chip">
-            <span class="rank-label">行业</span>
-            <span class="rank-value">{{ f10Data.peers.ranks.industry }} ({{ f10Data.peers.ranks.industrySize }} 家)</span>
-          </div>
-          <div class="rank-chip" v-if="f10Data.peers.ranks.peByRank">
-            <span class="rank-label">PE 排名</span>
-            <span class="rank-value">{{ f10Data.peers.ranks.peByRank }} / {{ f10Data.peers.ranks.industrySize }}</span>
-          </div>
-          <div class="rank-chip" v-if="f10Data.peers.ranks.pbByRank">
-            <span class="rank-label">PB 排名</span>
-            <span class="rank-value">{{ f10Data.peers.ranks.pbByRank }} / {{ f10Data.peers.ranks.industrySize }}</span>
-          </div>
-          <div class="rank-chip" v-if="f10Data.peers.ranks.roeRank">
-            <span class="rank-label">ROE 排名</span>
-            <span class="rank-value">{{ f10Data.peers.ranks.roeRank }} / {{ f10Data.peers.ranks.industrySize }}</span>
-          </div>
-          <div class="rank-chip" v-if="f10Data.peers.ranks.marketCapRank">
-            <span class="rank-label">市值排名</span>
-            <span class="rank-value">{{ f10Data.peers.ranks.marketCapRank }} / {{ f10Data.peers.ranks.industrySize }}</span>
-          </div>
-        </div>
-        <el-table :data="f10Data?.peers?.peers || []" size="small" stripe
-                  empty-text="暂无同业数据"
-                  :row-class-name="(o: any) => o?.row?.isTarget ? 'peer-target' : ''"
-                  @row-click="(r: any) => !r.isTarget && $router.push(`/stock/${r.code}`)"
-                  :row-style="{ cursor: 'pointer' }">
-          <el-table-column prop="name" label="名称" width="100" />
-          <el-table-column prop="code" label="代码" width="80" />
-          <el-table-column label="最新价" width="80" align="right">
-            <template #default="{ row }">{{ row.price.toFixed(2) }}</template>
-          </el-table-column>
-          <el-table-column label="涨跌幅" width="90" align="right">
-            <template #default="{ row }">
-              <span :class="row.changePercent >= 0 ? 'price-up' : 'price-down'">
-                {{ row.changePercent >= 0 ? '+' : '' }}{{ row.changePercent }}%
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="pe" label="PE" width="80" align="right">
-            <template #default="{ row }">{{ row.pe > 0 ? row.pe.toFixed(2) : '—' }}</template>
-          </el-table-column>
-          <el-table-column prop="pb" label="PB" width="80" align="right">
-            <template #default="{ row }">{{ row.pb > 0 ? row.pb.toFixed(2) : '—' }}</template>
-          </el-table-column>
-          <el-table-column label="ROE(%)" width="90" align="right">
-            <template #default="{ row }">{{ row.roe ? row.roe.toFixed(2) : '—' }}</template>
-          </el-table-column>
-          <el-table-column label="市值(亿)" width="100" align="right">
-            <template #default="{ row }">{{ formatNumber(row.marketCap, 0) }}</template>
-          </el-table-column>
-        </el-table>
-      </div>
-    </div>
+      <!-- F10 -->
+      <F10Card v-if="tab === 'f10'" :data="f10Data" :loading="f10Loading" />
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { getStockDetail, getStockKLine, getStockStrategies, getStockF10, getStockPrediction } from '@/api/stock'
-import { addToWatchlist as addWatchlistApi, removeFromWatchlist as removeWatchlistApi } from '@/api/user'
+import { getTSignal, type TSignal, type TPositionInput } from '@/api/t'
 import { useUserStore } from '@/stores/user'
-import { useStrategyStore } from '@/stores/strategy'
+import { useSettingsStore, type KlineAdjust } from '@/stores/settings'
 import { useRefreshable } from '@/composables/useRefreshable'
-import KLineChart from '@/components/charts/KLineChart.vue'
-import RadarChart from '@/components/charts/RadarChart.vue'
-import ScoreGauge from '@/components/charts/ScoreGauge.vue'
-import PredictionPanel from '@/components/charts/PredictionPanel.vue'
-import IntradayTChart from '@/components/charts/IntradayTChart.vue'
-import { Star, StarFilled, Aim, Warning, Wallet } from '@element-plus/icons-vue'
-import { getTSignal, PV_LABEL, type TSignal } from '@/api/t'
+import { useDevice } from '@/composables/useDevice'
+import { useRouteTab } from '@/composables/useRouteTab'
 import type { KLineData, PredictionResult } from '@/types'
-import { useSettingsStore } from '@/stores/settings'
-import { formatNumber } from '@/utils/format'
+import type { SegmentOption } from '@/types/ui'
+import AppCard from '@/components/ui/AppCard.vue'
+import SegmentTabs from '@/components/ui/SegmentTabs.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import KLineChart from '@/components/charts/KLineChart.vue'
+import StockHeader from '@/components/detail/StockHeader.vue'
+import TSignalCard from '@/components/detail/TSignalCard.vue'
+import CoreMetricsCard from '@/components/detail/CoreMetricsCard.vue'
+import StrategyScoresCard from '@/components/detail/StrategyScoresCard.vue'
+import PredictionCard from '@/components/detail/PredictionCard.vue'
+import F10Card from '@/components/detail/F10Card.vue'
 
 const route = useRoute()
 const userStore = useUserStore()
-const strategyStore = useStrategyStore()
 const settings = useSettingsStore()
+const { isMobile } = useDevice()
 
-const code = computed(() => route.params.code as string)
+// 桌面与手机统一按 tab 浏览：概览在桌面并排展示 K线 + 核心指标，K线 tab 单独放大。
+// ?tab=predict 由旧的 /pro-signal 路由重定向而来。
+type Tab = 'overview' | 'kline' | 't' | 'predict' | 'f10'
+const tab = useRouteTab<Tab>('overview', ['overview', 'kline', 't', 'predict', 'f10'] as const)
+const tabOptions: SegmentOption<Tab>[] = [
+  { label: '概览', value: 'overview' },
+  { label: 'K线', value: 'kline' },
+  { label: '做T', value: 't' },
+  { label: '预测', value: 'predict' },
+  { label: 'F10', value: 'f10' },
+]
+const overviewVisible = computed(() => tab.value === 'overview')
+const klineVisible = computed(() => tab.value === 'kline' || (tab.value === 'overview' && !isMobile.value))
+
+const predictMode = computed<'prob' | 'pro'>(() => (tab.value === 'predict' ? 'pro' : 'prob'))
+const predictRef = ref<InstanceType<typeof PredictionCard>>()
+const tCardRef = ref<InstanceType<typeof TSignalCard>>()
+
+function goPredict() {
+  tab.value = 'predict'
+  predictRef.value?.setMode('pro')
+}
+
+// keep-alive 缓存本页后，切到别的页面 route.params.code 会变成 undefined；
+// 只在本页路由激活时同步代码，离开时保留最后一次的值，子组件 props 不会收到 undefined。
+const code = ref(String(route.params.code || ''))
+watch(() => route.params.code, (c) => { if (route.name === 'StockDetail' && c) code.value = String(c) })
 const stockInfo = ref<any>({})
 const klineData = ref<KLineData[]>([])
-const klinePeriod = ref('daily')
-const klineAdjust = ref<'qfq' | 'hfq' | 'none'>(settings.klineAdjust)
+const klinePeriod = ref<'daily' | 'weekly'>('daily')
+const klineAdjust = ref<KlineAdjust>(settings.klineAdjust)
+const periodOptions: SegmentOption<'daily' | 'weekly'>[] = [{ label: '日K', value: 'daily' }, { label: '周K', value: 'weekly' }]
+const adjustOptions: SegmentOption<KlineAdjust>[] = [
+  { label: '前复权', value: 'qfq' }, { label: '后复权', value: 'hfq' }, { label: '不复权', value: 'none' },
+]
 const compositeScore = ref(0)
 const strategyScores = ref<Record<string, number>>({})
 const prediction = ref<PredictionResult | null>(null)
 const tSignal = ref<TSignal | null>(null)
-const tTagType = computed(() => {
-  const a = tSignal.value?.action
-  return a === 'positive_t' ? 'danger' : a === 'negative_t' ? 'success' : 'info'
-})
-const pvLabel = computed(() => PV_LABEL[tSignal.value?.pv_pattern || ''] || '')
-const factorList = computed(() => {
-  const s = tSignal.value?.subscores
-  if (!s) return []
-  return [
-    { key: 'position', label: '位置', val: s.position, color: '#00D4FF' },
-    { key: 'volume', label: '量能', val: s.volume, color: '#2AE8A4' },
-    { key: 'momentum', label: '动量', val: s.momentum, color: '#FFC312' },
-    { key: 'index', label: '大盘', val: s.index, color: '#A78BFA' },
-  ]
-})
-// 持仓做 T 输入(填成本后按底仓重算真 T)
-const posShares = ref<number | undefined>()
-const posCost = ref<number | undefined>()
-const posAvail = ref<number | undefined>()
+const pageError = ref(false)
 
 // F10 state
-const f10Tab = ref<'profile' | 'holders' | 'dividend' | 'peers'>('profile')
 const f10Data = ref<any>(null)
 const f10Loading = ref(false)
 
-// Watchlist membership tracker for the header button
-const isInWatchlist = computed(() => {
-  const lists = userStore.watchlists || []
-  for (const g of lists) {
-    if ((g.stocks || []).some((s: any) => String(s.code).padStart(6, '0') === code.value)) {
-      return true
-    }
-  }
-  return false
-})
-const currentGroupId = computed(() => {
-  const lists = userStore.watchlists || []
-  for (const g of lists) {
-    if ((g.stocks || []).some((s: any) => String(s.code).padStart(6, '0') === code.value)) {
-      return g.id
-    }
-  }
-  return lists[0]?.id
-})
-
 let abortCtrl: AbortController | null = null
-
-const radarIndicators = computed(() =>
-  strategyStore.strategies.map(s => ({ name: s.name, max: 100 }))
-)
-const radarValues = computed(() =>
-  strategyStore.strategies.map(s => strategyScores.value[s.id] || 0)
-)
-
-const coreMetrics = computed(() => [
-  { label: 'ROE', value: (stockInfo.value.roe ?? '--') + '%', color: '#00D4FF' },
-  { label: '负债率', value: (stockInfo.value.debtRatio ?? '--') + '%', color: '#FFC312' },
-  { label: '现金流', value: stockInfo.value.cashFlowPerShare ?? '--', color: '#2AE8A4' },
-  { label: '营收增长', value: (stockInfo.value.revenueGrowth ?? '--') + '%', color: '#A78BFA' },
-  { label: '净利润增长', value: (stockInfo.value.profitGrowth ?? '--') + '%', color: '#FF9F43' },
-  { label: '毛利率', value: (stockInfo.value.grossMargin ?? '--') + '%', color: '#FF6B81' },
-  { label: 'PE', value: stockInfo.value.pe ?? '--', color: '#48DBFB' },
-  { label: 'PB', value: stockInfo.value.pb ?? '--', color: '#FECA57' },
-])
-
-function getStrategyName(id: string) {
-  return strategyStore.strategies.find(s => s.id === id)?.name || id
-}
-function getScoreType(score: number) {
-  return score >= 80 ? 'success' : score >= 60 ? 'warning' : 'danger'
-}
-function getProgressColor(score: number) {
-  return score >= 80 ? '#2AE8A4' : score >= 60 ? '#FFC312' : '#FF4757'
-}
-
-async function addToWatchlist() {
-  try {
-    await addWatchlistApi(0, code.value)
-    ElMessage.success('已加入自选股')
-    await userStore.fetchWatchlists()
-  } catch {}
-}
-
-async function removeFromWatchlistAction() {
-  try {
-    const gid = currentGroupId.value
-    await removeWatchlistApi(gid || 0, code.value)
-    ElMessage.success('已从自选股移除')
-    await userStore.fetchWatchlists()
-  } catch {}
-}
 
 async function loadData() {
   const c = code.value
@@ -417,50 +130,35 @@ async function loadData() {
       getStockStrategies(c, signal),
       getStockPrediction(c, signal),
     ])
+    // 详情请求失败视为页面级失败（其余区块独立降级），提供重试而非"暂无数据"
+    pageError.value = detail.status === 'rejected'
     if (detail.status === 'fulfilled') stockInfo.value = detail.value
     if (kline.status === 'fulfilled') klineData.value = kline.value
     if (strategies.status === 'fulfilled') {
       const s = strategies.value as any
       compositeScore.value = s.total || 0
-      strategyScores.value = {}
-      Object.entries(s.strategies || {}).forEach(([k, v]: [string, any]) => {
-        strategyScores.value[k] = v.score || 0
-      })
+      const map: Record<string, number> = {}
+      Object.entries(s.strategies || {}).forEach(([k, v]: [string, any]) => { map[k] = v.score || 0 })
+      strategyScores.value = map
     }
     if (pred.status === 'fulfilled') prediction.value = pred.value
   } catch {}
   // F10 loads in parallel (slower akshare path).
   loadF10()
-  loadTSignal()
+  loadTSignal(tCardRef.value?.currentPos())
 }
 
-async function loadTSignal() {
+async function loadTSignal(pos?: TPositionInput) {
   const c = code.value
   if (!c) return
   try {
-    const pos = (posShares.value && posCost.value)
-      ? { shares: posShares.value, avg_cost: posCost.value, available: posAvail.value ?? posShares.value }
-      : undefined
     tSignal.value = await getTSignal(c, pos)
   } catch {
     tSignal.value = null
   }
 }
 
-function recalcWithPosition() {
-  if (!posShares.value || !posCost.value) {
-    ElMessage.warning('请填写持仓数量与成本价')
-    return
-  }
-  loadTSignal()
-}
-
-function clearPosition() {
-  posShares.value = undefined
-  posCost.value = undefined
-  posAvail.value = undefined
-  loadTSignal()
-}
+function onRecalc(pos: TPositionInput | undefined) { loadTSignal(pos) }
 
 async function loadF10() {
   const c = code.value
@@ -473,13 +171,7 @@ async function loadF10() {
   }
 }
 
-watch(() => code.value, () => {
-  // 切换股票时清空持仓输入,避免把上一只的持仓成本带到新股票(定时刷新则保留)
-  posShares.value = undefined
-  posCost.value = undefined
-  posAvail.value = undefined
-  loadData()
-})
+watch(() => code.value, () => { if (code.value) loadData() })
 
 // Re-fetch only the K-line when the user changes period or adjustment. Debounce
 // so rapid clicks (日/周/前/后/不) don't fire three overlapping requests.
@@ -497,133 +189,29 @@ watch([klinePeriod, klineAdjust], () => {
 useRefreshable('个股详情', loadData)
 onMounted(() => {
   // Pull the user's watchlists so the header button reflects "已自选" state
-  if (userStore.isLoggedIn) userStore.fetchWatchlists()
+  if (userStore.isLoggedIn) userStore.fetchWatchlists().catch(() => {})
 })
 onBeforeUnmount(() => abortCtrl?.abort())
 </script>
 
 <style scoped>
-.t-signal-card { padding: 16px 20px; margin-bottom: 16px; }
-.t-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
-.t-head h3 { margin: 0; font-size: 15px; color: var(--text); }
-.t-strength { display: flex; align-items: center; gap: 8px; }
-.t-strength-label { color: var(--text-3); font-size: 12px; }
-.t-strength-num { font-weight: 700; color: var(--text); }
-.t-time { margin-left: auto; color: var(--text-3); font-size: 12px; }
-.t-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px 18px; margin-bottom: 12px; }
-.t-metric { display: flex; flex-direction: column; gap: 2px; }
-.t-metric span { color: var(--text-3); font-size: 12px; }
-.t-metric b { color: var(--text); font-size: 15px; }
-.t-zones { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
-.t-zone { padding: 8px 14px; border-radius: 8px; font-size: 13px; }
-.t-zone b { font-size: 15px; }
-.t-zone.buy { background: rgba(245, 108, 108, 0.12); color: #f56c6c; }
-.t-zone.sell { background: rgba(103, 194, 58, 0.12); color: #67c23a; }
-.t-reasons { margin: 0 0 10px; padding-left: 18px; }
-.t-reasons li { color: var(--text-3); font-size: 13px; line-height: 1.7; }
-.t-risks { display: flex; align-items: center; gap: 6px; color: #e6a23c; font-size: 13px; margin-bottom: 8px; }
-.t-disclaimer { color: var(--text-3); font-size: 12px; font-style: italic; }
-.t-factors { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
-.t-factor { display: flex; align-items: center; gap: 8px; min-width: 150px; flex: 1; }
-.t-factor-label { color: var(--text-3); font-size: 12px; width: 28px; flex-shrink: 0; }
-.t-factor :deep(.el-progress) { flex: 1; }
-.t-factor b { color: var(--text); font-size: 13px; width: 24px; text-align: right; flex-shrink: 0; }
-.t-position-plan { background: rgba(167, 139, 250, 0.08); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
-.tp-head { display: flex; align-items: center; gap: 6px; color: #A78BFA; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-.tp-body { color: var(--text); font-size: 14px; line-height: 1.6; }
-.tp-body.warn { color: #e6a23c; }
-.tp-body b { font-size: 15px; margin: 0 2px; }
-.tp-pnl { color: var(--text-3); font-size: 12px; margin-top: 6px; }
-.t-pos-input { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.t-pos-input .tpi-label { color: var(--text-3); font-size: 13px; }
-.t-pos-input :deep(.el-input-number) { width: 110px; }
-.t-metric b.up, .tp-body b.up, .tp-pnl .up { color: #FF4757; }
-.t-metric b.down, .tp-body b.down, .tp-pnl .down { color: #2AE8A4; }
-.kline-controls {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.f10-card { padding: 18px 20px; margin-top: 16px; }
-.f10-card .card-header {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 14px;
-}
-.f10-card h3 { margin: 0; font-size: 15px; color: var(--text); }
-.profile-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px 24px;
-}
-.profile-item {
-  display: flex; justify-content: space-between; align-items: baseline;
-  border-bottom: 1px dashed var(--line);
-  padding-bottom: 6px;
-}
-.profile-label { color: var(--text-3); font-size: 13px; }
-.profile-value { color: var(--text); font-size: 14px; font-weight: 500; text-align: right; }
-.peer-ranks {
-  display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;
-}
-.rank-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--brand-soft);
-  border-radius: var(--radius-pill);
-  padding: 4px 12px;
-  font-size: 12px;
-}
-.rank-label { color: var(--text-3); }
-.rank-value { color: var(--brand); font-weight: 600; }
-:deep(.peer-target) { background: var(--brand-soft) !important; }
-:deep(.peer-target td) { font-weight: 600; }
-
-.stock-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 24px;
-  margin-bottom: 16px;
-}
-.stock-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 8px 0;
-}
-.stock-name { font-size: 20px; color: var(--text-primary); }
-.stock-code { font-size: 14px; color: var(--text-muted); }
-.current-price { font-size: 28px; font-weight: 700; margin-right: 12px; }
-.price-change { font-size: 15px; }
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-.action-btns { display: flex; flex-direction: column; gap: 8px; }
+.stock-detail { display: flex; flex-direction: column; gap: 16px; }
+.stock-detail.mobile { gap: 12px; }
 .content-grid {
   display: grid;
   grid-template-columns: 1fr 320px;
   gap: 16px;
-  margin-bottom: 16px;
+  align-items: start;
 }
-.kline-card { padding: 16px; }
-.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.card-header h3 { font-size: 15px; color: var(--text-primary); margin: 0; }
-.strategy-panel { display: flex; flex-direction: column; gap: 16px; }
-.radar-card { padding: 16px; }
-.radar-card h3 { font-size: 15px; color: var(--text-primary); margin: 0 0 8px 0; }
-.detail-card { padding: 16px; }
-.detail-card h3 { font-size: 15px; color: var(--text-primary); margin: 0 0 12px 0; }
-.metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.metric-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(0,212,255,0.06); }
-.metric-label { font-size: 13px; color: var(--text-secondary); }
-.metric-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.strategies-card { padding: 20px; }
-.strategies-card h3 { font-size: 16px; color: var(--text-primary); margin: 0 0 16px 0; }
-.prediction-panel { margin-bottom: 16px; }
-.strategy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.strategy-item { padding: 14px; }
-.strategy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.strategy-name { font-size: 13px; color: var(--text-secondary); }
+.side-panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.stock-detail.mobile .content-grid { grid-template-columns: 1fr; gap: 12px; }
+.stock-detail.mobile .side-panel { gap: 12px; }
+.stock-detail.mobile .detail-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.detail-tabs { flex-shrink: 0; }
+.content-grid.overview-only { grid-template-columns: 1fr; }
 @media (max-width: 1200px) { .content-grid { grid-template-columns: 1fr; } }
 </style>

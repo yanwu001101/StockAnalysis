@@ -47,6 +47,11 @@ public class BacktestController {
             view.put("calmarRatio", m.getOrDefault("calmar_ratio", 0));
             view.put("winRate", m.getOrDefault("win_rate", 0));
             view.put("tradeCount", m.getOrDefault("trade_count", 0));
+            // P0: 基准对比与交易摩擦（可能缺省，存在才透传）
+            if (m.containsKey("benchmark_return")) view.put("benchmarkReturn", m.get("benchmark_return"));
+            if (m.containsKey("excess_return")) view.put("excessReturn", m.get("excess_return"));
+            if (m.containsKey("turnover_rate")) view.put("turnoverRate", m.get("turnover_rate"));
+            if (m.containsKey("total_costs")) view.put("totalCosts", m.get("total_costs"));
         }
         view.put("equityCurve", data.getJSONArray("equity_curve"));
         view.put("trades", data.getJSONArray("trades"));
@@ -57,6 +62,8 @@ public class BacktestController {
         view.put("initialCapital", data.get("initial_capital"));
         view.put("topN", data.get("top_n"));
         view.put("rebalance", data.getString("rebalance"));
+        view.put("benchmarkCurve", data.getJSONArray("benchmark_curve"));
+        view.put("costs", data.getJSONObject("costs"));
         return ApiResponse.ok(view);
     }
 }

@@ -38,6 +38,9 @@ export const useStrategyStore = defineStore('strategy', () => {
   const strategies = ref<StrategyConfig[]>([...DEFAULT_STRATEGIES])
   const savedConfigs = ref<{ name: string; config: StrategyConfig[] }[]>([])
 
+  // 已保存方案常驻 localStorage，store 创建时即刻恢复，否则「保存方案」成为死胡同
+  loadFromStorage()
+
   function updateWeight(id: string, weight: number) {
     const s = strategies.value.find(s => s.id === id)
     if (s) s.weight = weight
@@ -63,6 +66,11 @@ export const useStrategyStore = defineStore('strategy', () => {
       name,
       config: strategies.value.map(s => ({ ...s })),
     })
+    localStorage.setItem('savedStrategies', JSON.stringify(savedConfigs.value))
+  }
+
+  function deleteConfig(name: string) {
+    savedConfigs.value = savedConfigs.value.filter(c => c.name !== name)
     localStorage.setItem('savedStrategies', JSON.stringify(savedConfigs.value))
   }
 
@@ -93,7 +101,7 @@ export const useStrategyStore = defineStore('strategy', () => {
   return {
     strategies, savedConfigs,
     updateWeight, toggleStrategy, setAllStrategiesEnabled, resetToDefault,
-    saveConfig, loadConfig, loadFromStorage,
+    saveConfig, deleteConfig, loadConfig, loadFromStorage,
     getEnabledStrategies, getConfigMap,
   }
 })

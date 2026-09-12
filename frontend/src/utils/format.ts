@@ -68,3 +68,15 @@ export function formatDateTime(v: string | number | Date | null | undefined): st
   const d = dayjs(v)
   return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '—'
 }
+
+/** 人民币金额，如 ¥12,345.67。 */
+export function formatMoney(v: number | string | null | undefined): string {
+  const n = Number(v || 0)
+  return n.toLocaleString('zh-CN', { style: 'currency', currency: 'CNY', maximumFractionDigits: 2 })
+}
+
+/** 固定小数位；0 / 空 / 非数字统一显示 "--"（持仓助手里的价格、评分等）。 */
+export function fixedOrDash(v: number | string | null | undefined, digits = 2): string {
+  const n = Number(v || 0)
+  return Number.isFinite(n) && n !== 0 ? n.toFixed(digits) : '--'
+}

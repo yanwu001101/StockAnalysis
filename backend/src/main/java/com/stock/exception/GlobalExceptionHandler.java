@@ -45,6 +45,13 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(405, "不支持的请求方法: " + e.getMethod()));
     }
 
+    /** 路径不存在（如前端拼错接口）返回 404，而不是落到 500 “服务器内部错误”。 */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<?>> handleNotFound(org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.error(404, "接口不存在: " + e.getResourcePath()));
+    }
+
     // ---- Downstream (data-service / akshare) -----------------------------
 
     @ExceptionHandler(ResourceAccessException.class)

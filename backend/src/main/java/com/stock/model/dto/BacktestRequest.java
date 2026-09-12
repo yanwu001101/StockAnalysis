@@ -16,4 +16,6 @@ public class BacktestRequest {
     private double initialCapital = 1_000_000;
     private int topN = 10;
     private String rebalance = "weekly";
+    /** 交易成本（可选项，缺省用 data-service 默认值）：佣金率/最低佣金/印花税/滑点。 */
+    private Map<String, Double> costs;
 }

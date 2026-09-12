@@ -39,48 +39,35 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Sunny, Moon, MagicStick } from '@element-plus/icons-vue'
+import { useSettingsStore, type Theme } from '@/stores/settings'
 
 defineProps<{ collapsed: boolean }>()
 defineEmits(['toggle'])
 
 const route = useRoute()
 const router = useRouter()
+const settings = useSettingsStore()
 const currentRoute = computed(() => route.path)
 
+// 菜单只取有组件的非 hidden 一级子路由；redirect 记录不进菜单。
 const menuRoutes = computed(() => {
   const mainRoute = router.options.routes.find(r => r.path === '/')
-  return mainRoute?.children?.filter(r => !r.meta?.hidden) || []
+  return mainRoute?.children?.filter(r => r.component && !r.meta?.hidden) || []
 })
 
-type Theme = 'auto' | 'light' | 'dark'
-const theme = ref<Theme>('auto')
-
-function applyTheme(t: Theme) {
-  const root = document.documentElement
-  if (t === 'auto') root.removeAttribute('data-theme')
-  else root.setAttribute('data-theme', t)
-  localStorage.setItem('theme', t)
-  theme.value = t
-}
 function cycleTheme() {
   const order: Theme[] = ['auto', 'light', 'dark']
-  const next = order[(order.indexOf(theme.value) + 1) % order.length]
-  applyTheme(next)
+  settings.theme = order[(order.indexOf(settings.theme) + 1) % order.length]
 }
 const themeLabel = computed(() =>
-  theme.value === 'auto' ? '跟随系统' : theme.value === 'light' ? '浅色' : '深色'
+  settings.theme === 'auto' ? '跟随系统' : settings.theme === 'light' ? '浅色' : '深色'
 )
 const themeIcon = computed(() =>
-  theme.value === 'auto' ? MagicStick : theme.value === 'light' ? Sunny : Moon
+  settings.theme === 'auto' ? MagicStick : settings.theme === 'light' ? Sunny : Moon
 )
-
-onMounted(() => {
-  const saved = (localStorage.getItem('theme') as Theme) || 'auto'
-  applyTheme(saved)
-})
 </script>
 
 <style scoped>
@@ -107,7 +94,7 @@ onMounted(() => {
   width: 32px; height: 32px;
   border-radius: 8px;
   background: var(--brand);
-  color: #FFFFFF;
+  color: var(--on-brand);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Performance metrics for backtest results."""
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -16,9 +16,14 @@ class Metrics:
     calmar_ratio: float
     win_rate: float
     trade_count: int
+    # 以下为 P0 新增：基准对比 / 交易摩擦。None 表示该次回测不适用（无基准数据等）
+    benchmark_return: float | None = None
+    excess_return: float | None = None
+    turnover_rate: float | None = None
+    total_costs: float | None = None
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "total_return": round(self.total_return, 4),
             "annualized_return": round(self.annualized_return, 4),
             "max_drawdown": round(self.max_drawdown, 4),
@@ -27,12 +32,28 @@ class Metrics:
             "win_rate": round(self.win_rate, 4),
             "trade_count": self.trade_count,
         }
+        for k in ("benchmark_return", "excess_return", "turnover_rate", "total_costs"):
+            v = getattr(self, k)
+            if v is not None:
+                out[k] = round(v, 4)
+        return out
 
 
 def compute(equity: pd.Series, trades: list[dict] | None = None,
-            periods_per_year: int = 252, rf: float = 0.02) -> Metrics:
+            periods_per_year: int = 252, rf: float = 0.02,
+            benchmark: pd.Series | None = None,
+            turnover_rate: float | None = None,
+            total_costs: float | None = None) -> Metrics:
+    bench_ret: float | None = None
+    if benchmark is not None and len(benchmark) >= 2:
+        bench_ret = float(benchmark.iloc[-1] / benchmark.iloc[0] - 1)
+
     if equity is None or equity.empty or len(equity) < 2:
-        return Metrics(0, 0, 0, 0, 0, 0, 0)
+        return Metrics(0, 0, 0, 0, 0, 0, 0,
+                       benchmark_return=bench_ret,
+                       excess_return=None,
+                       turnover_rate=turnover_rate,
+                       total_costs=total_costs)
     equity = equity.astype(float)
     rets = equity.pct_change().dropna()
 
@@ -77,4 +98,8 @@ def compute(equity: pd.Series, trades: list[dict] | None = None,
         calmar_ratio=calmar,
         win_rate=win_rate,
         trade_count=n_trades,
+        benchmark_return=bench_ret,
+        excess_return=(total_return - bench_ret) if bench_ret is not None else None,
+        turnover_rate=turnover_rate,
+        total_costs=total_costs,
     )

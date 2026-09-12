@@ -2,7 +2,7 @@
   <div class="score-gauge">
     <div class="gauge-ring" :style="ringStyle">
       <div class="gauge-inner">
-        <span class="gauge-value" :style="{ color: scoreColor }">{{ score }}</span>
+        <span class="gauge-value num" :style="{ color: scoreColor }">{{ Math.round(score) }}</span>
         <span class="gauge-label">{{ label }}</span>
       </div>
     </div>
@@ -11,6 +11,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { scoreLevel } from '@/utils/score'
 
 const props = withDefaults(defineProps<{
   score: number
@@ -21,10 +22,10 @@ const props = withDefaults(defineProps<{
   size: 100,
 })
 
+// 高分用品牌色，中分用警示色（文字级），低分固定用红 — 全部跟随主题变量
 const scoreColor = computed(() => {
-  if (props.score >= 80) return '#2AE8A4'
-  if (props.score >= 60) return '#FFC312'
-  return '#FF4757'
+  const lv = scoreLevel(props.score)
+  return lv === 'high' ? 'var(--brand)' : lv === 'mid' ? 'var(--warn-text)' : 'var(--color-red)'
 })
 
 const ringStyle = computed(() => {
@@ -33,15 +34,13 @@ const ringStyle = computed(() => {
   return {
     width: `${props.size}px`,
     height: `${props.size}px`,
-    background: `conic-gradient(${scoreColor.value} ${deg}deg, rgba(0,212,255,0.08) ${deg}deg)`,
+    background: `conic-gradient(${scoreColor.value} ${deg}deg, var(--line) ${deg}deg)`,
   }
 })
 </script>
 
 <style scoped>
-.score-gauge {
-  display: inline-flex;
-}
+.score-gauge { display: inline-flex; }
 .gauge-ring {
   border-radius: 50%;
   display: flex;
@@ -53,20 +52,12 @@ const ringStyle = computed(() => {
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  background: var(--bg-secondary);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
 }
-.gauge-value {
-  font-size: 24px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.gauge-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
+.gauge-value { font-size: 24px; font-weight: 700; line-height: 1; }
+.gauge-label { font-size: 11px; color: var(--text-3); margin-top: 4px; }
 </style>

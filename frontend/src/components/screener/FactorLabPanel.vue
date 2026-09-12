@@ -271,8 +271,6 @@ const metricRows = computed<MetricRow[]>(() => {
   if (!s || !r) return []
   const rev = isReverse.value
   const sign = rev ? -1 : 1
-  const f = (v: number, d = 4) => (v * sign).toFixed(d)
-  const pf = (v: number) => `${Math.round((v * sign) * 100)}%`
   const clamp01 = (x: number) => Math.max(0, Math.min(1, x))
   const stars = (ratio: number) => {
     const full = Math.round(clamp01(ratio) * 5)
@@ -280,16 +278,20 @@ const metricRows = computed<MetricRow[]>(() => {
   }
   const mono = r.layer_monotonicity ?? 0
   const spread = r.top_minus_bottom_annualized ?? 0
+  const posAdj = rev ? 1 - s.positive_ratio : s.positive_ratio
+  const f = (v: number, d = 4) => (v * sign).toFixed(d)
+  // 主列 = 因子原始方向；「反向使用后」列 = 翻正口径（仅反向因子显示）
   const rows: MetricRow[] = [
-    { label: 'RankIC', value: f(s.mean), cls: s.mean * sign >= 0 ? 'price-up' : 'price-down', flipped: rev ? s.mean.toFixed(4) : undefined, stars: stars(clamp01(Math.abs(s.mean) / 0.05)) },
-    { label: 'ICIR', value: f(s.icir, 3), flipped: rev ? s.icir.toFixed(3) : undefined, stars: stars(clamp01(Math.abs(s.icir) / 0.5)) },
-    { label: 'IC > 0', value: pf(s.positive_ratio), flipped: rev ? `${Math.round(s.positive_ratio * 100)}%` : undefined, stars: stars(clamp01(Math.abs(s.positive_ratio * sign - 0.5) * 2 + 0.5) * 0 + clamp01(s.positive_ratio * sign + (rev ? -0.5 : 0.5)) * 2 * 0.5 + 0.5 * 0 + (s.positive_ratio * sign >= 0.5 ? 1 : 0.6) * 0 + 0) || stars(0.5) },
-    { label: 't 值', value: s.t_stat.toFixed(2), flipped: rev ? s.t_stat.toFixed(2) : undefined, stars: stars(clamp01(Math.abs(s.t_stat) / 2.5)) },
-    { label: '分层单调性', value: (mono * sign).toFixed(2), flipped: rev ? mono.toFixed(2) : undefined, stars: stars(clamp01(mono * sign)) },
-    { label: '多空年化', value: fmtPctLocal(spread * sign), cls: spread * sign >= 0 ? 'price-up' : 'price-down', flipped: rev ? fmtPctLocal(spread) : undefined, stars: stars(clamp01(Math.abs(spread) / 0.20)), warn: spread * sign < 0 },
+    { label: 'RankIC', value: s.mean.toFixed(4), cls: s.mean >= 0 ? 'price-up' : 'price-down', flipped: rev ? f(s.mean) : undefined, stars: stars(clamp01(Math.abs(s.mean) / 0.05)) },
+    { label: 'ICIR', value: s.icir.toFixed(3), flipped: rev ? f(s.icir, 3) : undefined, stars: stars(clamp01(Math.abs(s.icir) / 0.5)) },
+    { label: 'IC > 0', value: `${Math.round(s.positive_ratio * 100)}%`, flipped: rev ? `${Math.round(posAdj * 100)}%` : undefined, stars: stars(clamp01(posAdj)) },
+    { label: 't 值', value: s.t_stat.toFixed(2), flipped: rev ? f(s.t_stat, 2) : undefined, stars: stars(clamp01(Math.abs(s.t_stat) / 2.5)) },
+    { label: '分层单调性', value: mono.toFixed(2), flipped: rev ? f(mono, 2) : undefined, stars: stars(clamp01(Math.abs(mono))) },
+    { label: '多空年化', value: fmtPct(spread), cls: spread >= 0 ? 'price-up' : 'price-down', flipped: rev ? fmtPct(spread * sign) : undefined, stars: stars(clamp01(Math.abs(spread) / 0.20)) },
   ]
   return rows
 })
+
 const verdictCls = computed(() => statusMeta.value.cls)
 const verdictIcon = computed(() =>
   verdictCls.value === 'good' ? CircleCheckFilled : verdictCls.value === 'mid' ? WarningFilled : CircleCloseFilled

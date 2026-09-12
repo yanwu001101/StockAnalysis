@@ -28,6 +28,48 @@ CREATE TABLE IF NOT EXISTS `index_kline_daily` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
 
+PAPER_TABLES_DDL = """CREATE TABLE IF NOT EXISTS `paper_account` (
+    `id` VARCHAR(40) PRIMARY KEY,
+    `initial_capital` DECIMAL(20,2) NOT NULL,
+    `top_n` INT NOT NULL DEFAULT 10,
+    `rebalance` VARCHAR(16) NOT NULL DEFAULT 'weekly',
+    `cash` DECIMAL(20,2) NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS `paper_positions` (
+    `account_id` VARCHAR(40) NOT NULL,
+    `code` VARCHAR(10) NOT NULL,
+    `shares` DECIMAL(20,4) NOT NULL,
+    `avg_cost` DECIMAL(12,3) NOT NULL,
+    `buy_date` DATE,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`account_id`, `code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS `paper_trades` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `account_id` VARCHAR(40) NOT NULL,
+    `trade_date` DATE NOT NULL,
+    `code` VARCHAR(10) NOT NULL,
+    `side` VARCHAR(8) NOT NULL,
+    `shares` DECIMAL(20,4),
+    `price` DECIMAL(12,3),
+    `amount` DECIMAL(20,2),
+    `cost` DECIMAL(20,2),
+    `reason` VARCHAR(40),
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_ptrade_acc` (`account_id`, `trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS `paper_equity` (
+    `account_id` VARCHAR(40) NOT NULL,
+    `trade_date` DATE NOT NULL,
+    `cash` DECIMAL(20,2),
+    `positions_value` DECIMAL(20,2),
+    `equity` DECIMAL(20,2),
+    `benchmark_close` DECIMAL(12,3),
+    PRIMARY KEY (`account_id`, `trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;"""
+
 
 def _column_exists(conn, table: str, column: str) -> bool:
     row = conn.execute(
@@ -54,6 +96,7 @@ def ensure_schema() -> list[str]:
                 ))
                 applied.append("stock_fundamental.ann_date")
             conn.execute(text(INDEX_KLINE_DDL))
+            conn.execute(text(PAPER_TABLES_DDL))
         if applied:
             logger.info("[migrations] applied: %s", ", ".join(applied))
     except Exception as e:

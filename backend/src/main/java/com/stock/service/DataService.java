@@ -222,6 +222,10 @@ public class DataService {
     public JSONObject runBacktest(JSONObject request) { return postObj("/api/backtest", request); }
 
     public JSONObject runFactorLab(JSONObject request) { return postObj("/api/factorlab", request); }
+
+    public JSONObject getPaper() { return getObjNoCache("/api/paper"); }
+
+    public JSONObject resetPaper(JSONObject request) { return postObj("/api/paper/reset", request); }
 
     // =====================================================================
     // LHB

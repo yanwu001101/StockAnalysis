@@ -1230,6 +1230,7 @@ try:
     from api.backtest import bp as backtest_bp
     from api.metrics import bp as ops_bp
     from api.factorlab import bp as factorlab_bp
+    from api.paper import bp as paper_bp
     from api.strategies_v2 import bp as v2_bp
     from api.lhb import bp as lhb_bp
     from api.moneyflow import bp as mf_bp
@@ -1240,6 +1241,7 @@ try:
     from api.t_signal import bp as t_bp
     app.register_blueprint(backtest_bp)
     app.register_blueprint(factorlab_bp)
+    app.register_blueprint(paper_bp)
     app.register_blueprint(ops_bp)
     app.register_blueprint(v2_bp)
     app.register_blueprint(lhb_bp)

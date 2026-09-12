@@ -190,6 +190,16 @@ def _daily_push_safe():
         log.warning("[scheduler] daily push failed: %s", e)
         notifier.job_failed("盘后摘要推送", str(e))
 
+
+def _paper_trade_safe():
+    try:
+        from jobs import paper_trade
+        paper_trade.run()
+    except Exception as e:
+        log.warning("[scheduler] paper trade failed: %s", e)
+        notifier.job_failed("模拟盘调仓", str(e))
+
+
 def start():
     global _sched
     with _lock:
@@ -243,6 +253,16 @@ def start():
             refresh_strategy_scores,
             CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
             id="strategy_score_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # Paper trading at 17:50 — mark-to-market + weekly rebalance
+        sched.add_job(
+            _paper_trade_safe,
+            CronTrigger(hour=17, minute=50, timezone="Asia/Shanghai"),
+            id="paper_trade",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

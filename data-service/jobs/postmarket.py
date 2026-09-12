@@ -57,7 +57,7 @@ async def run_async() -> None:
         return
 
     try:
-        await kline_pipe.run_daily_batch(codes, count=250)
+        await kline_pipe.run_daily_batch(codes, count=800)   # 3 年+ 深度：因子检验/回测窗口依赖
     except Exception as e:
         logger.warning("[job:postmarket] daily kline failed: %s", e)
 

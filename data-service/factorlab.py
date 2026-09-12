@@ -163,20 +163,25 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
     abs_icir = abs(ic_summary["icir"])
     abs_t = abs(ic_summary["t_stat"])
 
-    # 因子实力（纯经济量级，不看样本）
-    strength = round(0.4 * clamp01(abs_ic / 0.05) * 100
-                     + 0.3 * clamp01(abs_icir / 0.5) * 100
-                     + 0.3 * clamp01(abs(spread_ann) / 0.20) * 100, 1)
-    grade = "A" if strength >= 70 else "B" if strength >= 55 else "C" if strength >= 40 else "D"
-
-    # 统计可信度（证据强度）
-    confidence = round(0.6 * clamp01(abs_t / 2.5) * 100 + 0.4 * clamp01(n / 36) * 100, 1)
-
     # 方向：ICIR 与 IC 都接近零才是中性，否则按 IC 符号定方向
     if abs_icir < 0.1 and abs_ic < 0.015:
         direction = "neutral"
     else:
         direction = "positive" if ic_summary["mean"] > 0 else "reverse"
+    dir_sign = 1.0 if direction == "positive" else (-1.0 if direction == "reverse" else 1.0)
+
+    # 方向校正后的单调性：反向因子 |负相关| 同样是强分层结构
+    mono_eff = max(0.0, monotonicity * dir_sign)
+
+    # 因子实力（经济量级，含方向校正后的分层单调性）
+    strength = round(0.30 * clamp01(abs_ic / 0.05) * 100
+                     + 0.25 * clamp01(abs_icir / 0.5) * 100
+                     + 0.25 * clamp01(abs(spread_ann) / 0.20) * 100
+                     + 0.20 * clamp01(mono_eff) * 100, 1)
+    grade = "A" if strength >= 70 else "B" if strength >= 55 else "C" if strength >= 40 else "D"
+
+    # 统计可信度（证据强度）
+    confidence = round(0.6 * clamp01(abs_t / 2.5) * 100 + 0.4 * clamp01(n / 36) * 100, 1)
 
     # 状态：有效 / 候选 / 不显著
     if abs_t >= 2 and abs_icir >= 0.3 and n >= 12:
@@ -191,7 +196,7 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
         "direction_ic": round(min(abs_ic / 0.05, 1.0) * 100),
         "stability": round(clamp01(abs_icir / 0.5) * 100),
         "significance": round(clamp01(abs_t / 2.5) * 100),
-        "monotonicity": round(clamp01(max(monotonicity, 0.0)) * 100),
+        "monotonicity": round(clamp01(mono_eff) * 100),
         "spread": round(clamp01(abs(spread_ann) / 0.20) * 100),
         "sample": round(clamp01(n / 36) * 100),
     }
@@ -218,6 +223,7 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
         "dimensions": dimensions,
         "net_spread_ann": round(net_spread, 4),
         "cost_per_turnover": COST_PER_TURNOVER,
+        "direction_sign": dir_sign,
         "flags": flags,
     }
 

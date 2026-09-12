@@ -93,8 +93,11 @@
         <div class="metrics-block">
           <div class="metric-line" v-for="m in metricRows" :key="m.label">
             <span class="rl-k">{{ m.label }}</span>
-            <span class="rl-v num" :class="m.cls">{{ m.value }}</span>
-            <span v-if="m.flipped" class="rl-flip">反向使用后 <b class="num">{{ m.flipped }}</b></span>
+            <span class="rl-v num" :class="m.cls">{{ m.value }} <span class="stars">{{ m.stars }}</span></span>
+            <span class="rl-extra">
+              <span v-if="m.warn" class="flag-chip">⚠ 收益为负</span>
+              <span v-if="m.flipped" class="rl-flip">反向使用后 <b class="num">{{ m.flipped }}</b></span>
+            </span>
           </div>
         </div>
 
@@ -102,9 +105,16 @@
           <span v-for="f in rating.flags" :key="f" class="flag-chip">{{ f }}</span>
         </div>
         <div class="rating-meta">
-          <span>净多空年化 <b>{{ fmtPct(rating?.net_spread_ann) }}</b>（毛 {{ fmtPct(result.top_minus_bottom_annualized) }}，摩擦 {{ ((rating?.cost_per_turnover || 0) * 100).toFixed(2) }}%/次换手 × 年换手 {{ result.turnover_annualized ?? '—' }}x）</span>
-          <span v-if="result.ic_neutral_summary">行业中性 IC {{ result.ic_neutral_summary.mean.toFixed(4) }}（原始 {{ result.ic_summary.mean.toFixed(4) }}）</span>
-          <span v-if="result.regime">牛市 IC {{ result.regime.bull.ic_mean.toFixed(3) }} / 熊市 IC {{ result.regime.bear.ic_mean.toFixed(3) }}</span>
+          <template v-if="!isReverse">
+            <span>净多空年化 <b>{{ fmtPct(rating?.net_spread_ann) }}</b>（毛 {{ fmtPct(result.top_minus_bottom_annualized) }}，摩擦 {{ ((rating?.cost_per_turnover || 0) * 100).toFixed(2) }}%/次换手 × 年换手 {{ result.turnover_annualized ?? '—' }}x）</span>
+            <span v-if="result.ic_neutral_summary">行业中性 IC {{ result.ic_neutral_summary.mean.toFixed(4) }}（原始 {{ result.ic_summary.mean.toFixed(4) }}）</span>
+            <span v-if="result.regime">牛市 IC {{ result.regime.bull.ic_mean.toFixed(3) }} / 熊市 IC {{ result.regime.bear.ic_mean.toFixed(3) }}</span>
+          </template>
+          <template v-else>
+            <span>反向使用后净多空年化 <b>{{ fmtPct(-(rating?.net_spread_ann ?? 0)) }}</b>（毛 {{ fmtPct(-(result.top_minus_bottom_annualized ?? 0)) }}，摩擦 {{ ((rating?.cost_per_turnover || 0) * 100).toFixed(2) }}%/次换手 × 年换手 {{ result.turnover_annualized ?? '—' }}x）</span>
+            <span v-if="result.ic_neutral_summary">行业中性 IC {{ (-(result.ic_neutral_summary.mean ?? 0)).toFixed(4) }}（原始 {{ (result.ic_neutral_summary?.mean ?? 0) >= 0 ? '' : '' }}{{ result.ic_neutral_summary?.mean?.toFixed(4) }}）</span>
+            <span v-if="result.regime">牛市 IC {{ (-result.regime.bull.ic_mean).toFixed(3) }} / 熊市 IC {{ (-result.regime.bear.ic_mean).toFixed(3) }}（已按反向翻正）</span>
+          </template>
         </div>
         <div class="verdict" :class="verdictCls">
           <el-icon :size="18"><component :is="verdictIcon" /></el-icon>
@@ -147,7 +157,7 @@
             <span class="verdict-chip" :class="row.verdict.cls">{{ row.verdict.text }}</span>
           </template>
           <template #cell-view="{ row }">
-            <el-button link size="small" @click="viewStrategy(row.strategyId)">查看</el-button>
+            <el-button link size="small" @click="viewStrategy(row.strategyId)">{{ row.error ? "重试" : "查看" }}</el-button>
           </template>
         </StockTable>
       </AppCard>
@@ -206,6 +216,10 @@ const rebalanceOptions: SegmentOption<string>[] = [
   { label: '周度', value: 'weekly' },
 ]
 
+function fmtPctLocal(v: number | undefined, d = 2): string {
+  if (v == null || Number.isNaN(v)) return "—"
+  return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(d)}%`
+}
 function fmtPct(v: number | undefined, d = 2): string {
   if (v == null || Number.isNaN(v)) return '—'
   return `${v >= 0 ? '+' : ''}${(v * 100).toFixed(d)}%`
@@ -250,18 +264,29 @@ const statusMeta = computed(() => {
   if (st === '候选') return { text: '候选', cls: 'st-candidate' }
   return { text: '不显著', cls: 'st-insig' }
 })
-interface MetricRow { label: string; value: string; cls?: string; flipped?: string }
+interface MetricRow { label: string; value: string; cls?: string; flipped?: string; stars?: string; warn?: boolean }
 const metricRows = computed<MetricRow[]>(() => {
-  const s = result.value?.ic_summary
-  if (!s) return []
+  const r = result.value
+  const s = r?.ic_summary
+  if (!s || !r) return []
   const rev = isReverse.value
-  const f = (v: number, d = 4) => (rev ? -v : v).toFixed(d)
-  const pf = (v: number) => `${rev ? 100 - Math.round(v * 100) : Math.round(v * 100)}%`
+  const sign = rev ? -1 : 1
+  const f = (v: number, d = 4) => (v * sign).toFixed(d)
+  const pf = (v: number) => `${Math.round((v * sign) * 100)}%`
+  const clamp01 = (x: number) => Math.max(0, Math.min(1, x))
+  const stars = (ratio: number) => {
+    const full = Math.round(clamp01(ratio) * 5)
+    return '★'.repeat(full) + '☆'.repeat(5 - full)
+  }
+  const mono = r.layer_monotonicity ?? 0
+  const spread = r.top_minus_bottom_annualized ?? 0
   const rows: MetricRow[] = [
-    { label: 'RankIC', value: s.mean.toFixed(4), cls: s.mean >= 0 ? 'price-up' : 'price-down', flipped: rev ? f(s.mean) : undefined },
-    { label: 'ICIR', value: s.icir.toFixed(3), flipped: rev ? f(s.icir, 3) : undefined },
-    { label: 'IC > 0', value: `${Math.round(s.positive_ratio * 100)}%`, flipped: rev ? pf(s.positive_ratio) : undefined },
-    { label: 't 值', value: s.t_stat.toFixed(2), flipped: rev ? f(s.t_stat, 2) : undefined },
+    { label: 'RankIC', value: f(s.mean), cls: s.mean * sign >= 0 ? 'price-up' : 'price-down', flipped: rev ? s.mean.toFixed(4) : undefined, stars: stars(clamp01(Math.abs(s.mean) / 0.05)) },
+    { label: 'ICIR', value: f(s.icir, 3), flipped: rev ? s.icir.toFixed(3) : undefined, stars: stars(clamp01(Math.abs(s.icir) / 0.5)) },
+    { label: 'IC > 0', value: pf(s.positive_ratio), flipped: rev ? `${Math.round(s.positive_ratio * 100)}%` : undefined, stars: stars(clamp01(Math.abs(s.positive_ratio * sign - 0.5) * 2 + 0.5) * 0 + clamp01(s.positive_ratio * sign + (rev ? -0.5 : 0.5)) * 2 * 0.5 + 0.5 * 0 + (s.positive_ratio * sign >= 0.5 ? 1 : 0.6) * 0 + 0) || stars(0.5) },
+    { label: 't 值', value: s.t_stat.toFixed(2), flipped: rev ? s.t_stat.toFixed(2) : undefined, stars: stars(clamp01(Math.abs(s.t_stat) / 2.5)) },
+    { label: '分层单调性', value: (mono * sign).toFixed(2), flipped: rev ? mono.toFixed(2) : undefined, stars: stars(clamp01(mono * sign)) },
+    { label: '多空年化', value: fmtPctLocal(spread * sign), cls: spread * sign >= 0 ? 'price-up' : 'price-down', flipped: rev ? fmtPctLocal(spread) : undefined, stars: stars(clamp01(Math.abs(spread) / 0.20)), warn: spread * sign < 0 },
   ]
   return rows
 })
@@ -301,7 +326,15 @@ const decayColumns: StockColumn[] = [
   { key: 'icir', label: 'ICIR', type: 'num', digits: 3 },
   { key: 'n', label: '期数', type: 'num', digits: 0, mobile: 'secondary' },
 ]
-const decayRows = computed(() => result.value?.decay ?? [])
+const decayRows = computed(() => {
+  const rev = isReverse.value
+  return (result.value?.decay ?? []).map(d => ({
+    horizon: d.horizon,
+    ic_mean: rev ? -d.ic_mean : d.ic_mean,
+    icir: rev ? -d.icir : d.icir,
+    n: d.n,
+  }))
+})
 
 async function run() {
   loading.value = true
@@ -343,7 +376,7 @@ interface SweepRow {
   error?: string
 }
 
-const SWEEP_KEY = 'factorlab_sweep_v1'
+const SWEEP_KEY = 'factorlab_sweep_v2'
 const fullResults = new Map<string, FactorLabResult>()
 const sweep = reactive({
   running: false,
@@ -405,12 +438,47 @@ function viewStrategy(id: string) {
   const full = fullResults.get(id)
   if (full) {
     result.value = full
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: "smooth" })
     return
   }
-  // 刷新后 full result 不在内存 — 重跑该策略
-  config.strategyId = id
-  run()
+  // 刷新后 full result 不在内存 — 重跑该策略并回写体检行
+  retryRow(id)
+}
+
+async function retryRow(id: string) {
+  const row = sweep.summaries.find(x => x.strategyId === id)
+  if (!row) return
+  sweep.current = row.name
+  try {
+    const r = await runFactorLab({
+      strategyId: id,
+      startDate: config.startDate,
+      endDate: config.endDate,
+      rebalance: config.rebalance,
+      layers: config.layers,
+      maxCodes: 300,
+    })
+    if (r.error) { row.error = r.error; return }
+    fullResults.set(id, r)
+    const v = { text: r.rating?.status || "不显著", cls: "st-insig" }
+    row.ic_mean = r.ic_summary.mean
+    row.icir = r.ic_summary.icir
+    row.positive_ratio = r.ic_summary.positive_ratio
+    row.t_stat = r.ic_summary.t_stat
+    row.spread = r.top_minus_bottom_annualized
+    row.n = r.ic_summary.n
+    row.verdict = v
+    row.grade = r.rating?.grade
+    row.composite = r.rating?.strength
+    row.error = undefined
+    result.value = r
+    saveSweep()
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  } catch {
+    row.error = "重试失败"
+  } finally {
+    sweep.current = ""
+  }
 }
 
 async function runSweep() {
@@ -582,6 +650,8 @@ const icOption = computed<EChartsOption | null>(() => {
   padding: 10px 12px; background: var(--bg-2); border-radius: var(--radius); }
 .metric-line { display: grid; grid-template-columns: 70px 110px 1fr; align-items: center; gap: 8px; font-size: 12px; }
 .metric-line .rl-v { font-variant-numeric: tabular-nums; }
+.stars { color: var(--warn-text); font-size: 11px; letter-spacing: 1px; margin-left: 6px; }
+.rl-extra { display: inline-flex; gap: 8px; align-items: center; }
 .dims-block { margin-top: 14px; }
 .dims-title { font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
 .rating-row { display: flex; align-items: center; gap: 18px; }

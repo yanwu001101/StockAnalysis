@@ -37,4 +37,4 @@ def run_factorlab():
         # 检验类错误（如评分覆盖不足）随 200 返回，由前端展示原因
         return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "error_kind": "compute"}), 500

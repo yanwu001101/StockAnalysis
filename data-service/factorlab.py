@@ -148,24 +148,55 @@ def _ic_summary_block(ics: np.ndarray) -> dict:
 def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
           turnover_ann: float, top_dd: float, n: int,
           regime_consistent: bool | None) -> dict:
-    """多维评级：方向性/稳定性/显著性/分层/样本 → 综合分 + 等级 + 风险旗标。"""
+    """因子评级：实力与统计可信度分离。
+
+    因子实力  — 经济量级：|RankIC| / |ICIR| / 分层多空价差（不含样本量）
+    统计可信度 — 证据强度：|t| 与期数（样本越多越可信）
+    方向      — 正向 / 反向 / 中性（反向因子按绝对值评级，UI 明示 ↓）
+    状态      — 有效 / 候选 / 不显著（覆盖不足与计算失败在上游单独标注）
+    """
 
     def clamp01(x: float) -> float:
         return max(0.0, min(1.0, x))
 
-    direction = clamp01(abs(ic_summary["mean"]) / 0.05) * 100
-    stability = clamp01(abs(ic_summary["icir"]) / 0.5) * 100
-    significance = clamp01(abs(ic_summary["t_stat"]) / 2.5) * 100
-    layering = (0.6 * clamp01(abs(spread_ann) / 0.20) * 100
-                + 0.4 * clamp01(max(monotonicity, 0.0)) * 100)
-    sample = clamp01(n / 36) * 100
-    composite = round(0.25 * direction + 0.25 * stability + 0.20 * significance
-                      + 0.20 * layering + 0.10 * sample, 1)
-    grade = "A" if composite >= 70 else "B" if composite >= 55 else "C" if composite >= 40 else "D"
+    abs_ic = abs(ic_summary["mean"])
+    abs_icir = abs(ic_summary["icir"])
+    abs_t = abs(ic_summary["t_stat"])
+
+    # 因子实力（纯经济量级，不看样本）
+    strength = round(0.4 * clamp01(abs_ic / 0.05) * 100
+                     + 0.3 * clamp01(abs_icir / 0.5) * 100
+                     + 0.3 * clamp01(abs(spread_ann) / 0.20) * 100, 1)
+    grade = "A" if strength >= 70 else "B" if strength >= 55 else "C" if strength >= 40 else "D"
+
+    # 统计可信度（证据强度）
+    confidence = round(0.6 * clamp01(abs_t / 2.5) * 100 + 0.4 * clamp01(n / 36) * 100, 1)
+
+    # 方向：ICIR 与 IC 都接近零才是中性，否则按 IC 符号定方向
+    if abs_icir < 0.1 and abs_ic < 0.015:
+        direction = "neutral"
+    else:
+        direction = "positive" if ic_summary["mean"] > 0 else "reverse"
+
+    # 状态：有效 / 候选 / 不显著
+    if abs_t >= 2 and abs_icir >= 0.3 and n >= 12:
+        status = "有效"
+    elif abs_icir >= 0.3 or (abs_ic >= 0.03 and ic_summary["positive_ratio"] >= 0.6):
+        status = "候选"
+    else:
+        status = "不显著"
+
+    # 分层质量细项（仅供展示）
+    dimensions = {
+        "direction_ic": round(min(abs_ic / 0.05, 1.0) * 100),
+        "stability": round(clamp01(abs_icir / 0.5) * 100),
+        "significance": round(clamp01(abs_t / 2.5) * 100),
+        "monotonicity": round(clamp01(max(monotonicity, 0.0)) * 100),
+        "spread": round(clamp01(abs(spread_ann) / 0.20) * 100),
+        "sample": round(clamp01(n / 36) * 100),
+    }
 
     flags: list[str] = []
-    if ic_summary["mean"] < 0 and abs(ic_summary["icir"]) >= 0.2:
-        flags.append("反向因子：得分越高越差，适合做排除名单或反向使用")
     net_spread = spread_ann - turnover_ann * COST_PER_TURNOVER
     if turnover_ann >= 8:
         flags.append(f"高换手：年化换手 {turnover_ann:.1f}x，成本侵蚀明显")
@@ -180,14 +211,11 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
 
     return {
         "grade": grade,
-        "composite": composite,
-        "dimensions": {
-            "direction": round(direction),
-            "stability": round(stability),
-            "significance": round(significance),
-            "layering": round(layering),
-            "sample": round(sample),
-        },
+        "strength": strength,
+        "confidence": confidence,
+        "direction": direction,
+        "status": status,
+        "dimensions": dimensions,
         "net_spread_ann": round(net_spread, 4),
         "cost_per_turnover": COST_PER_TURNOVER,
         "flags": flags,
@@ -314,7 +342,8 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
             })
 
     if len(ic_series) < 3:
-        return {"error": "有效截面不足（评分覆盖太少或窗口太短）——试试放宽时间窗口或减小每期样本"}
+        return {"error": "有效截面不足（评分覆盖太少或窗口太短）——试试放宽时间窗口或减小每期样本",
+                "error_kind": "coverage"}
 
     # ---- IC 汇总（原始 + 行业中性化）----
     ics = np.array([x["ic"] for x in ic_series], dtype=float)

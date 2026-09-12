@@ -133,6 +133,7 @@ export interface BacktestResult {
 
 export interface FactorLabResult {
   error?: string
+  error_kind?: "coverage" | "compute"
   strategy_id: string
   start: string
   end: string
@@ -143,7 +144,10 @@ export interface FactorLabResult {
   ic_summary: { mean: number; std: number; icir: number; positive_ratio: number; t_stat: number; n: number }
   ic_series: { date: string; ic: number }[]
   ic_neutral_summary?: { mean: number; std: number; icir: number; positive_ratio: number; t_stat: number; n: number }
-  rating?: { grade: string; composite: number; dimensions: Record<string, number>; net_spread_ann: number; cost_per_turnover: number; flags: string[] }
+  rating?: { grade: string; strength: number; confidence: number;
+             direction: "positive" | "reverse" | "neutral"; status: string;
+             dimensions: Record<string, number>; net_spread_ann: number;
+             cost_per_turnover: number; flags: string[] }
   layer_monotonicity?: number
   turnover_annualized?: number
   regime?: { bull: { ic_mean: number; n: number; spread_ann: number }; bear: { ic_mean: number; n: number; spread_ann: number } } | null

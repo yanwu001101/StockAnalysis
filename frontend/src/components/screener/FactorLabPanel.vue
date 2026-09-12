@@ -52,12 +52,35 @@
     </div>
 
     <div class="result-area" v-if="result">
-      <AppCard title="因子评级" sub="方向性 · 稳定性 · 显著性 · 分层表现 · 样本量 → 综合评级">
-        <div class="rating-row">
+      <AppCard title="因子评级">
+        <div class="rating-head">
           <div class="grade-badge" :class="'grade-' + (rating?.grade || 'D')">
             <span class="grade-letter">{{ rating?.grade || '—' }}</span>
-            <span class="grade-score">{{ rating?.composite ?? '—' }}</span>
+            <span class="grade-score">{{ rating?.strength ?? '—' }}</span>
           </div>
+          <div class="rating-head-lines">
+            <div class="rating-title">
+              {{ result.strategy_id }}
+              <span v-if="directionMeta" class="dir-chip" :class="directionMeta.cls">{{ directionMeta.label }}</span>
+              <span class="status-chip" :class="statusMeta.cls">{{ statusMeta.text }}</span>
+            </div>
+            <div class="rating-line">
+              <span class="rl-k">因子方向</span>
+              <span class="rl-v">{{ directionMeta.label }} {{ directionMeta.arrow }}</span>
+            </div>
+            <div class="rating-line">
+              <span class="rl-k">因子实力</span>
+              <span class="rl-v"><b>{{ rating?.strength ?? '—' }}</b>（{{ rating?.grade || '—' }} 级 · 经济量级）</span>
+            </div>
+            <div class="rating-line">
+              <span class="rl-k">统计可信度</span>
+              <span class="rl-v">{{ confidenceMeta.icon }} {{ rating?.confidence ?? '—' }}（{{ confidenceMeta.text }}）</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dims-block">
+          <div class="dims-title">细分维度</div>
           <div class="rating-dims">
             <div class="dim" v-for="d in dimRows" :key="d.key">
               <span class="dim-label">{{ d.label }}</span>
@@ -66,6 +89,15 @@
             </div>
           </div>
         </div>
+
+        <div class="metrics-block">
+          <div class="metric-line" v-for="m in metricRows" :key="m.label">
+            <span class="rl-k">{{ m.label }}</span>
+            <span class="rl-v num" :class="m.cls">{{ m.value }}</span>
+            <span v-if="m.flipped" class="rl-flip">反向使用后 <b class="num">{{ m.flipped }}</b></span>
+          </div>
+        </div>
+
         <div class="flag-row" v-if="rating?.flags?.length">
           <span v-for="f in rating.flags" :key="f" class="flag-chip">{{ f }}</span>
         </div>
@@ -179,22 +211,14 @@ function fmtPct(v: number | undefined, d = 2): string {
   return `${v >= 0 ? '+' : ''}${(v * 100).toFixed(d)}%`
 }
 
-// ---- 判定：|ICIR| 分档 + t 检验显著性；反转类策略（负 IC）看绝对值 ----
-function verdictOf(s: { icir: number; t_stat: number }): { text: string; cls: string } {
-  const abs = Math.abs(s.icir)
-  const significant = Math.abs(s.t_stat) >= 2
-  if (abs >= 0.3 && significant) return { text: '有效', cls: 'good' }
-  if (abs >= 0.1) return significant
-    ? { text: '弱有效', cls: 'mid' }
-    : { text: '不显著', cls: 'mid' }
-  return { text: '无效', cls: 'bad' }
-}
+
 
 const rating = computed(() => result.value?.rating)
 const absIcir = computed(() => Math.abs(result.value?.ic_summary.icir ?? 0))
+const isReverse = computed(() => rating.value?.direction === "reverse")
 const DIM_LABELS: [string, string][] = [
-  ['direction', '方向性'], ['stability', '稳定性'], ['significance', '显著性'],
-  ['layering', '分层表现'], ['sample', '样本量'],
+  ['direction_ic', '方向IC强度'], ['stability', '稳定性'], ['significance', '显著性'],
+  ['monotonicity', '分层单调性'], ['spread', '多空价差'], ['sample', '样本量'],
 ]
 const dimRows = computed(() => {
   const dims = rating.value?.dimensions || {}
@@ -204,29 +228,60 @@ const gradeCls = computed(() => {
   const g = rating.value?.grade || 'D'
   return g === 'A' ? 'good' : g === 'B' ? 'mid' : 'bad'
 })
-const verdictCls = computed(() => {
-  const s = result.value?.ic_summary
-  return s ? verdictOf(s).cls : 'mid'
+const directionMeta = computed(() => {
+  const d = rating.value?.direction || "neutral"
+  if (d === 'reverse') return { label: '反向因子', arrow: '↓', cls: 'dir-reverse' }
+  if (d === 'positive') return { label: '正向因子', arrow: '↑', cls: 'dir-positive' }
+  return { label: '方向中性', arrow: '→', cls: 'dir-neutral' }
 })
+const confidenceMeta = computed(() => {
+  const c = rating.value?.confidence ?? 0
+  if (c >= 70) return { icon: '✅', text: '证据充分' }
+  if (c >= 40) return { icon: '⚠', text: '尚不显著' }
+  return { icon: '⚠', text: '证据不足' }
+})
+// 状态五态：有效/候选/不显著（有数据），覆盖不足/计算失败（无数据）
+const statusMeta = computed(() => {
+  const r = result.value
+  if (r?.error_kind === 'coverage') return { text: '覆盖不足', cls: 'st-coverage' }
+  if (r?.error_kind === 'compute') return { text: '计算失败', cls: 'st-compute' }
+  const st = rating.value?.status || "不显著"
+  if (st === '有效') return { text: '有效', cls: 'st-good' }
+  if (st === '候选') return { text: '候选', cls: 'st-candidate' }
+  return { text: '不显著', cls: 'st-insig' }
+})
+interface MetricRow { label: string; value: string; cls?: string; flipped?: string }
+const metricRows = computed<MetricRow[]>(() => {
+  const s = result.value?.ic_summary
+  if (!s) return []
+  const rev = isReverse.value
+  const f = (v: number, d = 4) => (rev ? -v : v).toFixed(d)
+  const pf = (v: number) => `${rev ? 100 - Math.round(v * 100) : Math.round(v * 100)}%`
+  const rows: MetricRow[] = [
+    { label: 'RankIC', value: s.mean.toFixed(4), cls: s.mean >= 0 ? 'price-up' : 'price-down', flipped: rev ? f(s.mean) : undefined },
+    { label: 'ICIR', value: s.icir.toFixed(3), flipped: rev ? f(s.icir, 3) : undefined },
+    { label: 'IC > 0', value: `${Math.round(s.positive_ratio * 100)}%`, flipped: rev ? pf(s.positive_ratio) : undefined },
+    { label: 't 值', value: s.t_stat.toFixed(2), flipped: rev ? f(s.t_stat, 2) : undefined },
+  ]
+  return rows
+})
+const verdictCls = computed(() => statusMeta.value.cls)
 const verdictIcon = computed(() =>
   verdictCls.value === 'good' ? CircleCheckFilled : verdictCls.value === 'mid' ? WarningFilled : CircleCloseFilled
 )
 const verdictText = computed(() => {
-  const s = result.value?.ic_summary
+  const r = result.value
+  if (!r || r.error) return r?.error || ''
+  const st = rating.value?.status || '不显著'
   const g = rating.value?.grade || 'D'
-  const reverse = !!rating.value?.flags.some(f => f.startsWith('反向因子'))
-  if (!s) return ''
-  const significant = Math.abs(s.t_stat) >= 2
-  if (reverse) {
-    const use = significant ? '可作为反向信号或排除名单使用' : '方向有迹象但统计不显著，先观察'
-    return `强反向因子（${g} 级）— 得分越高越差，${use}`
+  if (isReverse.value) {
+    if (st === '有效') return '统计显著的反向因子 — 用作排除名单或反向信号，权重配置放反向侧'
+    if (st === '候选') return `反向候选（实力 ${g} 级）— 反向使用后值得关注，当前样本证据不足，继续扩大样本`
+    return '方向偏反向但不显著 — 暂不参与权重配置，保持观察'
   }
-  if (g === 'A') return '评级 A — 多维证据充分，可配置较高权重'
-  if (g === 'B') return '评级 B — 有可用信号，建议中等权重并持续跟踪'
-  if (g === 'C') return significant
-    ? '评级 C — 证据薄弱，建议低权重'
-    : '评级 C — 证据薄弱且统计不显著，建议拉长窗口再判断'
-  return '评级 D — 得分与未来收益几乎无关，建议关闭或重做'
+  if (st === '有效') return '统计显著 — 排序能力得到验证，可配置较高权重'
+  if (st === '候选') return `较强候选价值（实力 ${g} 级）— 但当前样本统计证据不足，继续扩大样本`
+  return '有数据但统计证据不足 — 暂不加权，拉长时间窗口后再判断'
 })
 
 const icItems = computed<StatItem[]>(() => {
@@ -276,12 +331,12 @@ async function run() {
 interface SweepRow {
   strategyId: string
   name: string
-  ic_mean: number
-  icir: number
-  positive_ratio: number
-  t_stat: number
-  spread: number
-  n: number
+  ic_mean: number | null
+  icir: number | null
+  positive_ratio: number | null
+  t_stat: number | null
+  spread: number | null
+  n: number | null
   verdict: { text: string; cls: string }
   grade?: string
   composite?: number
@@ -300,7 +355,7 @@ const sweep = reactive({
 })
 
 const sweepRowsSorted = computed(() =>
-  [...sweep.summaries].sort((a, b) => Math.abs(b.icir) - Math.abs(a.icir))
+  [...sweep.summaries].sort((a, b) => Math.abs(b.icir ?? 0) - Math.abs(a.icir ?? 0))
 )
 
 const sweepColumns: StockColumn[] = [
@@ -381,17 +436,17 @@ async function runSweep() {
         maxCodes: 300,
       })
       if (r.error) {
-        const covered = r.error.includes('截面不足')
+        const covered = r.error_kind === 'coverage' || r.error.includes('截面不足')
         sweep.summaries.push({
           strategyId: s.id,
           name: s.name,
-          ic_mean: 0, icir: 0, positive_ratio: 0, t_stat: 0, spread: 0, n: 0,
-          verdict: { text: covered ? '覆盖不足' : '失败', cls: 'mid' },
+          ic_mean: null, icir: null, positive_ratio: null, t_stat: null, spread: null, n: null,
+          verdict: { text: covered ? "覆盖不足" : "计算失败", cls: covered ? "st-coverage" : "st-compute" },
           error: r.error,
         })
       } else {
       fullResults.set(s.id, r)
-      const v = verdictOf(r.ic_summary)
+      const v = { text: r.rating?.status || "不显著", cls: "st-insig" }
       sweep.summaries.push({
         strategyId: s.id,
         name: s.name,
@@ -403,7 +458,7 @@ async function runSweep() {
         n: r.ic_summary.n,
         verdict: v,
         grade: r.rating?.grade || "—",
-        composite: r.rating?.composite ?? 0,
+        composite: r.rating?.strength ?? 0,
       })
       }
     } catch {
@@ -499,11 +554,36 @@ const icOption = computed<EChartsOption | null>(() => {
 .sweep-stop { color: var(--warn-text); }
 .sweep-meta { font-size: 12px; color: var(--text-3); }
 
-.verdict-chip { font-size: 11px; padding: 2px 10px; border-radius: var(--radius-pill); }
-.verdict-chip.good { background: var(--color-green-soft); color: var(--color-green); }
-.verdict-chip.mid { background: var(--warn-soft); color: var(--warn-text); }
-.verdict-chip.bad { background: var(--color-red-soft); color: var(--color-red); }
+.verdict-chip { font-size: 11px; padding: 2px 10px; border-radius: var(--radius-pill); white-space: nowrap; }
+.verdict-chip.st-good { background: var(--color-green-soft); color: var(--color-green); }
+.verdict-chip.st-candidate { background: var(--brand-soft); color: var(--brand); }
+.verdict-chip.st-insig { background: var(--warn-soft); color: var(--warn-text); }
+.verdict-chip.st-coverage { background: var(--bg-2); color: var(--text-3); }
+.verdict-chip.st-compute { background: var(--color-red-soft); color: var(--color-red); }
 
+.rating-head { display: flex; align-items: center; gap: 16px; }
+.rating-head-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.rating-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dir-chip { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-pill); font-weight: 500; }
+.dir-reverse { background: var(--warn-soft); color: var(--warn-text); }
+.dir-positive { background: var(--color-green-soft); color: var(--color-green); }
+.dir-neutral { background: var(--bg-2); color: var(--text-3); }
+.status-chip { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-pill); font-weight: 500; }
+.status-chip.st-good { background: var(--color-green-soft); color: var(--color-green); }
+.status-chip.st-candidate { background: var(--brand-soft); color: var(--brand); }
+.status-chip.st-insig { background: var(--warn-soft); color: var(--warn-text); }
+.status-chip.st-coverage { background: var(--bg-2); color: var(--text-3); }
+.status-chip.st-compute { background: var(--color-red-soft); color: var(--color-red); }
+.rating-line { display: grid; grid-template-columns: 84px 1fr; gap: 8px; font-size: 12px; }
+.rl-k { color: var(--text-3); }
+.rl-v { color: var(--text); min-width: 0; }
+.rl-flip { color: var(--brand); font-size: 12px; margin-left: 10px; }
+.metrics-block { margin-top: 12px; display: flex; flex-direction: column; gap: 5px;
+  padding: 10px 12px; background: var(--bg-2); border-radius: var(--radius); }
+.metric-line { display: grid; grid-template-columns: 70px 110px 1fr; align-items: center; gap: 8px; font-size: 12px; }
+.metric-line .rl-v { font-variant-numeric: tabular-nums; }
+.dims-block { margin-top: 14px; }
+.dims-title { font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
 .rating-row { display: flex; align-items: center; gap: 18px; }
 .grade-badge {
   width: 72px; height: 72px; border-radius: 14px;

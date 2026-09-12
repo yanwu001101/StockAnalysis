@@ -28,7 +28,10 @@
 
 | # | 优先级 | 任务 | 要点/验收标准 | 涉及文件 |
 |---|---|---|---|---|
-| 1 | 🔴 高 | **收取后台周度体检结果** | 检查 `data-service/_weekly_sweep.json`（后台进程写完才会出现；若丢失，用 UI 体检按钮重跑：调仓频率=周度、窗口 2024-03 起）。按五态+评级出终版名单：🟢加权 / 🟡低权观察 / 🟠暂不加权 / ⚪待面板化 / 🔴修复 | — |
+| 0 | 🔴 高 | **P2 性能面板化（原路线图遗留，未开工）** | `_load_ctx`（api/strategies_v2.py）每股 7 次 SQL，全市场评分 3-5 分钟。方案：批量面板加载器 `_bulk_load_panels(codes)` — MySQL 8 窗口函数 `ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC)` 取每股前 260 根 K 线、基本面前 12 条、北向/龙虎榜/资金流 60 日窗、stock_info 一把；jobs/strategy_score.py 改为一次加载全内存后循环 `_score_all(ctx)`。目标 <60s。验收：抽 20 只股新旧路径评分一致 + 全市场计时 | api/strategies_v2.py, jobs/strategy_score.py |
+| 0 | 🔴 高 | **P4 实盘半自动（原路线图遗留，未开工）** | 里程碑 1（零外部依赖）：委托单生成器 — api/paper.py 加 `GET /api/paper/orders`（最近一个调仓日的 paper_trades → 委托清单：代码/名称/方向/股数/参考价/原因，附目标持仓），前端 PaperPanel 加「生成委托单」卡（表格 + CSV 导出 + 已执行标记 localStorage）。里程碑 2（需券商客户端环境）：`BrokerAdapter` 抽象接口 + EasytraderAdapter（Windows 同花顺 GUI 自动化）与 QMT/PTrade(xtquant)，检测到已安装且显式开启才启用。**安全红线：默认绝不自动下单，半自动 = 生成委托单→人工执行→回填成交；状态流转 待执行→已执行→已回填** | api/paper.py, frontend PaperPanel.vue, 新 broker_adapter.py |
+
+| 1 | 🔴 高 | **收取后台周度体检结果** | 上一窗口的后台进程（host python PID 45556）可能仍在跑，结果落 `data-service/_weekly_sweep.json`（进程结束才写出）；文件不存在则用 UI 体检重跑：调仓频率=周度、窗口 2024-03 起。按五态+评级出终版名单：🟢加权 / 🟡低权观察 / 🟠暂不加权 / ⚪待面板化 / 🔴修复 | — |
 | 2 | 🔴 高 | **前端 :80 容器重建** | `docker compose build frontend && docker compose up -d frontend`——当前 :80 还是旧版 UI | frontend/ |
 | 3 | 🟡 中 | **复权基准统一（防接缝复发）** | 现状：历史段=腾讯源、每日增量=东财源，基准差异已被整段覆盖掩盖，但每日东财 upsert 只刷前 250 根，约 1 年后 250/800 接缝会重现。根治：改存 hfq 因子或每日对变动股全量重刷 | data-service/jobs/postmarket.py, pipelines/kline.py |
 | 4 | 🟡 中 | **夜间评分任务提速** | strategy_score 逐股 5-6 次 SQL（3-5 分钟）→ 批量加载进内存 + 多进程（目标 <60s）；这是全策略体检高频重跑的前置 | data-service/jobs/strategy_score.py, api/strategies_v2.py `_load_ctx` |

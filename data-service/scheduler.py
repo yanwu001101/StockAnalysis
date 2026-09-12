@@ -39,6 +39,9 @@ _sched: BackgroundScheduler | None = None
 _lock = threading.Lock()
 
 
+import notifier
+
+
 def _chunks(seq, n: int):
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
@@ -120,6 +123,7 @@ def refresh_lhb():
         log.info("[scheduler] lhb refresh done")
     except Exception as e:
         log.warning("[scheduler] lhb refresh failed: %s", e)
+        notifier.job_failed("龙虎榜刷新", str(e))
 
 
 def _get_universe_codes(top_n: int = 300) -> list[str]:
@@ -158,11 +162,13 @@ def refresh_moneyflow_northbound(days: int = 5):
         log.info("[scheduler] moneyflow refresh done (days=%d)", days)
     except Exception as e:
         log.warning("[scheduler] moneyflow refresh failed: %s", e)
+        notifier.job_failed("资金流刷新", str(e))
     try:
         asyncio.run(nb_pipe.run_batch(codes, days=days))
         log.info("[scheduler] northbound refresh done (days=%d)", days)
     except Exception as e:
         log.warning("[scheduler] northbound refresh failed: %s", e)
+        notifier.job_failed("北向资金刷新", str(e))
 
 
 def refresh_strategy_scores():
@@ -173,7 +179,16 @@ def refresh_strategy_scores():
         strategy_score.run()
     except Exception as e:
         log.warning("[scheduler] strategy_score refresh failed: %s", e)
+        notifier.job_failed("策略评分重算", str(e))
 
+
+def _daily_push_safe():
+    try:
+        from jobs import daily_push
+        daily_push.run()
+    except Exception as e:
+        log.warning("[scheduler] daily push failed: %s", e)
+        notifier.job_failed("盘后摘要推送", str(e))
 
 def start():
     global _sched
@@ -228,6 +243,16 @@ def start():
             refresh_strategy_scores,
             CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
             id="strategy_score_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # Daily summary push at 17:45 — after scoring has landed
+        sched.add_job(
+            _daily_push_safe,
+            CronTrigger(hour=17, minute=45, timezone="Asia/Shanghai"),
+            id="daily_push",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

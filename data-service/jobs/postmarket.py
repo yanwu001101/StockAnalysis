@@ -99,3 +99,8 @@ def run() -> None:
         asyncio.run(run_async())
     except Exception as e:
         logger.exception("[job:postmarket] failed: %s", e)
+        try:
+            import notifier
+            notifier.job_failed("盘后数据任务", str(e))
+        except Exception:
+            pass

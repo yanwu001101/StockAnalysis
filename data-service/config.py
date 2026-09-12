@@ -93,6 +93,12 @@ class SchedulerSettings(BaseSettings):
     warmup_batch_size: int = Field(default=50, alias="WARMUP_BATCH_SIZE")
 
 
+class AlertSettings(BaseSettings):
+    """推送告警：webhook 机器人（企业微信/钉钉/飞书/自定义）。URL 为空 = 关闭。"""
+    webhook_url: str = Field(default="", alias="ALERT_WEBHOOK_URL")
+    webhook_type: str = Field(default="", alias="ALERT_WEBHOOK_TYPE")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
@@ -107,6 +113,7 @@ class Settings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     sources: SourceSettings = SourceSettings()
     sched: SchedulerSettings = SchedulerSettings()
+    alert: AlertSettings = AlertSettings()
 
 
 @lru_cache(maxsize=1)

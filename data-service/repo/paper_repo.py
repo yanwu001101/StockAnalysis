@@ -22,7 +22,7 @@ TABLE = "paper_account"
 
 def get_account() -> dict | None:
     df = base.fetch_df(f"SELECT * FROM {TABLE} WHERE id = :i", {"i": ACCOUNT_ID})
-    return df.to_dict("records")[0] if df else None
+    return df.to_dict("records")[0] if not df.empty else None
 
 
 def ensure_account(initial_capital: float = 1_000_000, top_n: int = 10) -> dict:

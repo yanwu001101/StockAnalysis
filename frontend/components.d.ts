@@ -62,6 +62,7 @@ declare module 'vue' {
     MoneyFlowPanel: typeof import('./src/components/market/MoneyFlowPanel.vue')['default']
     NorthboundChart: typeof import('./src/components/dashboard/NorthboundChart.vue')['default']
     PageHeader: typeof import('./src/components/ui/PageHeader.vue')['default']
+    PaperPanel: typeof import('./src/components/screener/PaperPanel.vue')['default']
     PortfolioPanel: typeof import('./src/components/my/PortfolioPanel.vue')['default']
     PositionDialog: typeof import('./src/components/my/PositionDialog.vue')['default']
     PositionList: typeof import('./src/components/my/PositionList.vue')['default']

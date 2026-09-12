@@ -96,7 +96,9 @@ def ensure_schema() -> list[str]:
                 ))
                 applied.append("stock_fundamental.ann_date")
             conn.execute(text(INDEX_KLINE_DDL))
-            conn.execute(text(PAPER_TABLES_DDL))
+            # MySQL 驱动不支持一次执行分号分隔的多语句 — 逐条执行
+            for stmt in [x.strip() for x in PAPER_TABLES_DDL.split(";") if x.strip()]:
+                conn.execute(text(stmt))
         if applied:
             logger.info("[migrations] applied: %s", ", ".join(applied))
     except Exception as e:

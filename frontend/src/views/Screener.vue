@@ -34,6 +34,7 @@ const ExpressionScreener = defineAsyncComponent(() => import('@/components/scree
 const StrategyWeights = defineAsyncComponent(() => import('@/components/screener/StrategyWeights.vue'))
 const BacktestPanel = defineAsyncComponent(() => import('@/components/screener/BacktestPanel.vue'))
 const FactorLabPanel = defineAsyncComponent(() => import('@/components/screener/FactorLabPanel.vue'))
+const PaperPanel = defineAsyncComponent(() => import('@/components/screener/PaperPanel.vue'))
 
 type Tab = 'score' | 'condition' | 'expression' | 'lab'
 const TABS = ['score', 'condition', 'expression', 'lab'] as const
@@ -48,14 +49,15 @@ if (rawTab === 'weights' || rawTab === 'backtest') {
   router.replace({ query: { ...route.query, tab: 'lab', sub: rawTab } })
 }
 
-type LabTab = 'weights' | 'backtest' | 'factor'
-const labTab = useRouteTab<LabTab>('weights', ['weights', 'backtest', 'factor'] as const, 'sub')
+type LabTab = 'weights' | 'backtest' | 'factor' | 'paper'
+const labTab = useRouteTab<LabTab>('weights', ['weights', 'backtest', 'factor', 'paper'] as const, 'sub')
 const labOptions: SegmentOption<LabTab>[] = [
   { label: '策略权重', value: 'weights' },
   { label: '回测', value: 'backtest' },
   { label: '因子检验', value: 'factor' },
+  { label: '模拟盘', value: 'paper' },
 ]
-const labComponent = computed(() => ({ weights: StrategyWeights, backtest: BacktestPanel, factor: FactorLabPanel }[labTab.value]))
+const labComponent = computed(() => ({ weights: StrategyWeights, backtest: BacktestPanel, factor: FactorLabPanel, paper: PaperPanel }[labTab.value]))
 
 const tabOptions: SegmentOption<Tab>[] = [
   { label: '评分选股', value: 'score' },
@@ -74,6 +76,7 @@ const tabSub = computed(() => {
   if (tab.value === 'lab') {
     if (labTab.value === 'backtest') return '基于历史数据验证策略有效性'
     if (labTab.value === 'factor') return 'IC / 分层回测 / 衰减分析 · 检验策略得分的排序能力'
+    if (labTab.value === 'paper') return '每日自动按综合评分调仓 · 模拟实盘跟踪'
     return '自定义各策略权重与参数，决定综合评分的口径'
   }
   return SUBS[tab.value]

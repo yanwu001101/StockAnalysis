@@ -60,8 +60,9 @@ def _composite_scores(today: dt.date) -> dict[str, float]:
         with eng.connect() as conn:
             rows = conn.execute(text(
                 "SELECT code, strategy_id, score FROM stock_strategy_score "
-                "WHERE score > 0 AND DATE(computed_at) = :d"
-            ), {"d": today}).fetchall()
+                "WHERE score > 0 AND DATE(computed_at) = "
+                "(SELECT MAX(DATE(computed_at)) FROM stock_strategy_score)"
+            )).fetchall()
     except Exception as e:
         logger.warning("[paper] score query failed: %s", e)
         return {}
@@ -269,7 +270,7 @@ def run(today: dt.date | None = None) -> dict:
         positions[c] = {"shares": new_sh, "avg_cost": new_basis, "buy_date": today}
         paper_repo.upsert_position(account_id, c, new_sh, new_basis, today)
         paper_repo.add_trade(account_id, today, c, "buy", diff_sh,
-                             round(exec_px, 3), round(amount, 2), round(fee, 2))
+                             round(px_exec, 3), round(amount, 2), round(fee, 2))
 
     # 更新现金与收盘净值
     with eng.begin() as conn:

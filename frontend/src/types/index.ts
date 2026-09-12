@@ -131,6 +131,16 @@ export interface BacktestResult {
   costs?: Record<string, number>
 }
 
+export interface PaperOverview {
+  status?: "not-started"
+  account?: { initial_capital: number; top_n: number; rebalance: string; cash: number; start_date: string | null }
+  metrics: { total_return: number; annualized_return: number; max_drawdown: number; sharpe_ratio: number; benchmark_return: number; excess_return: number; trade_count: number }
+  total_costs: number
+  equity_curve: { date: string; equity: number; benchmark: number | null }[]
+  positions: { code: string; shares: number; avg_cost: number; last_close: number; market_value: number; weight: number; pnl_pct: number; buy_date: string }[]
+  recent_trades: { trade_date: string; code: string; side: string; shares: number; price: number; amount: number; cost: number; reason: string }[]
+}
+
 export interface FactorLabResult {
   error?: string
   error_kind?: "coverage" | "compute"

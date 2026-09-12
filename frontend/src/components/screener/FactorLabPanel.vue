@@ -92,6 +92,14 @@
               <span class="dim-val">{{ d.value }}</span>
             </div>
           </div>
+          <div class="dims-title" style="margin-top: 10px;">稳健性与交易可行性</div>
+          <div class="rating-dims">
+            <div class="dim" v-for="d in extraBars" :key="d.key">
+              <span class="dim-label">{{ d.label }}</span>
+              <div class="dim-bar"><div class="dim-fill" :style="{ width: d.value + '%', background: d.color }" /></div>
+              <span class="dim-val">{{ d.value }}</span>
+            </div>
+          </div>
         </div>
 
         <!-- 指标行：方向校正后主值 + 原始值 + 强度条 + 文字评级（不用星级） -->

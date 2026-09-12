@@ -220,6 +220,8 @@ public class DataService {
     }
 
     public JSONObject runBacktest(JSONObject request) { return postObj("/api/backtest", request); }
+
+    public JSONObject runFactorLab(JSONObject request) { return postObj("/api/factorlab", request); }
 
     // =====================================================================
     // LHB

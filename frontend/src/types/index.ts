@@ -131,6 +131,22 @@ export interface BacktestResult {
   costs?: Record<string, number>
 }
 
+export interface FactorLabResult {
+  strategy_id: string
+  start: string
+  end: string
+  rebalance: string
+  layers: number
+  codes_analyzed: number
+  periods: number
+  ic_summary: { mean: number; std: number; icir: number; positive_ratio: number; t_stat: number; n: number }
+  ic_series: { date: string; ic: number }[]
+  layer_curves: Record<string, number | string>[]
+  layer_stats: { layer: number; total: number; annualized: number }[]
+  top_minus_bottom_annualized: number
+  decay: { horizon: number; ic_mean: number; icir: number; n: number }[]
+}
+
 export interface TradeRecord {
   date: string
   code: string

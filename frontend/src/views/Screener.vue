@@ -28,11 +28,12 @@ import PageHeader from '@/components/ui/PageHeader.vue'
 import SegmentTabs from '@/components/ui/SegmentTabs.vue'
 import ScoreScreener from '@/components/screener/ScoreScreener.vue'
 
-// 评分 / 条件 / 表达式 / 策略实验室（权重+回测）；重的 tab 按需加载。
+// 评分 / 条件 / 表达式 / 策略实验室（权重+回测+因子检验）；重的 tab 按需加载。
 const ConditionScreener = defineAsyncComponent(() => import('@/components/screener/ConditionScreener.vue'))
 const ExpressionScreener = defineAsyncComponent(() => import('@/components/screener/ExpressionScreener.vue'))
 const StrategyWeights = defineAsyncComponent(() => import('@/components/screener/StrategyWeights.vue'))
 const BacktestPanel = defineAsyncComponent(() => import('@/components/screener/BacktestPanel.vue'))
+const FactorLabPanel = defineAsyncComponent(() => import('@/components/screener/FactorLabPanel.vue'))
 
 type Tab = 'score' | 'condition' | 'expression' | 'lab'
 const TABS = ['score', 'condition', 'expression', 'lab'] as const
@@ -47,13 +48,14 @@ if (rawTab === 'weights' || rawTab === 'backtest') {
   router.replace({ query: { ...route.query, tab: 'lab', sub: rawTab } })
 }
 
-type LabTab = 'weights' | 'backtest'
-const labTab = useRouteTab<LabTab>('weights', ['weights', 'backtest'] as const, 'sub')
+type LabTab = 'weights' | 'backtest' | 'factor'
+const labTab = useRouteTab<LabTab>('weights', ['weights', 'backtest', 'factor'] as const, 'sub')
 const labOptions: SegmentOption<LabTab>[] = [
   { label: '策略权重', value: 'weights' },
   { label: '回测', value: 'backtest' },
+  { label: '因子检验', value: 'factor' },
 ]
-const labComponent = computed(() => (labTab.value === 'backtest' ? BacktestPanel : StrategyWeights))
+const labComponent = computed(() => ({ weights: StrategyWeights, backtest: BacktestPanel, factor: FactorLabPanel }[labTab.value]))
 
 const tabOptions: SegmentOption<Tab>[] = [
   { label: '评分选股', value: 'score' },
@@ -70,9 +72,9 @@ const SUBS: Record<Tab, string> = {
 }
 const tabSub = computed(() => {
   if (tab.value === 'lab') {
-    return labTab.value === 'backtest'
-      ? '基于历史数据验证策略有效性'
-      : '自定义各策略权重与参数，决定综合评分的口径'
+    if (labTab.value === 'backtest') return '基于历史数据验证策略有效性'
+    if (labTab.value === 'factor') return 'IC / 分层回测 / 衰减分析 · 检验策略得分的排序能力'
+    return '自定义各策略权重与参数，决定综合评分的口径'
   }
   return SUBS[tab.value]
 })

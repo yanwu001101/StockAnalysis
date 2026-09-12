@@ -1,5 +1,5 @@
 import request from './request'
-import type { ScreenerRequest, BacktestRequest, BacktestResult, StrategyConfig, SavedBacktestSummary } from '@/types'
+import type { ScreenerRequest, BacktestRequest, BacktestResult, FactorLabResult, StrategyConfig, SavedBacktestSummary } from '@/types'
 
 export function getStrategies(): Promise<StrategyConfig[]> {
   return request.get('/strategies')
@@ -19,6 +19,19 @@ export function runScreener(req: ScreenerRequest): Promise<any[]> {
 
 export function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
   return request.post('/backtest', req)
+}
+
+export interface FactorLabRequest {
+  strategyId: string
+  startDate: string
+  endDate: string
+  rebalance?: string
+  layers?: number
+  maxCodes?: number
+}
+
+export function runFactorLab(req: FactorLabRequest): Promise<FactorLabResult> {
+  return request.post('/factorlab', req)
 }
 
 // ---- 保存的回测(账号云端,需登录) ----

@@ -49,6 +49,7 @@ declare module 'vue' {
     EmptyState: typeof import('./src/components/ui/EmptyState.vue')['default']
     ExpressionScreener: typeof import('./src/components/screener/ExpressionScreener.vue')['default']
     F10Card: typeof import('./src/components/detail/F10Card.vue')['default']
+    FactorLabPanel: typeof import('./src/components/screener/FactorLabPanel.vue')['default']
     Header: typeof import('./src/components/layout/Header.vue')['default']
     ImportDialog: typeof import('./src/components/my/ImportDialog.vue')['default']
     IndexStrip: typeof import('./src/components/dashboard/IndexStrip.vue')['default']

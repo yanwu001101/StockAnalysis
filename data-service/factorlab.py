@@ -147,7 +147,8 @@ def _ic_summary_block(ics: np.ndarray) -> dict:
 
 def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
           turnover_ann: float, top_dd: float, n: int,
-          regime_consistent: bool | None) -> dict:
+          regime_consistent: bool | None,
+          icn_summary: dict | None = None) -> dict:
     """因子评级：实力与统计可信度分离。
 
     因子实力  — 经济量级：|RankIC| / |ICIR| / 分层多空价差（不含样本量）
@@ -183,13 +184,32 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
     # 统计可信度（证据强度）
     confidence = round(0.6 * clamp01(abs_t / 2.5) * 100 + 0.4 * clamp01(n / 36) * 100, 1)
 
-    # 状态：有效 / 候选 / 不显著
-    if abs_t >= 2 and abs_icir >= 0.3 and n >= 12:
+    # 状态：有效（经济≥B 且统计显著）/ 候选（经济较强但证据不足）/ 不显著
+    if abs_t >= 2 and abs_icir >= 0.3 and n >= 12 and strength >= 55:
         status = "有效"
     elif abs_icir >= 0.3 or (abs_ic >= 0.03 and ic_summary["positive_ratio"] >= 0.6):
         status = "候选"
     else:
         status = "不显著"
+
+    # 稳健性：牛熊一致性(0-60) + 行业中性信号保留度(0-40)
+    # （样本外/滚动窗口待历史数据回补后接入）
+    if regime_consistent is True:
+        regime_part = 60.0
+    elif regime_consistent is False:
+        regime_part = 0.0
+    else:
+        regime_part = 30.0   # 牛熊数据未知
+    if icn_summary is not None and abs_ic > 0:
+        neutral_retention = clamp01(abs(icn_summary["mean"]) / abs_ic)
+    else:
+        neutral_retention = 0.5   # 未做中性化检验时给中性分
+    robustness = round(regime_part * 0.6 + neutral_retention * 40.0, 1)
+
+    # 交易可行性：方向校正后的净多空价差（成本后还赚钱才可交易）
+    dir_mult = 1.0 if direction == "positive" else (-1.0 if direction == "reverse" else 1.0)
+    net_dir = spread_ann * dir_mult - turnover_ann * COST_PER_TURNOVER
+    tradability = clamp01(max(net_dir, 0.0) / 0.15) * 100
 
     # 分层质量细项（仅供展示）
     dimensions = {
@@ -204,9 +224,11 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
     flags: list[str] = []
     net_spread = spread_ann - turnover_ann * COST_PER_TURNOVER
     if turnover_ann >= 8:
-        flags.append(f"高换手：年化换手 {turnover_ann:.1f}x，成本侵蚀明显")
-    if net_spread < 0.3 * spread_ann:
-        flags.append("成本侵蚀：扣除摩擦后多空价差大幅缩水")
+        flags.append(f"年化换手 {turnover_ann:.1f}x，交易成本影响明显")
+    gross_dir = spread_ann * dir_mult
+    net_dir_signed = net_spread * dir_mult
+    if gross_dir > 0 and net_dir_signed < 0:
+        flags.append("成本侵蚀：毛多空为正但扣摩擦后净多空已转负")
     if top_dd <= -0.25:
         flags.append(f"回撤过大：最高分层最大回撤 {top_dd:.0%}")
     if regime_consistent is False:
@@ -223,6 +245,8 @@ def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
         "dimensions": dimensions,
         "net_spread_ann": round(net_spread, 4),
         "cost_annualized": round(turnover_ann * COST_PER_TURNOVER, 4),
+        "robustness": round(robustness),
+        "tradability": round(tradability),
         "cost_per_turnover": COST_PER_TURNOVER,
         "direction_sign": dir_sign,
         "flags": flags,
@@ -273,7 +297,8 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
     layer_turnovers: dict[int, list[float]] = {lv: [] for lv in all_layers}
     prev_members: dict[int, set] = {}
     layer_dates: list[dt.date] = []
-    regime_rows: list[dict] = []         # {date, ic, spread, bull}
+    regime_rows: list[dict] = []
+    cross_sizes: list[int] = []         # {date, ic, spread, bull}
 
     for i, d in enumerate(rebal_dates[:-1]):
         d_next = rebal_dates[i + 1]
@@ -288,6 +313,7 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
         if len(scores) < layers * 5:
             logger.info("[factorlab] %s: only %d scores, skipped", d, len(scores))
             continue
+        cross_sizes.append(len(scores))
         s_norm = _winsorize_zscore(pd.Series(scores))
 
         fwd_period = val_close.loc[d_next] / val_close.loc[d] - 1.0
@@ -426,7 +452,8 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
         regime_consistent = (bs == rs) and bs != 0
     rating = _rate(ic_summary, spread_ann, monotonicity,
                    turnover_ann, layer_stats[-1]["max_drawdown"],
-                   len(ics), regime_consistent)
+                   len(ics), regime_consistent,
+                   icn_summary=icn_summary)
 
     layer_curves_out = []
     for j, d in enumerate(layer_dates):
@@ -456,6 +483,11 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
         "layers": layers,
         "codes_analyzed": len(codes),
         "periods": n_periods,
+        "sample_info": {
+            "periods": n_periods,
+            "avg_cross_section": round(float(np.mean(cross_sizes))) if cross_sizes else 0,
+            "observations": int(sum(cross_sizes)),
+        },
         "ic_series": ic_series,
         "ic_summary": ic_summary,
         "ic_neutral_summary": icn_summary,

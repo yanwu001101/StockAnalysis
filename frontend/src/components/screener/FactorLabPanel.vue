@@ -55,30 +55,30 @@
       <AppCard title="因子综合评价">
         <!-- 标题行：状态 emoji + 方向 -->
         <div class="rating-head">
-          <div class="grade-badge" :class="'grade-' + (rating?.grade || 'D')">
-            <span class="grade-letter">{{ rating?.grade || '—' }}</span>
-            <span class="grade-score">实力 {{ rating?.strength ?? '—' }}</span>
+          <div class="score-block" :class="'grade-' + (rating?.grade || 'D')">
+            <div class="score-label">经济效果</div>
+            <div class="score-num">{{ rating?.strength ?? '—' }}<span class="score-sub">/100 · {{ rating?.grade || '—' }} 级</span></div>
+          </div>
+          <div class="score-block" :class="(rating?.confidence ?? 0) >= 70 ? 'conf-good' : 'conf-warn'">
+            <div class="score-label">统计可信度</div>
+            <div class="score-num">{{ rating?.confidence ?? '—' }}<span class="score-sub">/100 · {{ confidenceMeta.text }}</span></div>
           </div>
           <div class="rating-head-lines">
             <div class="rating-title">
               <span class="status-emoji">{{ statusMeta.emoji }}</span>
               {{ result.strategy_id }}
+              <span class="status-chip" :class="statusMeta.cls">{{ statusMeta.emoji }} {{ statusMeta.text }}</span>
               <span v-if="directionMeta.arrow !== '→'" class="dir-chip" :class="directionMeta.cls">
                 {{ directionMeta.label }} {{ directionMeta.arrow }}
               </span>
-              <span class="status-chip" :class="statusMeta.cls">{{ statusMeta.emoji }} {{ statusMeta.text }}</span>
             </div>
             <div class="rating-line">
               <span class="rl-k">因子方向</span>
               <span class="rl-v">{{ directionMeta.label }} {{ directionMeta.arrow }}</span>
             </div>
             <div class="rating-line">
-              <span class="rl-k">经济效果</span>
-              <span class="rl-v"><b>{{ rating?.grade || '—' }} 级 · {{ rating?.strength ?? '—' }}</b> / 100（|RankIC|、|ICIR|、分层价差、单调性的量级评分，不含样本量）</span>
-            </div>
-            <div class="rating-line">
-              <span class="rl-k">统计可信度</span>
-              <span class="rl-v">{{ statusMeta.emoji === '🟢' ? '✅' : '⚠' }} {{ rating?.confidence ?? '—' }} / 100（{{ confidenceMeta.text }}）</span>
+              <span class="rl-k">样本信息</span>
+              <span class="rl-v">有效调仓期 {{ sampleInfo.periods }} · 平均截面 {{ sampleInfo.avg_cross_section }} 只 · 观测 {{ sampleInfo.observations }}</span>
             </div>
           </div>
         </div>
@@ -138,8 +138,8 @@
         <BaseChart :option="icOption" :height="isMobile ? 200 : 260" />
       </AppCard>
 
-      <AppCard title="衰减分析" sub="得分对未来 +N 日收益的预测力衰减" compact>
-        <div v-if="decaySampleWarn" class="warn-line">⚠ 衰减分析样本不足（{{ decaySampleN }} 期），结果仅供参考，不宜过度解读</div>
+      <AppCard title="衰减分析（探索性）" sub="得分对未来 +N 日收益的预测力衰减" compact>
+        <div v-if="decaySampleWarn" class="warn-line">⚠ 当前有效期数 {{ decaySampleN }} 期，无法可靠判断最佳持有周期，以下结果仅供参考</div>
         <StockTable :rows="decayRows" :columns="decayColumns" :stock="false" :clickable="false" dense row-key="horizon" />
       </AppCard>
     </div>
@@ -148,6 +148,8 @@
     <div class="result-area sweep-area" v-if="sweep.summaries.length">
       <AppCard title="体检结果" sub="按 |ICIR| 从高到低 · 点击「查看」载入单策略详情">
         <template #actions>
+          <span class="sweep-meta">排序</span>
+          <SegmentTabs v-model="sweepSortKey" :options="sweepSortOptions" small />
           <span class="sweep-meta">体检窗口 {{ config.startDate }} ~ {{ config.endDate }}</span>
         </template>
         <StockTable
@@ -266,6 +268,19 @@ const confidenceMeta = computed(() => {
 })
 
 // 状态五态：🟢有效 🟡候选 🟠不显著（有数据） ⚪覆盖不足 🔴计算失败（无数据）
+const sampleInfo = computed(() => result.value?.sample_info || { periods: 0, avg_cross_section: 0, observations: 0 })
+const robustness = computed(() => result.value?.rating?.robustness)
+const tradability = computed(() => result.value?.rating?.tradability)
+const extraBars = computed(() => {
+  const out: { key: string; label: string; value: number; color: string }[] = []
+  const rob = robustness.value
+  if (rob != null) out.push({ key: "rob", label: "稳健性", value: Math.round(rob), color: "var(--chart-4)" })
+  const tr = tradability.value
+  if (tr != null) out.push({ key: "tra", label: "交易可行性", value: Math.round(tr), color: tr >= 60 ? "var(--chart-1)" : "var(--warn)" })
+  return out
+})
+
+
 const statusMeta = computed(() => {
   const r = result.value
   if (r?.error_kind === 'coverage') return { emoji: '⚪', text: '覆盖不足', cls: 'st-coverage' }
@@ -326,7 +341,9 @@ const metricRows = computed<MetricRow[]>(() => {
       label: 't 值', value: fmt(s.t_stat, 2), raw: s.t_stat.toFixed(2),
       cls: absT >= 2 ? 'price-up' : undefined,
       bar: clamp01(absT / 2.5) * 100,
-      gradeText: absT >= 2 ? '统计显著' : '⚠ 尚不显著',
+      gradeText: absT >= 2 ? '统计显著'
+        : absT >= 1.5 ? '⚠ 接近显著，未达常用 5% 阈值'
+        : '⚠ 尚不显著',
     },
     {
       label: '分层单调性', value: fmt(mono, 2), raw: mono.toFixed(2),
@@ -429,6 +446,7 @@ interface SweepRow {
   verdict: { text: string; cls: string }
   grade?: string | null
   composite?: number | null
+  confidence?: number | null
   error?: string
 }
 
@@ -443,8 +461,26 @@ const sweep = reactive({
   summaries: [] as SweepRow[],
 })
 
+type SweepSortKey = "|ICIR|" | "|RankIC|" | "多空年化" | "经济效果" | "统计可信度"
+const sweepSortKey = ref<SweepSortKey>("|ICIR|")
+const sweepSortOptions: SegmentOption<SweepSortKey>[] = [
+  { label: "|ICIR|", value: "|ICIR|" },
+  { label: "|RankIC|", value: "|RankIC|" },
+  { label: "多空年化", value: "多空年化" },
+  { label: "经济效果", value: "经济效果" },
+  { label: "统计可信度", value: "统计可信度" },
+]
+const sweepSortValue = (r: SweepRow): number => {
+  switch (sweepSortKey.value) {
+    case "|RankIC|": return Math.abs(r.ic_mean ?? 0)
+    case "多空年化": return Math.abs(r.spread ?? 0)
+    case "经济效果": return r.composite ?? 0
+    case "统计可信度": return r.confidence ?? 0
+    default: return Math.abs(r.icir ?? 0)
+  }
+}
 const sweepRowsSorted = computed(() =>
-  [...sweep.summaries].sort((a, b) => Math.abs(b.icir ?? 0) - Math.abs(a.icir ?? 0))
+  [...sweep.summaries].sort((a, b) => sweepSortValue(b) - sweepSortValue(a))
 )
 
 function sweepVerdictChip(r: FactorLabResult): { text: string; cls: string } {
@@ -530,7 +566,8 @@ async function retryRow(id: string) {
     row.spread = r.top_minus_bottom_annualized
     row.n = r.ic_summary.n
     row.verdict = sweepVerdictChip(r)
-    row.grade = r.rating?.grade ?? null
+    row.grade = r.rating?.grade
+    row.confidence = r.rating?.confidence ?? null
     row.composite = r.rating?.strength ?? null
     row.error = undefined
     result.value = r
@@ -593,6 +630,7 @@ async function runSweep() {
         verdict: sweepVerdictChip(r),
         grade: r.rating?.grade ?? null,
         composite: r.rating?.strength ?? null,
+        confidence: r.rating?.confidence ?? null,
       })
     } else {
       const covered = r?.error_kind === 'coverage' || (!!r?.error && r.error.includes('截面不足'))

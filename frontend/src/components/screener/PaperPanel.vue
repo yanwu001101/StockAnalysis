@@ -42,6 +42,27 @@
                     dense row-key="code" :empty="data.positions.length ? '' : '空仓'" />
       </AppCard>
 
+      <!-- 实盘委托单（半自动，里程碑1） -->
+      <AppCard title="实盘委托单" sub="半自动：生成清单 → 人工在券商执行 → 勾选标记。系统不会自动下单" compact>
+        <template #actions>
+          <span v-if="orders?.trade_date" class="sweep-meta">调仓日 {{ orders.trade_date }} · {{ orders.orders.length }} 笔 · 已执行 {{ doneCount }}</span>
+          <el-button size="small" plain :loading="ordersLoading" @click="loadOrders">生成委托单</el-button>
+          <el-button size="small" plain :disabled="!orders?.orders?.length" @click="exportOrdersCsv">导出 CSV</el-button>
+        </template>
+        <div v-if="orders?.note" class="order-note">{{ orders.note }}</div>
+        <StockTable v-if="orders?.orders?.length" :rows="orders.orders" :columns="orderColumns"
+                    :stock="false" :clickable="false" dense row-key="orderKey">
+          <template #cell-direction="{ row }">
+            <span :class="['side-tag', row.side]">{{ row.direction }}</span>
+          </template>
+          <template #cell-done="{ row }">
+            <el-checkbox :model-value="isDone(row)" @change="toggleDone(row)">已执行</el-checkbox>
+          </template>
+        </StockTable>
+        <div v-else-if="orders" class="order-note">最近一个调仓日（{{ orders.trade_date || '—' }}）没有调仓交易，无需委托。</div>
+        <div v-else class="order-note">点击「生成委托单」，按最近一次模拟盘调仓生成实盘委托清单。</div>
+      </AppCard>
+
       <!-- 调仓记录 -->
       <AppCard title="调仓记录" sub="最近 100 条" compact>
         <StockTable :rows="data.recent_trades" :columns="tradeColumns" :stock="false" :clickable="false"
@@ -58,11 +79,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getPaper, resetPaper } from '@/api/paper'
+import { getPaper, getPaperOrders, resetPaper } from '@/api/paper'
 import { useDevice } from '@/composables/useDevice'
 import { useChartTokens, baseTooltip } from '@/composables/useEcharts'
 import type { EChartsOption } from 'echarts'
-import type { PaperOverview } from '@/types'
+import type { PaperOrders, PaperOverview } from '@/types'
 import type { StatItem, StockColumn } from '@/types/ui'
 import AppCard from '@/components/ui/AppCard.vue'
 import StatGrid from '@/components/ui/StatGrid.vue'
@@ -78,6 +99,72 @@ const loaded = ref(false)
 const data = ref<PaperOverview | null>(null)
 const resetting = ref(false)
 const resetCapital = ref(100)
+
+// ---- 实盘委托单（半自动）----
+const orders = ref<PaperOrders | null>(null)
+const ordersLoading = ref(false)
+// 已执行标记只存本机 localStorage：key = paper_orders_done:{调仓日} → { "side:code": true }。
+// localStorage 非响应式，用 doneMap 作为响应式镜像驱动重渲染。
+const DONE_KEY_PREFIX = 'paper_orders_done:'
+const doneMap = ref<Record<string, boolean>>({})
+
+function loadDoneMap() {
+  try {
+    doneMap.value = JSON.parse(localStorage.getItem(DONE_KEY_PREFIX + (orders.value?.trade_date || '')) || '{}')
+  } catch {
+    doneMap.value = {}
+  }
+}
+
+function orderKey(row: { side: string; code: string }): string {
+  return `${row.side}:${row.code}`
+}
+
+function isDone(row: { side: string; code: string }): boolean {
+  return !!doneMap.value[orderKey(row)]
+}
+
+const doneCount = computed(() => (orders.value?.orders || []).filter(isDone).length)
+
+function toggleDone(row: { side: string; code: string }) {
+  if (!orders.value?.trade_date) return
+  const store = { ...doneMap.value }
+  if (store[orderKey(row)]) delete store[orderKey(row)]
+  else store[orderKey(row)] = true
+  doneMap.value = store
+  localStorage.setItem(DONE_KEY_PREFIX + orders.value.trade_date, JSON.stringify(store))
+}
+
+function exportOrdersCsv() {
+  const o = orders.value
+  if (!o?.orders?.length || !o.trade_date) return
+  const header = ['代码', '名称', '方向', '股数', '参考价', '金额', '原因', '已执行']
+  const lines = o.orders.map(r =>
+    [r.code, r.name, r.direction, r.shares, r.ref_price, r.amount, r.reason, isDone(r) ? '已执行' : '待执行']
+      .map(v => {
+        const s = String(v ?? '')
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+      }).join(','))
+  const csv = '\uFEFF' + [header.join(','), ...lines].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `委托单_${o.trade_date}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+async function loadOrders() {
+  ordersLoading.value = true
+  try {
+    orders.value = await getPaperOrders()
+    loadDoneMap()
+  } catch {
+    ElMessage.error('委托单生成失败')
+  } finally {
+    ordersLoading.value = false
+  }
+}
 
 function fmtWan(v: number): string {
   return (v / 10000).toFixed(0)
@@ -116,6 +203,17 @@ const tradeColumns: StockColumn[] = [
   { key: 'price', label: '价格', type: 'num', digits: 3 },
   { key: 'cost', label: '费用', type: 'num', digits: 2, mobile: 'secondary' },
   { key: 'reason', label: '备注', mobile: 'hidden' },
+]
+
+const orderColumns: StockColumn[] = [
+  { key: 'code', label: '代码', mobile: 'title' },
+  { key: 'name', label: '名称', mobile: 'primary' },
+  { key: 'direction', label: '方向', align: 'center', mobile: 'primary' },
+  { key: 'shares', label: '股数', type: 'num', digits: 0, mobile: 'secondary' },
+  { key: 'ref_price', label: '参考价', type: 'num', digits: 3 },
+  { key: 'amount', label: '金额', type: 'num', digits: 0, mobile: 'hidden' },
+  { key: 'reason', label: '原因', mobile: 'hidden' },
+  { key: 'done', label: '执行标记', align: 'center', mobile: 'secondary' },
 ]
 
 const curveOption = computed<EChartsOption | null>(() => {
@@ -205,6 +303,7 @@ onMounted(load)
 .side-tag.sell { background: var(--down-soft); color: var(--down); }
 .reset-box { display: flex; flex-direction: column; gap: 6px; }
 .reset-tip { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.order-note { font-size: 12px; color: var(--text-3); line-height: 1.6; margin-bottom: 8px; }
 
 .score-block {
   min-width: 132px;

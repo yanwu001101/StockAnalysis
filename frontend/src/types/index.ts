@@ -141,6 +141,27 @@ export interface PaperOverview {
   recent_trades: { trade_date: string; code: string; side: string; shares: number; price: number; amount: number; cost: number; reason: string }[]
 }
 
+/** 实盘半自动·里程碑1：委托单（系统只生成清单，人工执行，状态存本机） */
+export interface PaperOrder {
+  code: string
+  name: string
+  side: 'buy' | 'sell' | string
+  direction: string
+  shares: number
+  ref_price: number
+  amount: number
+  reason: string
+}
+
+export interface PaperOrders {
+  status: 'ok' | 'no-trades' | 'no-db' | string
+  trade_date: string | null
+  generated_at?: string
+  orders: PaperOrder[]
+  target_positions: { code: string; name: string; shares: number; avg_cost: number; last_close: number }[]
+  note?: string
+}
+
 export interface FactorLabResult {
   error?: string
   error_kind?: "coverage" | "compute"

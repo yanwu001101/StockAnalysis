@@ -27,6 +27,14 @@ public class PaperController {
         return ApiResponse.ok(data);
     }
 
+    /** 实盘半自动·里程碑1：委托清单生成（只读，系统不自动下单）。 */
+    @GetMapping("/orders")
+    public ApiResponse<?> orders(@RequestParam(value = "date", required = false) String date) {
+        JSONObject data = dataService.getPaperOrders(date);
+        if (data == null) throw new BusinessException("无可生成的委托单");
+        return ApiResponse.ok(data);
+    }
+
     @PostMapping("/reset")
     public ApiResponse<?> reset(@RequestBody JSONObject body) {
         JSONObject data = dataService.resetPaper(body);

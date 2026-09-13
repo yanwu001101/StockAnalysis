@@ -220,11 +220,14 @@ public class DataService {
     }
 
     public JSONObject runBacktest(JSONObject request) { return postObj("/api/backtest", request); }
-
+
     public JSONObject runFactorLab(JSONObject request) { return postObj("/api/factorlab", request); }
-
-    public JSONObject getPaper() { return getObjNoCache("/api/paper"); }
-
+
+    public JSONObject getPaper() { return getObjNoCache("/api/paper"); }
+
+    /** 实盘半自动·里程碑1：委托单生成器（只读清单，不自动下单）。 */
+    public JSONObject getPaperOrders(String date) { return getObjNoCache("/api/paper/orders" + qs("date", date)); }
+
     public JSONObject resetPaper(JSONObject request) { return postObj("/api/paper/reset", request); }
 
     // =====================================================================

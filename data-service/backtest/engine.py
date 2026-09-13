@@ -14,9 +14,9 @@ Execution realism (P0):
   * suspensions: volume == 0 or missing bar → untradeable; positions are
     carried at the last available close for valuation
   * board lot: buys round down to 100-share lots
-  * T+1: structurally satisfied — trades only happen at rebalance events on
-    bar closes, so shares bought at bar t are first sellable at bar t+1. If
-    intrabar events are ever introduced, add an explicit last-buy-date guard.
+  * no look-ahead: signals are computed at the t close from as-of data and
+    EXECUTED at the t+1 OPEN (国际惯例 t 收盘出信号、t+1 开盘成交)；开盘
+    一字涨停买不进、开盘跌停卖不出。T+1 由「成交在调仓日开盘」结构保证。
   * point-in-time fundamentals: quarterly rows are only visible from their
     announcement date (ann_date), falling back to the statutory disclosure
     deadline when ann_date is missing
@@ -24,6 +24,7 @@ Execution realism (P0):
 """
 from __future__ import annotations
 import datetime as dt
+import time
 
 import numpy as np
 import pandas as pd
@@ -229,12 +230,17 @@ def _score_universe(strategy_id: str, codes: list[str]) -> dict[str, float]:
     return out
 
 
-def _load_panel(codes: list[str], end: dt.date) -> dict[str, dict[str, pd.DataFrame]]:
+def _load_panel(codes: list[str], end: dt.date,
+                start: dt.date | None = None) -> dict[str, dict[str, pd.DataFrame]]:
     """Bulk-load every code's full history up to `end` in a single round-trip
     per table. Returns {code -> {"dk", "fund", "nb", "lhb"}} so the rebalance
     loop can slice an as-of view without hitting MySQL again.
 
     Without this, a 200-stock x 52-week back-test would issue 40 000 queries.
+
+    `start` 给定时，K线/北向/龙虎榜按 `start - 400 天` 下界预过滤（约 270 个
+    交易日，覆盖 260 根 K 线 + 60 日北向/龙虎榜的预热窗口），省一半以上的
+    加载与内存；财务仍全量加载（真正的 point-in-time 过滤在切片时做）。
     """
     eng = db.get_engine()
     if eng is None:
@@ -242,6 +248,7 @@ def _load_panel(codes: list[str], end: dt.date) -> dict[str, dict[str, pd.DataFr
     if not codes:
         return {}
     in_list = ",".join(f"'{c}'" for c in codes)
+    lower = f" AND trade_date >= '{(start - dt.timedelta(days=400)).isoformat()}'" if start else ""
 
     def _bulk(sql: str) -> pd.DataFrame:
         with eng.connect() as conn:
@@ -250,7 +257,7 @@ def _load_panel(codes: list[str], end: dt.date) -> dict[str, dict[str, pd.DataFr
     dk = _bulk(
         f"SELECT code, trade_date, open, close, high, low, volume "
         f"FROM stock_kline_daily "
-        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'"
+        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'{lower}"
     )
     # 财务按 report_date 预过滤足够宽；真正的 point-in-time 过滤在切片时按
     # ann_date / 法定披露截止日进行（effective_date 列在下方计算）。
@@ -260,11 +267,11 @@ def _load_panel(codes: list[str], end: dt.date) -> dict[str, dict[str, pd.DataFr
     )
     nb = _bulk(
         f"SELECT * FROM stock_northbound "
-        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'"
+        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'{lower}"
     )
     lhb = _bulk(
         f"SELECT * FROM stock_lhb "
-        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'"
+        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'{lower}"
     )
 
     if not dk.empty:
@@ -336,6 +343,28 @@ def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.da
         return 0.0
 
 
+# As-of 评分缓存：研究链路（factorlab/回测）反复重跑时，同一
+# (strategy_id, code, as_of) 直接复用。TTL 10 分钟——盘后任务更新 K 线后
+# 自动失效。评分只依赖 <= as_of 的数据，与加载窗口无关，跨请求缓存安全。
+_SCORE_CACHE: dict[tuple, tuple[float, float]] = {}
+_SCORE_TTL_S = 600.0
+_SCORE_CACHE_MAX = 300_000
+
+
+def _score_at_cached(strat, panel_one: dict[str, pd.DataFrame], code: str,
+                     as_of: dt.date) -> float:
+    key = (strat.id, code, as_of)
+    now = time.time()
+    hit = _SCORE_CACHE.get(key)
+    if hit is not None and now - hit[0] < _SCORE_TTL_S:
+        return hit[1]
+    v = _score_at(strat, panel_one, code, as_of)
+    if len(_SCORE_CACHE) > _SCORE_CACHE_MAX:
+        _SCORE_CACHE.clear()
+    _SCORE_CACHE[key] = (now, v)
+    return v
+
+
 def _rebalance_dates(trading_days: list[dt.date], freq: str) -> list[dt.date]:
     if not trading_days:
         return []
@@ -388,8 +417,12 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
     limit_up = np.floor((prev_close * (1 + ratio)).mul(100) + 0.5) / 100.0
     limit_down = np.ceil((prev_close * (1 - ratio)).mul(100) - 0.5) / 100.0
     tradable = close.notna() & (volume.fillna(0) > 0)
-    buyable = tradable & (close < limit_up)
-    sellable = tradable & (close > limit_down)
+    # 开盘可交易性（t+1 开盘成交用）：开盘价存在且未封板
+    open_px = ohlcv.get("open")
+    if open_px is None:
+        open_px = close   # 数据缺失时退化为收盘成交（不应发生）
+    buyable_open = tradable & open_px.notna() & (open_px < limit_up)
+    sellable_open = tradable & open_px.notna() & (open_px > limit_down)
 
     # Pre-load full panel once so the rebalance loop never re-queries MySQL.
     # This is the only price we pay to kill the look-ahead: every rebalance
@@ -416,6 +449,8 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
     cash = float(initial_capital)
     total_traded = 0.0                   # 成交额（买+卖），用于换手率
     total_cost_paid = 0.0                # 佣金 + 印花税累计
+    # t 日收盘产生的待执行信号：下一交易日开盘成交
+    pending: tuple[dt.date, list[str], float] | None = None
 
     def value_at(date: dt.date) -> float:
         if date not in val_close.index or not holdings:
@@ -427,39 +462,27 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
                 total += sh * float(row[c])
         return total
 
-    for d in trading_days:
-        if d in rebal_set:
-            mv = value_at(d) + cash
-            if mv > 0:
-                # Re-score with AS-OF data — picks now reflect what was known
-                # on date `d`, not what happens later.
-                scores_today: dict[str, float] = {}
-                for c in codes:
-                    s = _score_at(strat, panel[c], c, d)
-                    if s > 0:
-                        scores_today[c] = s
-                if scores_today:
-                    ranked = sorted(scores_today.items(), key=lambda kv: kv[1], reverse=True)
-                    picks = [c for c, _ in ranked[:top_n]]
-                    last_picks = picks
-                else:
-                    picks = last_picks  # nothing scoreable today; hold previous basket
-
+    for i, d in enumerate(trading_days):
+        # ---- 1) 执行上一信号日的待执行单：今日开盘成交 ----
+        if pending is not None:
+            sig_date, picks, mv_sig = pending
+            pending = None
+            if d in open_px.index:
                 pick_set = set(picks)
-                row_close = close.loc[d]
-                row_buyable = buyable.loc[d]
-                row_sellable = sellable.loc[d]
+                row_open = open_px.loc[d]
+                row_buyable = buyable_open.loc[d]
+                row_sellable = sellable_open.loc[d]
 
                 def _on(col, c) -> bool:
                     return c in col.index and bool(col[c])
 
-                # ---- 1) 卖出：不在新组合里、且当日可卖（未跌停/未停牌）----
+                # ---- 1a) 卖出：不在新组合里、且开盘未跌停/未停牌 ----
                 for c in list(holdings):
                     if c in pick_set:
                         continue
                     if not _on(row_sellable, c):
-                        continue   # 跌停/停牌冻结，继续持有
-                    raw_px = float(row_close[c])
+                        continue
+                    raw_px = float(row_open[c])
                     exec_px = raw_px * (1 - cost["slippage"])
                     sh = holdings[c]
                     gross = sh * exec_px
@@ -477,28 +500,25 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
                     del holdings[c]
                     cost_basis.pop(c, None)
 
-                # ---- 2) 买入 / 增减仓：调到等权目标；涨停/停牌的新标的跳过 ----
-                if picks:
+                # ---- 1b) 买入/调平到等权目标；开盘涨停/停牌跳过 ----
+                if picks and mv_sig > 0:
                     n_target = max(len(picks), 1)
-                    tgt_value = mv / n_target
+                    tgt_value = mv_sig / n_target
                     for c in picks:
                         if not _on(row_buyable, c):
-                            continue   # 涨停封板/停牌买不进
-                        raw_px = float(row_close[c])
+                            continue
+                        raw_px = float(row_open[c])
                         if raw_px <= 0:
                             continue
                         exec_px = raw_px * (1 + cost["slippage"])
                         cur_sh = holdings.get(c, 0.0)
                         tgt_sh = tgt_value / exec_px
-                        # 一手整数倍（买入方向）
                         diff_lots = int((tgt_sh - cur_sh) // LOT_SIZE)
                         if diff_lots > 0:
                             add_sh = diff_lots * LOT_SIZE
                             amount = add_sh * exec_px
                             fee = _commission(amount, cost)
-                            need = amount + fee
-                            if need > cash:
-                                # 现金不够降档：按可负担手数重算
+                            if amount + fee > cash:
                                 afford_lots = int((cash / exec_px) // LOT_SIZE)
                                 if afford_lots <= 0:
                                     continue
@@ -519,10 +539,9 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
                                 "pnl": None,
                             })
                         elif diff_lots < 0:
-                            reduce_sh = -diff_lots * LOT_SIZE
-                            sell_sh = min(reduce_sh, cur_sh)
+                            sell_sh = min(-diff_lots * LOT_SIZE, cur_sh)
                             if not _on(row_sellable, c):
-                                continue   # 想减仓但跌停/停牌，保留
+                                continue   # 想减仓但开盘跌停/停牌，保留
                             exec_px_s = raw_px * (1 - cost["slippage"])
                             gross = sell_sh * exec_px_s
                             fee = _commission(gross, cost)
@@ -542,6 +561,28 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
                                 cost_basis.pop(c, None)
                             else:
                                 holdings[c] = remaining
+
+        # ---- 2) 调仓日收盘：按 as-of 数据重评分，信号压入 pending ----
+        if d in rebal_set:
+            mv = value_at(d) + cash
+            if mv > 0:
+                # Re-score with AS-OF data — picks now reflect what was known
+                # on date `d`, not what happens later.
+                scores_today: dict[str, float] = {}
+                for c in codes:
+                    s = _score_at_cached(strat, panel[c], c, d)
+                    if s > 0:
+                        scores_today[c] = s
+                if scores_today:
+                    ranked = sorted(scores_today.items(), key=lambda kv: kv[1], reverse=True)
+                    picks = [c for c, _ in ranked[:top_n]]
+                    last_picks = picks
+                else:
+                    picks = last_picks  # nothing scoreable today; hold previous basket
+
+                if picks and i + 1 < len(trading_days):
+                    pending = (d, picks, mv)
+
         equity_vals.append(value_at(d) + cash)
         equity_dates.append(d)
 

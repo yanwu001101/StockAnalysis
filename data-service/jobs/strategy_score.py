@@ -19,11 +19,14 @@ import cache
 from core.trace import logger
 from repo import strategy_score_repo
 from strategies import REGISTRY
-from api.strategies_v2 import _load_ctx, _score_all
+from api.strategies_v2 import _bulk_load_panels, _load_ctx, _score_all
 
 
 # Larger universes give a more complete picture but cost linearly. 0 = all.
 _DEFAULT_UNIVERSE = 0
+# Codes per bulk panel load. One windowed SQL per table per chunk instead of
+# 6 SQL per code — the full market goes from ~35k queries to a few dozen.
+_BULK_CHUNK = 1000
 
 
 def _select_universe(top_n: int) -> list[str]:
@@ -64,36 +67,45 @@ def run(top_n: int = _DEFAULT_UNIVERSE) -> int:
     total = len(codes)
     logger.info("[strategy_score] scoring %d codes × %d strategies", total, len(REGISTRY))
 
-    for i, code in enumerate(codes):
+    for start in range(0, total, _BULK_CHUNK):
+        chunk = codes[start:start + _BULK_CHUNK]
         try:
-            ctx = _load_ctx(code)
-            # _score_all returns (composite, signal, out_dict, out_list). out_list
-            # carries one entry per strategy with score/signal/triggered.
-            _, _, _, out_list = _score_all(ctx)
-            for it in out_list:
-                score = float(it.get("score") or 0)
-                # Skip zero scores — they pollute the table with no-data rows
-                # and would never appear in any top-N anyway.
-                if score <= 0:
-                    continue
-                rows.append({
-                    "code": code,
-                    "strategy_id": it["id"],
-                    "score": round(score, 2),
-                    "signal_type": it.get("signal") or "neutral",
-                    "triggered": 1 if it.get("triggered") else 0,
-                })
+            panels = _bulk_load_panels(chunk)
         except Exception as e:
-            logger.debug("[strategy_score] %s failed: %s", code, e)
+            logger.warning("[strategy_score] bulk load failed (%s) — per-code fallback", e)
+            panels = {}
+        for j, code in enumerate(chunk):
+            try:
+                ctx = panels.get(code)
+                if ctx is None:
+                    ctx = _load_ctx(code)
+                # _score_all returns (composite, signal, out_dict, out_list). out_list
+                # carries one entry per strategy with score/signal/triggered.
+                _, _, _, out_list = _score_all(ctx)
+                for it in out_list:
+                    score = float(it.get("score") or 0)
+                    # Skip zero scores — they pollute the table with no-data rows
+                    # and would never appear in any top-N anyway.
+                    if score <= 0:
+                        continue
+                    rows.append({
+                        "code": code,
+                        "strategy_id": it["id"],
+                        "score": round(score, 2),
+                        "signal_type": it.get("signal") or "neutral",
+                        "triggered": 1 if it.get("triggered") else 0,
+                    })
+            except Exception as e:
+                logger.debug("[strategy_score] %s failed: %s", code, e)
 
-        # Flush in batches so a crash mid-scan still keeps partial progress
-        if len(rows) >= batch_size * len(REGISTRY):
-            strategy_score_repo.upsert_scores(pd.DataFrame(rows))
-            rows.clear()
-            elapsed = time.time() - started
-            done = i + 1
-            eta = elapsed / done * (total - done)
-            logger.info("[strategy_score] %d/%d codes scored, eta %.0fs", done, total, eta)
+            # Flush in batches so a crash mid-scan still keeps partial progress
+            if len(rows) >= batch_size * len(REGISTRY):
+                strategy_score_repo.upsert_scores(pd.DataFrame(rows))
+                rows.clear()
+                elapsed = time.time() - started
+                done = start + j + 1
+                eta = elapsed / done * (total - done)
+                logger.info("[strategy_score] %d/%d codes scored, eta %.0fs", done, total, eta)
 
     if rows:
         strategy_score_repo.upsert_scores(pd.DataFrame(rows))

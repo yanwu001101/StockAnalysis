@@ -19,7 +19,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from flask import Blueprint, jsonify, request
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 import cache
 import db
@@ -225,6 +225,144 @@ def _load_ctx(code: str) -> StrategyContext:
         ctx.sector_rank = rk
         ctx.sector_rank_n = n
     return ctx
+
+
+_BULK_CHUNK = 500  # codes per SQL round-trip; keeps IN-lists and window scans bounded
+
+
+def _codes_sql(sql: str):
+    return text(sql).bindparams(bindparam("codes", expanding=True))
+
+
+_BULK_KLINE_SQL = _codes_sql(
+    "SELECT code, trade_date, open, close, high, low, volume FROM ("
+    "  SELECT code, trade_date, open, close, high, low, volume,"
+    "         ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) AS rn"
+    "  FROM stock_kline_daily WHERE code IN :codes"
+    ") t WHERE rn <= 260 ORDER BY code, rn")
+_BULK_FUNDAMENTAL_SQL = _codes_sql(
+    "SELECT * FROM ("
+    "  SELECT s.*, ROW_NUMBER() OVER (PARTITION BY code ORDER BY report_date DESC) AS rn"
+    "  FROM stock_fundamental s WHERE code IN :codes"
+    ") t WHERE rn <= 12 ORDER BY code, rn")
+_BULK_NORTHBOUND_SQL = _codes_sql(
+    "SELECT * FROM ("
+    "  SELECT s.*, ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) AS rn"
+    "  FROM stock_northbound s WHERE code IN :codes"
+    ") t WHERE rn <= 60 ORDER BY code, rn")
+_BULK_LHB_SQL = _codes_sql(
+    "SELECT * FROM stock_lhb WHERE code IN :codes "
+    "AND trade_date >= (CURDATE() - INTERVAL 60 DAY)")
+_BULK_MONEYFLOW_SQL = _codes_sql(
+    "SELECT code, trade_date, super_large_net, large_net, medium_net, small_net, main_net "
+    "FROM stock_moneyflow WHERE code IN :codes "
+    "AND trade_date >= (CURDATE() - INTERVAL 60 DAY) "
+    "ORDER BY trade_date DESC")
+_BULK_STOCK_INFO_SQL = _codes_sql(
+    "SELECT code, name, industry, latest_price, market_cap "
+    "FROM stock_info WHERE code IN :codes")
+
+
+def _bulk_load_panels(codes: list[str]) -> dict[str, StrategyContext]:
+    """Batch variant of _load_ctx: ~6 SQL per chunk of codes instead of 6 per code.
+
+    Uses MySQL 8 window functions to take each code's latest N rows in one
+    statement. Panel shapes, row order and fallback logic mirror _load_ctx
+    exactly — the two loaders are interchangeable (see tests in
+    docs: 20-code parity check in TASKS.md 验证命令速查).
+    """
+    codes = [str(c).zfill(6) for c in codes]
+    codes = list(dict.fromkeys(c for c in codes if c))
+    out: dict[str, StrategyContext] = {c: StrategyContext(code=c) for c in codes}
+    if not codes:
+        return out
+    eng = db.get_engine()
+    if eng is None:
+        return out
+
+    def _split(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        df = df.copy()
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        return {c: g for c, g in df.groupby("code", sort=False)}
+
+    for i in range(0, len(codes), _BULK_CHUNK):
+        chunk = codes[i:i + _BULK_CHUNK]
+        with eng.connect() as conn:
+            dk = pd.read_sql(_BULK_KLINE_SQL, conn, params={"codes": chunk})
+            f = pd.read_sql(_BULK_FUNDAMENTAL_SQL, conn, params={"codes": chunk})
+            nb = pd.read_sql(_BULK_NORTHBOUND_SQL, conn, params={"codes": chunk})
+            lhb = pd.read_sql(_BULK_LHB_SQL, conn, params={"codes": chunk})
+            mf = pd.read_sql(_BULK_MONEYFLOW_SQL, conn, params={"codes": chunk})
+            si = pd.read_sql(_BULK_STOCK_INFO_SQL, conn, params={"codes": chunk})
+
+        for c, g in _split(dk).items():
+            out[c].daily_df = (
+                g.drop(columns="code").sort_values("trade_date")
+                .rename(columns={"trade_date": "日期", "open": "开盘", "close": "收盘",
+                                 "high": "最高", "low": "最低", "volume": "成交量"})
+            )
+        # fundamental/northbound keep _load_ctx's "newest first" row order
+        for c, g in _split(f).items():
+            out[c].fundamental_df = g.drop(columns="rn").reset_index(drop=True)
+        for c, g in _split(nb).items():
+            out[c].northbound_df = g.drop(columns="rn").reset_index(drop=True)
+        for c, g in _split(lhb).items():
+            out[c].lhb_df = g.reset_index(drop=True)
+        for c, g in _split(mf).items():
+            out[c].moneyflow_df = g.drop(columns="code").reset_index(drop=True)
+        if not si.empty:
+            si = si.copy()
+            si["code"] = si["code"].astype(str).str.zfill(6)
+            si = si.drop_duplicates("code", keep="first")
+            for _, row in si.iterrows():
+                ctx = out.get(str(row["code"]))
+                if ctx is None:
+                    continue
+                ctx.name = str(row.get("name") or "")
+                ctx.industry = str(row.get("industry") or "")
+                try:
+                    ctx.price = float(row.get("latest_price") or 0)
+                    ctx.market_cap_yi = float(row.get("market_cap") or 0)
+                except Exception:
+                    pass
+
+    # Industry fallback from cached spot snapshot — same per-code semantics as
+    # _load_ctx, but resolved with one pass over the snapshot.
+    missing = [c for c, ctx in out.items() if not ctx.industry]
+    if missing:
+        df = cache.get("spot")
+        if df is None or (hasattr(df, "empty") and df.empty):
+            df = cache.get("spot_v2")
+        if df is not None and hasattr(df, "columns"):
+            code_col = "代码" if "代码" in df.columns else ("code" if "code" in df.columns else None)
+            ind_col = "行业" if "行业" in df.columns else ("industry" if "industry" in df.columns else None)
+            cap_col = ("总市值_亿" if "总市值_亿" in df.columns
+                       else ("market_cap_yi" if "market_cap_yi" in df.columns else None))
+            name_col = "名称" if "名称" in df.columns else ("name" if "name" in df.columns else None)
+            if code_col and ind_col:
+                try:
+                    series_code = df[code_col].astype(str).str.zfill(6)
+                    for _, r in df[series_code.isin(missing)].iterrows():
+                        ctx = out.get(str(r[code_col]).zfill(6))
+                        if ctx is None or ctx.industry:
+                            continue
+                        ctx.industry = str(r.get(ind_col) or "")
+                        if name_col and not ctx.name:
+                            ctx.name = str(r.get(name_col) or "")
+                        if cap_col and not ctx.market_cap_yi:
+                            try:
+                                ctx.market_cap_yi = float(r.get(cap_col) or 0)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+    for ctx in out.values():
+        rk, n = _sector_rank(ctx.industry)
+        if rk is not None:
+            ctx.sector_rank = rk
+            ctx.sector_rank_n = n
+    return out
 
 
 def _score_all(ctx: StrategyContext, weights: Optional[dict] = None,
@@ -440,10 +578,22 @@ def screen():
         df = df.sort_values(cap_col, ascending=False, na_position="last")
     universe = df.head(top_universe)
 
+    universe_rows = list(universe.iterrows())
+    # Bulk-load panels for the whole universe (6 SQL per 500 codes instead of
+    # 6 per code), falling back to per-code loading for any code the bulk
+    # loader could not cover.
+    panels: dict[str, StrategyContext] = {}
+    codes_in_order = [str(row[code_col]).zfill(6) for _, row in universe_rows]
+    for s in range(0, len(codes_in_order), _BULK_CHUNK):
+        try:
+            panels.update(_bulk_load_panels(codes_in_order[s:s + _BULK_CHUNK]))
+        except Exception:
+            continue
+
     results: list[dict] = []
-    for _, row in universe.iterrows():
+    for _, row in universe_rows:
         code = str(row[code_col]).zfill(6)
-        ctx = _load_ctx(code)
+        ctx = panels.get(code) or _load_ctx(code)
         # Inject quote fields the loader doesn't fetch
         try:
             if not ctx.industry and ind_col in row.index:

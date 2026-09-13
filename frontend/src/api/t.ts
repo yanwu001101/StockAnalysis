@@ -1,5 +1,24 @@
 import request from './request'
 
+/** 做T操作计划:服务端把方向+区间翻译成可执行步骤(先做哪步/什么价格/何时放弃) */
+export interface TPlan {
+  mode: 'sell_first' | 'buy_first' | 'wait'
+  title: string
+  /** sell_first:先卖区间 */
+  sell_zone: [number, number] | null
+  /** sell_first:后接区间 */
+  buyback_zone: [number, number] | null
+  /** buy_first:先买区间 */
+  buy_zone: [number, number] | null
+  /** buy_first:后卖区间 */
+  sellback_zone: [number, number] | null
+  size_hint: string | null
+  rules: string
+  invalidation: string | null
+  invalid_levels: number[]
+  watch_hint?: string
+}
+
 // 短线做 T(日内 T+0)建议
 export interface TSubscores {
   position: number
@@ -63,6 +82,8 @@ export interface TSignal {
   risks: string[]
   data_time: string | null
   disclaimer: string
+  /** 操作计划层:先卖后接/先买后卖/观望 + 双区间 + 规则 + 失效(服务端计算) */
+  plan: TPlan | null
   // ---- 可解释评分 ----
   subscores: TSubscores
   weights: TSubscores

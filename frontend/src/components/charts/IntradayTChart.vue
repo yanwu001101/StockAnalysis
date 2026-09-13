@@ -34,18 +34,29 @@ function buildOption(): EChartsOption | null {
   if (s.buy_zone) extra.push(s.buy_zone[0], s.buy_zone[1])
   if (s.sell_zone) extra.push(s.sell_zone[0], s.sell_zone[1])
   extra.push(...(s.supports || []), ...(s.resists || []))
+  extra.push(...(s.plan?.invalid_levels || []))
   if (s.position?.avg_cost) extra.push(s.position.avg_cost)
   const allv = ([...prices, ...avgs, ...extra]).filter(v => v != null && isFinite(v as number)) as number[]
   const ymin = Math.min(...allv)
   const ymax = Math.max(...allv)
   const pad = (ymax - ymin) * 0.08 || ymax * 0.01
 
-  // 买卖区色带:低吸区红、高抛区绿(A 股习惯)
+  // 买卖区色带:接回/低吸区红(买)、卖出区绿(A 股习惯),带名称标注
   const areas: any[] = []
-  if (s.buy_zone) areas.push([{ yAxis: s.buy_zone[0], itemStyle: { color: hexToRgba(t.up, 0.1) } }, { yAxis: s.buy_zone[1] }])
-  if (s.sell_zone) areas.push([{ yAxis: s.sell_zone[0], itemStyle: { color: hexToRgba(t.down, 0.1) } }, { yAxis: s.sell_zone[1] }])
+  const buyLabel = s.plan?.mode === 'buy_first' ? '低吸区' : '接回区'
+  const sellLabel = s.plan?.mode === 'sell_first' ? '卖出区' : '卖出区'
+  if (s.buy_zone) areas.push([
+    { yAxis: s.buy_zone[0], itemStyle: { color: hexToRgba(t.up, 0.12) },
+      label: { formatter: buyLabel, color: t.up, fontSize: 10, position: 'insideBottomRight' } },
+    { yAxis: s.buy_zone[1] },
+  ])
+  if (s.sell_zone) areas.push([
+    { yAxis: s.sell_zone[0], itemStyle: { color: hexToRgba(t.down, 0.12) },
+      label: { formatter: sellLabel, color: t.down, fontSize: 10, position: 'insideTopRight' } },
+    { yAxis: s.sell_zone[1] },
+  ])
 
-  // 关键横线:昨收/成本/支撑/压力
+  // 关键横线:昨收/成本/支撑/压力/计划失效位(带箭头)
   const lines: any[] = [
     { yAxis: prev, lineStyle: { color: t.text3, type: 'dashed', width: 1 },
       label: { formatter: '昨收', color: t.text3, fontSize: 10, position: 'insideEndTop' } },
@@ -57,9 +68,20 @@ function buildOption(): EChartsOption | null {
   const sup = s.supports?.[0]
   const res = s.resists?.[0]
   if (sup) lines.push({ yAxis: sup, lineStyle: { color: hexToRgba(t.up, 0.45), type: 'dotted', width: 1 },
-    label: { formatter: '支撑', color: t.up, fontSize: 10, position: 'insideStartBottom' } })
+    label: { formatter: '支撑 ' + sup, color: t.up, fontSize: 10, position: 'insideStartBottom' } })
   if (res) lines.push({ yAxis: res, lineStyle: { color: hexToRgba(t.down, 0.45), type: 'dotted', width: 1 },
-    label: { formatter: '压力', color: t.down, fontSize: 10, position: 'insideStartTop' } })
+    label: { formatter: '压力 ' + res, color: t.down, fontSize: 10, position: 'insideStartTop' } })
+  // 计划失效位:突破/跌破即放弃计划——虚线+箭头,一眼可见
+  for (const lv of s.plan?.invalid_levels || []) {
+    const isUp = lv > (s.price ?? lv)
+    lines.push({
+      yAxis: lv,
+      symbol: ['none', 'arrow'],
+      symbolSize: 7,
+      lineStyle: { color: t.warn, type: 'dashed', width: 1.4 },
+      label: { formatter: `计划失效 ${lv}`, color: t.warn, fontSize: 10, position: isUp ? 'insideEndTop' : 'insideEndBottom' },
+    })
+  }
 
   return {
     backgroundColor: 'transparent',

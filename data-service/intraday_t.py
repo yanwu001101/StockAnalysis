@@ -641,6 +641,57 @@ def _zones(direction, tf: TrendFeatures):
     return buy_zone, sell_zone
 
 
+def _operation_plan(direction, tf, buy_zone, sell_zone):
+    """把方向+区间翻译成用户可直接执行的操作计划:先做哪一步、什么价格、
+    什么时候放弃。卖出/接回区间全部为明确价格,前端不做二次推断。"""
+    sup = tf.supports[0] if tf.supports else tf.va_low
+    res = tf.resists[0] if tf.resists else tf.va_high
+    buf = max(0.003 * tf.price, (tf.robust_hi - tf.robust_lo) * 0.05)
+
+    if direction == "negative_t" and sell_zone and buy_zone:
+        invalid_up = _r((res if res and res > sell_zone[1] else sell_zone[1]) + buf)
+        invalid_down = _r((min(sup, buy_zone[0]) if sup else buy_zone[0]) - buf)
+        return {
+            "mode": "sell_first",
+            "title": "先卖后接(反T)",
+            "sell_zone": sell_zone,
+            "buyback_zone": buy_zone,
+            "size_hint": "建议卖出底仓的 1/3~1/2,接回等量",
+            "rules": "① 在卖出区分笔卖出部分持仓;② 等待回落到接回区买回等量;"
+                     "③ 未到接回区不追接,14:50 仍未接回则按当时价格处理,不拖到收盘竞价。",
+            "invalidation": (f"向上有效突破 {invalid_up}:强势不回落,停止等回落,"
+                             "已卖部分回踩分时均价时接回;向下有效跌破 "
+                             f"{invalid_down}:弱势确认,取消接回计划,重新评估趋势。"),
+            "invalid_levels": [invalid_up, invalid_down],
+        }
+    if direction == "positive_t" and buy_zone and sell_zone:
+        invalid_down = _r((min(sup, buy_zone[0]) if sup else buy_zone[0]) - buf)
+        return {
+            "mode": "buy_first",
+            "title": "先买后卖(正T)",
+            "buy_zone": buy_zone,
+            "sellback_zone": sell_zone,
+            "size_hint": "买入与卖出等量(当日闭环,不留新增隔夜仓)",
+            "rules": "① 在低吸区分笔买入计划仓位;② 反弹至卖出区卖出等量;"
+                     "③ 14:50 前未反弹到卖出区,按纪律卖出当日新买部分,不侥幸过夜。",
+            "invalidation": f"有效跌破 {invalid_down}:低吸逻辑失效,不接;已有仓位反弹到压力位先减。",
+            "invalid_levels": [invalid_down],
+        }
+    # wait:方向不明,给出重新评估的触发价格
+    return {
+        "mode": "wait",
+        "title": "今日观望,暂不做 T",
+        "sell_zone": None,
+        "buyback_zone": None,
+        "size_hint": None,
+        "rules": "现价处日内中位、多空方向不明,按区间操作大概率两边止损;宁可错过,不做没有优势的交易。",
+        "invalidation": None,
+        "invalid_levels": [],
+        "watch_hint": (f"回落到 {_r(sup)} 附近缩量企稳可重新评估低吸;"
+                       f"放量升破 {_r(res)} 再评估反T。"),
+    }
+
+
 def _reasons(direction, tf, vf, ictx, pos, plan, subs):
     out = []
     pos_desc = "低位" if tf.pos_pctile <= LOW_POS else "高位" if tf.pos_pctile >= HIGH_POS else "中位"
@@ -679,7 +730,7 @@ def _empty(code: str, reason: str) -> dict:
         "vwap": None, "day_high": None, "day_low": None, "day_open": None,
         "prev_close": None, "intraday_pos": None, "vwap_dev": None, "amplitude": None,
         "action": "no_data", "action_label": LABELS["no_data"], "strength": 0,
-        "buy_zone": None, "sell_zone": None, "reasons": [reason], "risks": [],
+        "buy_zone": None, "sell_zone": None, "plan": None, "reasons": [reason], "risks": [],
         "data_time": None, "disclaimer": DISCLAIMER,
         # 新增字段默认值
         "subscores": {"position": 0, "volume": 0, "momentum": 0, "index": 0},
@@ -828,6 +879,7 @@ def signal(code, shares=None, avg_cost=None, available=None,
         risks.append("已近尾盘,注意收盘不确定性")
 
     buy_zone, sell_zone = _zones(direction, tf)
+    operation_plan = _operation_plan(direction, tf, buy_zone, sell_zone)
 
     trend = None
     if detail_level == "full":
@@ -848,6 +900,7 @@ def signal(code, shares=None, avg_cost=None, available=None,
         "amplitude": _r(tf.amplitude * 100),
         "action": direction, "action_label": LABELS[direction], "strength": strength,
         "buy_zone": buy_zone, "sell_zone": sell_zone,
+        "plan": operation_plan,
         "reasons": reasons, "risks": risks,
         "data_time": tf.data_time, "disclaimer": DISCLAIMER,
         # ---- 新增:可解释评分 ----

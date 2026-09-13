@@ -15,7 +15,7 @@
 
     <template v-else>
       <!-- 做 T -->
-      <TSignalCard v-if="tab === 't'" ref="tCardRef" :signal="tSignal" :code="code" @recalc="onRecalc" />
+      <TSignalCard v-if="tab === 't'" :signal="tSignal" :code="code" />
 
       <!-- 概览（K线 + 核心指标）/ K线 -->
       <section v-if="overviewVisible || klineVisible" class="content-grid" :class="{ 'overview-only': overviewVisible && !klineVisible }">
@@ -46,7 +46,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getStockDetail, getStockKLine, getStockStrategies, getStockF10, getStockPrediction } from '@/api/stock'
-import { getTSignal, type TSignal, type TPositionInput } from '@/api/t'
+import { getTSignal, type TSignal } from '@/api/t'
 import { useUserStore } from '@/stores/user'
 import { useSettingsStore, type KlineAdjust } from '@/stores/settings'
 import { useRefreshable } from '@/composables/useRefreshable'
@@ -86,7 +86,6 @@ const klineVisible = computed(() => tab.value === 'kline' || (tab.value === 'ove
 
 const predictMode = computed<'prob' | 'pro'>(() => (tab.value === 'predict' ? 'pro' : 'prob'))
 const predictRef = ref<InstanceType<typeof PredictionCard>>()
-const tCardRef = ref<InstanceType<typeof TSignalCard>>()
 
 function goPredict() {
   tab.value = 'predict'
@@ -154,20 +153,18 @@ async function loadData() {
   }
   // F10 loads in parallel (slower akshare path).
   loadF10()
-  loadTSignal(tCardRef.value?.currentPos())
+  loadTSignal()
 }
 
-async function loadTSignal(pos?: TPositionInput) {
+async function loadTSignal() {
   const c = code.value
   if (!c) return
   try {
-    tSignal.value = await getTSignal(c, pos)
+    tSignal.value = await getTSignal(c)
   } catch {
     tSignal.value = null
   }
 }
-
-function onRecalc(pos: TPositionInput | undefined) { loadTSignal(pos) }
 
 async function loadF10() {
   const c = code.value

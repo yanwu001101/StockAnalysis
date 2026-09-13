@@ -54,13 +54,14 @@ _INDUSTRY_CACHE: dict[str, str] | None = None
 _INDUSTRY_TS = 0.0
 
 
-def _get_panel(codes: list[str], end: dt.date) -> dict:
-    key = (end.isoformat(), tuple(codes))
+def _get_panel(codes: list[str], end: dt.date,
+               start: dt.date | None = None) -> dict:
+    key = (end.isoformat(), start.isoformat() if start else "", tuple(codes))
     now = time.time()
     hit = _PANEL_CACHE.get(key)
     if hit and now - hit[0] < _PANEL_TTL_S:
         return hit[1]
-    panel = engine._load_panel(codes, end)
+    panel = engine._load_panel(codes, end, start=start)
     if panel:
         _PANEL_CACHE.clear()   # 只保留最近一份，防止内存膨胀
         _PANEL_CACHE[key] = (now, panel)
@@ -113,12 +114,19 @@ def _rank_ic(a: pd.Series, b: pd.Series) -> float | None:
     return float(ra.corr(rb))
 
 
-def _universe_codes(amount: pd.DataFrame | None, close: pd.DataFrame, max_codes: int) -> list[str]:
-    """按日均成交额降序取前 max_codes 只（流动性代理），无 amount 则按代码序。"""
+def _universe_codes(amount: pd.DataFrame | None, close: pd.DataFrame,
+                    max_codes: int, volume: pd.DataFrame | None = None) -> list[str]:
+    """宇宙选择：优先 amount（日均成交额），缺失用 close×volume 代理；
+    都没有则按原始列序。流动性排序的宇宙比代码序更有代表性。"""
     codes = list(close.columns)
-    if amount is not None and not amount.empty and max_codes and len(codes) > max_codes:
-        mean_amt = amount.mean().sort_values(ascending=False)
-        return mean_amt.head(max_codes).index.tolist()
+    if max_codes and len(codes) > max_codes:
+        if amount is not None and not amount.empty:
+            score = amount.mean()
+        elif volume is not None:
+            score = (close * volume).mean()
+        else:
+            return codes[:max_codes]
+        return score.sort_values(ascending=False).head(max_codes).index.tolist()
     return codes[:max_codes] if max_codes else codes
 
 
@@ -257,9 +265,54 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
             rebalance: str = "monthly", layers: int = 5,
             max_codes: int = 300, horizons=DEFAULT_HORIZONS,
             neutralize: bool = True) -> dict:
+    """内置策略检验入口：把策略的 as-of 评分打包成 score_provider，
+    统一走 analyze_scores 统计管线（与自定义因子共用同一引擎，Skill §20）。"""
     strat = by_id(strategy_id)
     if strat is None:
         return {"error": f"unknown strategy_id: {strategy_id}"}
+
+    trading_days = engine._trading_days(start, end)
+    if len(trading_days) < 30:
+        return {"error": "not enough trading days in range"}
+    ohlcv = engine._universe_ohlcv(start, end)
+    if not ohlcv:
+        return {"error": "no price matrix; run postmarket job first"}
+    codes = _universe_codes(ohlcv.get("amount"), ohlcv["close"], max_codes,
+                            volume=ohlcv.get("volume"))
+
+    panel = _get_panel(codes, end, start)
+    if not panel:
+        return {"error": "panel load failed"}
+
+    def provider(d: dt.date, codes_list: list[str]) -> pd.Series:
+        out: dict[str, float] = {}
+        for c in codes_list:
+            s = engine._score_at_cached(strat, panel[c], c, d)
+            if s > 0:
+                out[c] = s
+        return pd.Series(out)
+
+    result = analyze_scores(provider, start=start, end=end, rebalance=rebalance,
+                            layers=layers, max_codes=max_codes,
+                            horizons=horizons, neutralize=neutralize,
+                            factor_name=strat.name)
+    if "error" not in result:
+        result["strategy_id"] = strategy_id
+    return result
+
+
+def analyze_scores(score_provider, start: dt.date, end: dt.date,
+                   rebalance: str = "monthly", layers: int = 5,
+                   max_codes: int = 300, horizons=DEFAULT_HORIZONS,
+                   neutralize: bool = True, factor_name: str = "因子",
+                   codes: list[str] | None = None) -> dict:
+    """统计检验管线：score_provider(d, codes) 返回该调仓日截面评分（Series）。
+
+    内置策略（as-of 重评分）与自定义因子（表达式面板查表）共用本管线——
+    IC/分层/衰减/牛熊/行业中性/评级的口径全产品唯一。
+    `codes` 由调用方传入时（如 alphalab 的流动性宇宙）必须与 provider 的
+    因子列一致——两个前 N 集合若不相交，覆盖门槛会把所有期数清零。
+    """
     layers = max(2, min(int(layers), 10))
     all_layers = list(range(1, layers + 1))
     horizons = tuple(sorted({int(h) for h in horizons if 1 <= int(h) <= 60}))
@@ -272,14 +325,13 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
     if not ohlcv:
         return {"error": "no price matrix; run postmarket job first"}
     close = ohlcv["close"]
-    codes = _universe_codes(ohlcv.get("amount"), close, max_codes)
+    if codes is None:
+        codes = _universe_codes(ohlcv.get("amount"), close, max_codes,
+                                volume=ohlcv.get("volume"))
+    codes = [c for c in codes if c in close.columns]
     val_close = close[codes].ffill()
 
     day_pos = {d: i for i, d in enumerate(trading_days)}
-
-    panel = _get_panel(codes, end)
-    if not panel:
-        return {"error": "panel load failed"}
 
     rebal_dates = engine._rebalance_dates(trading_days, rebalance)
     if len(rebal_dates) < 3:
@@ -305,11 +357,7 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
         if d not in val_close.index or d_next not in val_close.index:
             continue
 
-        scores: dict[str, float] = {}
-        for c in codes:
-            s = engine._score_at(strat, panel[c], c, d)
-            if s > 0:
-                scores[c] = s
+        scores = score_provider(d, codes)
         if len(scores) < layers * 5:
             logger.info("[factorlab] %s: only %d scores, skipped", d, len(scores))
             continue
@@ -476,7 +524,8 @@ def analyze(strategy_id: str, start: dt.date, end: dt.date,
         })
 
     return {
-        "strategy_id": strategy_id,
+        "strategy_id": None,
+        "factor_name": factor_name,
         "start": start.isoformat(),
         "end": end.isoformat(),
         "rebalance": rebalance,

@@ -81,8 +81,8 @@ function handleClick() { store.invokeReloader() }
   color: var(--text-3);
   flex-shrink: 0;
 }
-.left { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.right { display: flex; align-items: center; gap: 8px; }
+.left { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
+.right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 .bar-icon { color: var(--text-3); }
 .bar-label { color: var(--text); font-weight: 500; }
@@ -120,5 +120,11 @@ function handleClick() { store.invokeReloader() }
   .bar-sep { display: none; }
   .bar-label { display: none; }
   .refresh-bar { padding: 0 12px; gap: 8px; }
+}
+/* 窄桌面壳(769-1100):连"上次刷新/数据时间"标签一起隐藏,只留时间值 */
+@media (max-width: 1100px) and (min-width: 901px) {
+  .left { gap: 8px; }
+  .bar-time-tag { display: none; }
+  .bar-time { gap: 0; }
 }
 </style>

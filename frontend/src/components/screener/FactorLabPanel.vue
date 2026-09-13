@@ -790,6 +790,17 @@ const icOption = computed<EChartsOption | null>(() => {
 .verdict-chip.st-compute { background: var(--color-red-soft); color: var(--color-red); }
 
 .rating-head { display: flex; align-items: center; gap: 16px; }
+/* 两个评分块:桌面定宽,移动端对半分(此前无样式定义导致移动端溢出错位) */
+.score-block {
+  min-width: 128px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
+.score-label { font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
+.score-num { font-size: 20px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.score-sub { font-size: 11px; color: var(--text-4); font-weight: 400; margin-left: 4px; }
 .rating-head-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .rating-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dir-chip { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-pill); font-weight: 500; }
@@ -845,4 +856,15 @@ const icOption = computed<EChartsOption | null>(() => {
 .verdict.st-compute, .verdict.st-coverage { color: var(--text-3); }
 .verdict-main { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.5; }
 @media (max-width: 1000px) { .factor-lab { grid-template-columns: 1fr; } }
+/* —— 移动端:评分块换行对半分,标题行整行下移,指标行收窄防溢出 —— */
+@media (max-width: 768px) {
+  .rating-head { flex-wrap: wrap; gap: 10px; }
+  .score-block { flex: 1 1 40%; min-width: 0; }
+  .score-num { font-size: 17px; }
+  .rating-head-lines { flex-basis: 100%; }
+  .metric-line { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .mini-bar { width: 52px; }
+  .dim { grid-template-columns: 64px 1fr 30px; gap: 8px; }
+  .grade-badge { width: 60px; height: 60px; }
+}
 </style>

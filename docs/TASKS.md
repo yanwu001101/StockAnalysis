@@ -21,6 +21,7 @@
 | **P4 里程碑1 委托单生成器**（/api/paper/orders + PaperPanel 委托单卡 + Java 透传；GUI 已验证） | ✅ 2026-09-13 | api/paper.py、PaperController.java、DataService.java、PaperPanel.vue |
 | **周度全策略体检终版名单**（29 策略 × 周度 131 期，无 🟢；旧口径=代码序宇宙） | ✅ 2026-09-13 | docs/weekly_sweep_2026-09.md + .json |
 | **全站留白治理**（SKILL §34/信息优先：BaseChart/KLineChart/StatGrid/StockHeader 加载骨架 + 空态占位；评分选股进入即自动选股；盘面侧栏 loading 骨架、北向移至末位） | ✅ 2026-09-13 | BaseChart.vue、KLineChart.vue、StatGrid.vue、StockHeader.vue、ScoreScreener.vue、Dashboard.vue、MarketRankCard.vue、theme.css |
+| **移动端布局修复**（FactorLabPanel rating-head 移动端断点：评分块对半换行/标题整行下移/metric-line 收窄——修复结果卡横向溢出错位；score-block 补齐样式定义；RefreshBar 窄壳溢出防护） | ✅ 2026-09-13 | FactorLabPanel.vue、RefreshBar.vue |
 | 3.5 年历史回补（1015 只 × 659,887 行，2023-03~今） | ✅ 已完成 | 数据库 stock_kline_daily |
 | 数据时钟修复（ann_date point-in-time、指数日历） | ✅ 已上线 | data-service/migrations.py |
 

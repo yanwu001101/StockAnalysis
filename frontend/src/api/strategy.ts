@@ -20,18 +20,69 @@ export function runScreener(req: ScreenerRequest): Promise<any[]> {
 export function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
   return request.post('/backtest', req)
 }
-
-export interface FactorLabRequest {
-  strategyId: string
-  startDate: string
-  endDate: string
-  rebalance?: string
-  layers?: number
-  maxCodes?: number
-}
-
-export function runFactorLab(req: FactorLabRequest): Promise<FactorLabResult> {
-  return request.post('/factorlab', req)
+
+export interface FactorLabRequest {
+  strategyId: string
+  startDate: string
+  endDate: string
+  rebalance?: string
+  layers?: number
+  maxCodes?: number
+}
+
+export function runFactorLab(req: FactorLabRequest): Promise<FactorLabResult> {
+  return request.post('/factorlab', req)
+}
+
+// ---- Alpha Lab:自定义因子（WorldQuant 式截面表达式） ----
+
+export interface AlphaFieldGroup {
+  category: string
+  items: { name: string; desc: string }[]
+}
+
+export interface AlphaExample {
+  name: string
+  expr: string
+  desc: string
+}
+
+export interface AlphaHelp {
+  fields: AlphaFieldGroup[]
+  examples: AlphaExample[]
+  notes: string[]
+}
+
+export interface AlphaFactorLabRequest {
+  expression: string
+  startDate: string
+  endDate: string
+  rebalance?: string
+  layers?: number
+  maxCodes?: number
+  neutralize?: boolean
+}
+
+export function runAlphaFactorLab(req: AlphaFactorLabRequest): Promise<FactorLabResult> {
+  return request.post('/alphalab/factorlab', req)
+}
+
+export interface AlphaBacktestRequest {
+  expression: string
+  startDate: string
+  endDate: string
+  initialCapital?: number
+  topN?: number
+  rebalance?: string
+  costs?: Record<string, number>
+}
+
+export function runAlphaBacktest(req: AlphaBacktestRequest): Promise<BacktestResult> {
+  return request.post('/alphalab/backtest', req)
+}
+
+export function getAlphaHelp(): Promise<AlphaHelp> {
+  return request.get('/alphalab/help')
 }
 
 // ---- 保存的回测(账号云端,需登录) ----

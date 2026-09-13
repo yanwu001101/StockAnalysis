@@ -3,16 +3,27 @@
     <div class="config-col">
       <AppCard title="回测参数" sub="基于历史数据验证策略有效性">
         <el-form label-position="top" size="small" class="config-form">
-          <el-form-item label="股票代码 (留空=组合回测)">
-            <el-input v-model="config.stockCode" placeholder="例如 600519，留空跑十大策略组合" clearable>
-              <template #append v-if="config.stockCode">单股择时</template>
-            </el-input>
-          </el-form-item>
-          <el-form-item label="策略">
-            <el-select v-model="config.strategyId" style="width: 100%;">
-              <el-option v-for="s in strategyStore.strategies" :key="s.id" :label="s.name" :value="s.id" />
-            </el-select>
-          </el-form-item>
+          <SegmentTabs v-model="mode" :options="modeOptions" small style="margin-bottom: 12px;" />
+
+          <template v-if="mode === 'strategy'">
+            <el-form-item label="股票代码 (留空=组合回测)">
+              <el-input v-model="config.stockCode" placeholder="例如 600519，留空跑十大策略组合" clearable>
+                <template #append v-if="config.stockCode">单股择时</template>
+              </el-input>
+            </el-form-item>
+            <el-form-item label="策略">
+              <el-select v-model="config.strategyId" style="width: 100%;">
+                <el-option v-for="s in strategyStore.strategies" :key="s.id" :label="s.name" :value="s.id" />
+              </el-select>
+            </el-form-item>
+          </template>
+
+          <template v-else>
+            <el-form-item label="因子表达式（截面 alpha，t 收盘出信号 → t+1 开盘成交）">
+              <AlphaExprInput v-model="config.expression" :rows="3" />
+            </el-form-item>
+          </template>
+
           <div class="date-row">
             <el-form-item label="开始日期">
               <el-date-picker v-model="config.startDate" type="date" format="YYYY-MM-DD" value-format="YYYY-MM-DD" style="width: 100%;" />
@@ -22,15 +33,24 @@
             </el-form-item>
           </div>
           <div class="date-row">
+            <el-form-item label="调仓频率">
+              <el-select v-model="config.rebalance" style="width: 100%;">
+                <el-option label="日度" value="daily" />
+                <el-option label="周度" value="weekly" />
+                <el-option label="月度" value="monthly" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="初始资金 (万元)">
               <el-input-number v-model="config.initialCapital" :min="10" :max="10000" :step="10" style="width: 100%;" />
             </el-form-item>
+          </div>
+          <div class="date-row">
             <el-form-item label="每期选股数量" v-if="!config.stockCode">
               <el-input-number v-model="config.topN" :min="1" :max="50" :step="1" style="width: 100%;" />
             </el-form-item>
           </div>
           <el-button type="primary" :loading="loading" @click="runTest" style="width: 100%;">
-            <el-icon><TrendCharts /></el-icon>开始回测
+            <el-icon><TrendCharts /></el-icon>{{ mode === 'factor' ? '回测自定义因子' : '开始回测' }}
           </el-button>
         </el-form>
       </AppCard>
@@ -62,7 +82,8 @@
         <StatGrid :items="metricItems" :cols="isMobile ? 2 : 3" />
       </AppCard>
 
-      <AppCard v-if="(result as any).picks?.length" title="本次回测选股" sub="按策略综合分排名">
+      <AppCard v-if="(result as any).picks?.length" title="本次回测选股"
+               :sub="mode === 'factor' ? '按因子值降序 TopN（最近一个调仓期）' : '按策略综合分排名'">
         <div class="picks-grid">
           <span v-for="(code, idx) in (result as any).picks" :key="code" class="pick-chip"
                 @click="$router.push(stockPath(code))">
@@ -106,7 +127,14 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EChartsOption } from 'echarts'
 import * as echarts from 'echarts'
-import { runBacktest, saveBacktest, listSavedBacktests, getSavedBacktest, deleteSavedBacktest } from '@/api/strategy'
+import { runBacktest, runAlphaBacktest, saveBacktest, listSavedBacktests, getSavedBacktest, deleteSavedBacktest } from '@/api/strategy'
+import AppCard from '@/components/ui/AppCard.vue'
+import StatGrid from '@/components/ui/StatGrid.vue'
+import SegmentTabs from '@/components/ui/SegmentTabs.vue'
+import StockTable from '@/components/stock/StockTable.vue'
+import ChangeText from '@/components/stock/ChangeText.vue'
+import BaseChart from '@/components/charts/BaseChart.vue'
+import AlphaExprInput from '@/components/screener/AlphaExprInput.vue'
 import { useStrategyStore } from '@/stores/strategy'
 import { useUserStore } from '@/stores/user'
 import { useRefreshable } from '@/composables/useRefreshable'
@@ -115,12 +143,6 @@ import { useChartTokens, baseTooltip, hexToRgba } from '@/composables/useEcharts
 import { stockPath } from '@/utils/score'
 import type { BacktestResult, SavedBacktestSummary } from '@/types'
 import type { StockColumn, StatItem, SegmentOption } from '@/types/ui'
-import AppCard from '@/components/ui/AppCard.vue'
-import StatGrid from '@/components/ui/StatGrid.vue'
-import SegmentTabs from '@/components/ui/SegmentTabs.vue'
-import StockTable from '@/components/stock/StockTable.vue'
-import ChangeText from '@/components/stock/ChangeText.vue'
-import BaseChart from '@/components/charts/BaseChart.vue'
 
 const strategyStore = useStrategyStore()
 const userStore = useUserStore()
@@ -187,16 +209,52 @@ const config = reactive({
   endDate: '2025-12-31',
   initialCapital: 100,
   topN: 10,
+  rebalance: 'weekly',
+  expression: '',
 })
 
+// ---- 回测模式:内置策略 / 自定义因子(WorldQuant 式表达式) ----
+type BtMode = 'strategy' | 'factor'
+const mode = ref<BtMode>('strategy')
+const modeOptions: SegmentOption<BtMode>[] = [
+  { label: '策略回测', value: 'strategy' },
+  { label: '因子回测', value: 'factor' },
+]
+
 async function runTest() {
+  if (mode.value === 'factor' && !config.expression.trim()) {
+    ElMessage.warning('请输入因子表达式')
+    return
+  }
   loading.value = true
   try {
+    if (mode.value === 'factor') {
+      result.value = await runAlphaBacktest({
+        expression: config.expression.trim(),
+        startDate: config.startDate,
+        endDate: config.endDate,
+        initialCapital: config.initialCapital * 10000,    // 万元 -> 元
+        topN: config.topN,
+        rebalance: config.rebalance,
+      })
+      lastRequest.value = {
+        mode: 'factor',
+        expression: config.expression.trim(),
+        startDate: config.startDate,
+        endDate: config.endDate,
+        initialCapital: config.initialCapital * 10000,
+        topN: config.topN,
+        rebalance: config.rebalance,
+      }
+      ElMessage.success('因子回测完成')
+      return
+    }
     const body: any = {
       strategyId: config.strategyId,
       startDate: config.startDate,
       endDate: config.endDate,
       initialCapital: config.initialCapital * 10000,    // 万元 -> 元
+      rebalance: config.rebalance,
     }
     if (config.stockCode.trim()) {
       body.stockCode = config.stockCode.trim().padStart(6, '0')

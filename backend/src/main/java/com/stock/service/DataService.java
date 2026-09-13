@@ -223,6 +223,13 @@ public class DataService {
 
     public JSONObject runFactorLab(JSONObject request) { return postObj("/api/factorlab", request); }
 
+    /** 自定义因子（WorldQuant 式表达式）：统计检验与组合回测。 */
+    public JSONObject runAlphaFactorLab(JSONObject request) { return postObj("/api/alphalab/factorlab", request); }
+
+    public JSONObject runAlphaBacktest(JSONObject request) { return postObj("/api/alphalab/backtest", request); }
+
+    public JSONObject getAlphaHelp() { return getObjNoCache("/api/alphalab/help"); }
+
     public JSONObject getPaper() { return getObjNoCache("/api/paper"); }
 
     /** 实盘半自动·里程碑1：委托单生成器（只读清单，不自动下单）。 */

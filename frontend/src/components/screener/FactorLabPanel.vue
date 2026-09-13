@@ -3,11 +3,21 @@
     <div class="config-col">
       <AppCard title="因子检验" sub="IC / 分层回测 / 衰减分析 · 检验策略得分是否真的能排序未来收益">
         <el-form label-position="top" size="small" class="config-form">
-          <el-form-item label="策略">
-            <el-select v-model="config.strategyId" style="width: 100%;">
-              <el-option v-for="s in strategyStore.strategies" :key="s.id" :label="s.name" :value="s.id" />
-            </el-select>
+          <el-form-item>
+            <SegmentTabs v-model="mode" :options="modeOptions" small style="width: 100%;" />
           </el-form-item>
+          <template v-if="mode === 'strategy'">
+            <el-form-item label="策略">
+              <el-select v-model="config.strategyId" style="width: 100%;">
+                <el-option v-for="s in strategyStore.strategies" :key="s.id" :label="s.name" :value="s.id" />
+              </el-select>
+            </el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item label="自定义因子表达式（WorldQuant 式截面 alpha）">
+              <AlphaExprInput v-model="config.expression" :rows="3" />
+            </el-form-item>
+          </template>
           <div class="date-row">
             <el-form-item label="开始日期">
               <el-date-picker v-model="config.startDate" type="date" format="YYYY-MM-DD" value-format="YYYY-MM-DD" style="width: 100%;" />
@@ -66,7 +76,7 @@
           <div class="rating-head-lines">
             <div class="rating-title">
               <span class="status-emoji">{{ statusMeta.emoji }}</span>
-              {{ result.strategy_id }}
+              {{ resultTitle }}
               <span class="status-chip" :class="statusMeta.cls">{{ statusMeta.emoji }} {{ statusMeta.text }}</span>
               <span v-if="directionMeta.arrow !== '→'" class="dir-chip" :class="directionMeta.cls">
                 {{ directionMeta.label }} {{ directionMeta.arrow }}
@@ -189,7 +199,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, CircleCheckFilled, WarningFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import type { EChartsOption } from 'echarts'
-import { runFactorLab } from '@/api/strategy'
+import { runFactorLab, runAlphaFactorLab } from '@/api/strategy'
 import { useStrategyStore } from '@/stores/strategy'
 import { useDevice } from '@/composables/useDevice'
 import { useChartTokens, baseTooltip } from '@/composables/useEcharts'
@@ -201,6 +211,7 @@ import SegmentTabs from '@/components/ui/SegmentTabs.vue'
 import StockTable from '@/components/stock/StockTable.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import AlphaExprInput from '@/components/screener/AlphaExprInput.vue'
 
 const strategyStore = useStrategyStore()
 const { isMobile } = useDevice()
@@ -209,12 +220,21 @@ const tokens = useChartTokens()
 const loading = ref(false)
 const result = ref<FactorLabResult | null>(null)
 
+// 检验对象:内置策略 / 自定义因子(WorldQuant 式截面表达式)
+type LabMode = 'strategy' | 'factor'
+const mode = ref<LabMode>('strategy')
+const modeOptions: SegmentOption<LabMode>[] = [
+  { label: '内置策略', value: 'strategy' },
+  { label: '自定义因子', value: 'factor' },
+]
+
 const config = reactive({
   strategyId: 'quality_factor',
   startDate: defaultStart(),
   endDate: defaultEnd(),
   rebalance: 'monthly',
   layers: 5,
+  expression: '',
 })
 
 function defaultStart(): string {
@@ -237,6 +257,16 @@ function fmtPct(v: number | undefined | null, d = 2): string {
 }
 
 const rating = computed(() => result.value?.rating)
+/** 结果标题:内置策略显示策略 ID,自定义因子显示表达式 */
+const resultTitle = computed(() => {
+  const r = result.value
+  if (!r) return ''
+  if (r.factor_name === '自定义因子' && (r as any).expression) {
+    const e = String((r as any).expression)
+    return e.length > 42 ? e.slice(0, 42) + '…' : e
+  }
+  return r.strategy_id ?? r.factor_name ?? ''
+})
 const isReverse = computed(() => rating.value?.direction === 'reverse')
 const dirSign = computed(() => (isReverse.value ? -1 : 1))
 /** 方向校正后的多空毛收益（反向因子翻正） */
@@ -417,22 +447,35 @@ const decaySampleN = computed(() => Math.max(0, ...(result.value?.decay ?? []).m
 const decaySampleWarn = computed(() => (result.value?.decay?.length ?? 0) > 0 && decaySampleN.value < 20)
 
 async function run() {
+  if (mode.value === 'factor' && !config.expression.trim()) {
+    ElMessage.warning('请输入因子表达式')
+    return
+  }
   loading.value = true
   try {
-    const r = await runFactorLab({
-      strategyId: config.strategyId,
-      startDate: config.startDate,
-      endDate: config.endDate,
-      rebalance: config.rebalance,
-      layers: config.layers,
-      maxCodes: 300,
-    })
+    const r = mode.value === 'factor'
+      ? await runAlphaFactorLab({
+          expression: config.expression.trim(),
+          startDate: config.startDate,
+          endDate: config.endDate,
+          rebalance: config.rebalance,
+          layers: config.layers,
+          maxCodes: 400,
+        })
+      : await runFactorLab({
+          strategyId: config.strategyId,
+          startDate: config.startDate,
+          endDate: config.endDate,
+          rebalance: config.rebalance,
+          layers: config.layers,
+          maxCodes: 300,
+        })
     if (r.error) {
       ElMessage.warning(r.error)
       return
     }
     result.value = r
-    ElMessage.success('因子检验完成')
+    ElMessage.success(mode.value === 'factor' ? '自定义因子检验完成' : '因子检验完成')
   } catch {
     ElMessage.error('因子检验失败')
   } finally {

@@ -164,9 +164,12 @@ export interface PaperOrders {
 
 export interface FactorLabResult {
   error?: string
-  error_kind?: "coverage" | "compute"
+  error_kind?: "coverage" | "compute" | "expression"
   sample_info?: { periods: number; avg_cross_section: number; observations: number }
   strategy_id: string
+  /** alphalab 自定义因子返回:因子名与原始表达式 */
+  factor_name?: string
+  expression?: string
   start: string
   end: string
   rebalance: string

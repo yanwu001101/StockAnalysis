@@ -798,4 +798,5 @@ def stock_pro_signal(code: str):
         "keySignals": result.key_signals,
         "risks": result.risks,
         "horizon": result.horizon,
+        "forecast": result.forecast,
     }))

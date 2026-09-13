@@ -9,30 +9,71 @@
       <div class="head">
         <div>
           <h4>{{ data.name }} <span class="code mono">{{ data.code }}</span></h4>
-          <p class="sub">{{ data.horizon }} · 无滞后 Leading Indicators</p>
+          <p class="sub">{{ data.horizon }} · Leading 指标体系(九维加权)</p>
         </div>
-        <span class="price num">¥{{ data.price?.toFixed(2) }}</span>
+        <div class="head-price">
+          <span class="hp-label">最新收盘价</span>
+          <span class="price num">¥{{ data.price?.toFixed(2) }}</span>
+        </div>
+      </div>
+
+      <!-- 决策链:现在多少钱 → 模型怎么看 → 预期到哪里 → 哪里买 → 哪里卖 → 何时失效 -->
+      <div class="chain">
+        <div class="chain-row head-row" :class="data.direction">
+          <div class="chain-cell">
+            <span class="cc-label">模型方向</span>
+            <span class="cc-main">{{ data.label }}</span>
+          </div>
+          <div class="chain-cell">
+            <span class="cc-label">方向评分(非概率)</span>
+            <span class="cc-main num">{{ data.probabilityUp }} <small>/ 100 偏多强度</small></span>
+          </div>
+          <div class="chain-cell">
+            <span class="cc-label">信号一致性(置信度)</span>
+            <span class="cc-main num">{{ data.confidence }}<small>%</small></span>
+          </div>
+        </div>
+
+        <div class="chain-row" v-if="data.forecast?.expected_target">
+          <div class="chain-cell wide">
+            <span class="cc-label">T+5 模型预期区间(基于 ATR 波动外推,非承诺价)</span>
+            <span class="cc-main num">¥{{ data.forecast.expected_target[0] }} ~ ¥{{ data.forecast.expected_target[1] }}</span>
+            <span class="cc-sub num" v-if="data.forecast.expected_change_pct">
+              相对现价 {{ data.forecast.expected_change_pct[0] > 0 ? '+' : '' }}{{ data.forecast.expected_change_pct[0] }}% ~
+              {{ data.forecast.expected_change_pct[1] > 0 ? '+' : '' }}{{ data.forecast.expected_change_pct[1] }}%
+            </span>
+          </div>
+        </div>
+
+        <div class="chain-row">
+          <div class="chain-cell" v-if="data.forecast?.buy_ref">
+            <span class="cc-label">买点参考区(回踩分批,不追高)</span>
+            <span class="cc-main num buy">{{ fmtZone(data.forecast.buy_ref) }}</span>
+            <span class="cc-sub">价值区下沿 ~ POC,跌破失效位停止</span>
+          </div>
+          <div class="chain-cell" v-if="data.forecast?.sell_ref">
+            <span class="cc-label">卖点参考区(反弹分批止盈)</span>
+            <span class="cc-main num sell">{{ fmtZone(data.forecast.sell_ref) }}</span>
+            <span class="cc-sub">POC / 价值区上沿 / 20 日高附近</span>
+          </div>
+          <div class="chain-cell" v-if="data.forecast?.invalid_level">
+            <span class="cc-label">失效位(收盘价有效越过即弃用本链路)</span>
+            <span class="cc-main num invalid">¥{{ data.forecast.invalid_level }}</span>
+            <span class="cc-sub">{{ data.forecast.invalidation }}</span>
+          </div>
+        </div>
+
+        <div class="chain-row" v-if="data.forecast?.plan_line">
+          <div class="chain-cell wide">
+            <span class="cc-label">怎么用</span>
+            <span class="cc-text">{{ data.forecast.plan_line }}</span>
+          </div>
+        </div>
       </div>
 
       <div class="dashboard">
-        <div class="prob-card" :class="data.direction">
-          <h5>方向预测</h5>
-          <div class="label">{{ data.label }}</div>
-          <div class="prob-bar">
-            <div class="bar-fill" :style="{ width: data.probabilityUp + '%' }"></div>
-          </div>
-          <div class="prob-numbers num">
-            <span class="up">↑ {{ data.probabilityUp }}%</span>
-            <span class="down">↓ {{ data.probabilityDown }}%</span>
-          </div>
-          <div class="confidence">
-            <span class="meta">置信度 {{ data.confidence }}%</span>
-            <el-progress :percentage="data.confidence" :stroke-width="6" :color="confColor" :show-text="false" />
-          </div>
-        </div>
-
         <div class="list-card">
-          <h5>核心驱动信号</h5>
+          <h5>核心驱动信号(为什么是这个方向)</h5>
           <ul>
             <li v-for="(s, i) in data.keySignals" :key="i">{{ s }}</li>
           </ul>
@@ -43,6 +84,8 @@
           <ul>
             <li v-for="(r, i) in data.risks" :key="i" class="risk-item">{{ r }}</li>
           </ul>
+          <p class="score-note">方向评分由 9 个 leading 指标加权合成后映射到 0~100,
+            表示指标组合的偏多强度,<b>不是历史命中率</b>;置信度 = 指标一致性 × 数据质量 × 信号强度。</p>
         </div>
       </div>
 
@@ -88,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import { getStockProSignal } from '@/api/stock'
 
@@ -97,10 +140,10 @@ const props = defineProps<{ code: string }>()
 const data = ref<any>(null)
 const loading = ref(false)
 
-const confColor = computed(() => {
-  const c = data.value?.confidence || 0
-  return c >= 60 ? 'var(--brand)' : c >= 40 ? 'var(--warn)' : 'var(--up)'
-})
+function fmtZone(z: [number, number] | null): string {
+  if (!z) return ''
+  return z[0] === z[1] ? `¥${z[0]}` : `¥${z[0]} ~ ¥${z[1]}`
+}
 
 async function load() {
   if (!props.code) return
@@ -126,23 +169,36 @@ watch(() => props.code, load, { immediate: true })
 .head h4 { margin: 0; font-size: 16px; color: var(--text); }
 .head .code { font-size: 13px; color: var(--text-3); font-weight: 400; margin-left: 6px; }
 .head .sub { margin: 4px 0 0; font-size: 12px; color: var(--text-3); }
-.head .price { font-size: 22px; font-weight: 700; color: var(--text); }
+.head-price { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.head-price .hp-label { font-size: 11px; color: var(--text-3); }
+.head-price .price { font-size: 22px; font-weight: 700; color: var(--text); }
+
+/* 决策链:每个模型输出都带「是什么/怎么用」说明 */
+.chain { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.chain-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.chain-row.head-row .chain-cell { background: var(--bg-2); }
+.chain-cell {
+  padding: 12px 14px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); min-width: 0; display: flex; flex-direction: column; gap: 4px;
+}
+.chain-cell.wide { grid-column: 1 / -1; }
+.cc-label { font-size: 11px; color: var(--text-3); line-height: 1.5; }
+.cc-main { font-size: 19px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.cc-main small { font-size: 11px; color: var(--text-3); font-weight: 400; margin-left: 4px; }
+.cc-main.buy { color: var(--up); }
+.cc-main.sell { color: var(--down); }
+.cc-main.invalid { color: var(--warn-text); }
+.head-row .cc-main { font-size: 22px; }
+.chain-row.head-row.up .cc-main { color: var(--up); }
+.chain-row.head-row.down .cc-main { color: var(--down); }
+.cc-sub { font-size: 11px; color: var(--text-3); line-height: 1.5; }
+.cc-text { font-size: 13px; color: var(--text-2); line-height: 1.7; }
+.score-note { margin: 10px 0 0; font-size: 11px; color: var(--text-3); line-height: 1.6; }
+.score-note b { color: var(--warn-text); }
 
 h5 { margin: 0 0 8px; font-size: 13px; color: var(--text-2); font-weight: 600; }
-.dashboard { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
 .prob-card, .list-card { padding: 14px; background: var(--bg-2); border-radius: var(--radius); min-width: 0; }
-.prob-card { text-align: center; }
-.prob-card h5 { color: var(--text-3); }
-.prob-card .label { font-size: 26px; font-weight: 800; padding: 6px 0; }
-.prob-card.up .label { color: var(--up); }
-.prob-card.down .label { color: var(--down); }
-.prob-card.flat .label { color: var(--text-3); }
-.prob-bar { height: 8px; background: var(--down-soft); border-radius: 4px; overflow: hidden; margin: 10px 0 6px; }
-.bar-fill { height: 100%; background: var(--up); }
-.prob-numbers { display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; padding: 4px 0 10px; }
-.prob-numbers .up { color: var(--up); }
-.prob-numbers .down { color: var(--down); }
-.confidence .meta { font-size: 12px; color: var(--text-3); display: block; margin-bottom: 4px; text-align: left; }
 .list-card ul { margin: 0; padding-left: 18px; }
 .list-card li { font-size: 13px; color: var(--text); padding: 3px 0; line-height: 1.5; }
 .risks .risk-item { color: var(--warn-text); }
@@ -186,6 +242,9 @@ h5 { margin: 0 0 8px; font-size: 13px; color: var(--text-2); font-weight: 600; }
 @media (max-width: 900px) {
   .dashboard { grid-template-columns: 1fr; }
   .dim-grid { grid-template-columns: 1fr 1fr; }
+  .chain-row { grid-template-columns: 1fr; }
+  .head { flex-direction: column; align-items: flex-start; }
+  .head-price { flex-direction: row; align-items: baseline; gap: 8px; }
 }
 @media (max-width: 600px) {
   .dim-grid { grid-template-columns: 1fr; }

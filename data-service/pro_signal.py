@@ -55,6 +55,8 @@ class ProSignalResult:
     key_signals: list[str] = field(default_factory=list)
     risks: list[str] = field(default_factory=list)
     horizon: str = "T+1 ~ T+5 短期方向"
+    # 操作决策链:现在多少钱→哪里买→哪里卖→预期到哪里→风险→何时失效
+    forecast: dict = field(default_factory=dict)
 
 
 def _safe(v, default=0.0):
@@ -421,6 +423,73 @@ def _dim_breadth(df: pd.DataFrame) -> ProDimension:
                         value=f"{up_days}/{up_days+down_days}")
 
 
+def _forecast_block(df: pd.DataFrame, price: float, direction: str,
+                    label: str, composite: float) -> dict:
+    """把指标合成结果翻译成用户可直接执行的决策链:
+    预期区间(ATR 外推)/买点参考/卖点参考/失效位。全部为明确价格。"""
+    from indicators import calc_atr
+    r2 = lambda x: round(float(x), 2)
+    close = df["收盘"].astype(float)
+    high = df["最高"].astype(float)
+    low = df["最低"].astype(float)
+
+    atr_series = calc_atr(high, low, close, 14)
+    atr = _safe(atr_series.iloc[-1], price * 0.02) or price * 0.02
+    # T+5 期望波动 ≈ ATR × √5,方向强度(指标合成分)调节不对称性
+    move = atr * (5 ** 0.5) * (0.55 + 0.9 * min(abs(composite), 1.0))
+
+    poc = vah = val = None
+    if len(df) >= 40:
+        poc, vah, val = _volume_profile_poc(df.tail(60))
+    recent_high = _safe(high.tail(20).max(), price)
+    recent_low = _safe(low.tail(20).min(), price)
+    vwap_series = _vwap_proxy(df, 20)
+    vwap20 = _safe(vwap_series.iloc[-1], price) if not pd.isna(vwap_series.iloc[-1]) else price
+
+    if direction == "up":
+        target_lo, target_hi = r2(price - 0.35 * move), r2(price + move)
+        buy_lo, buy_hi = r2(min(val, poc) if (val and poc) else price * 0.97), r2(poc or price)
+        sell_lo = r2(max(vah, recent_high) if vah else recent_high)
+        sell_hi = r2(max(sell_lo, price + 0.8 * move))
+        invalid = r2(min(val, buy_lo) * 0.995) if val else r2(price * 0.94)
+        invalid_text = f"收盘价有效跌破 ¥{invalid}(跌回价值区下沿之下):看多逻辑失效,止损/减仓,不补仓。"
+        plan_line = "回踩买点参考区分批建仓;升到卖点参考区或预期上沿分批止盈;未回踩直接上行则不追,等下一次回踩。"
+    elif direction == "down":
+        target_lo, target_hi = r2(price - move), r2(price + 0.35 * move)
+        buy_lo, buy_hi = None, None
+        sell_lo, sell_hi = r2(min(poc, vah) if (poc and vah) else vwap20), r2(vah or vwap20)
+        invalid = r2(max(vah, sell_hi) * 1.005) if vah else r2(price * 1.06)
+        invalid_text = f"收盘价有效升破 ¥{invalid}(收复价值区上沿):看空逻辑失效,停止做空/清仓观望,不追空。"
+        plan_line = "持仓反弹到卖点参考区减仓;空仓者不抄底,等方向评分转多再按多头链路执行。"
+    else:
+        target_lo, target_hi = r2(price - 0.6 * move), r2(price + 0.6 * move)
+        buy_lo, buy_hi = r2(val if val else price * 0.96), r2(poc if poc else price * 0.99)
+        sell_lo, sell_hi = r2(poc if poc else price * 1.01), r2(vah if vah else price * 1.04)
+        invalid = None
+        invalid_text = "方向评分中性,不存在单边失效位;在区间内高抛低吸,收破区间下沿转空、升破区间上沿转多后按对应链路执行。"
+        plan_line = "区间震荡思路:靠近买点参考区分批、靠近卖点参考区减仓,区间突破前不加仓。"
+
+    return {
+        "horizon": "T+1 ~ T+5(1~5 个交易日)",
+        "basis": "预期区间 = 14 日 ATR 真实波幅 × √5 个交易日外推,再按指标方向强度调节;是波动的合理映射,不是承诺价。",
+        "expected_target": [target_lo, target_hi],
+        "expected_change_pct": [r2((target_lo / price - 1) * 100), r2((target_hi / price - 1) * 100)] if price else None,
+        "buy_ref": [buy_lo, buy_hi] if buy_lo else None,
+        "sell_ref": [sell_lo, sell_hi] if sell_lo else None,
+        "invalid_level": invalid,
+        "invalidation": invalid_text,
+        "plan_line": plan_line,
+        "anchors": {
+            "poc": r2(poc) if poc else None,
+            "value_area": [r2(val), r2(vah)] if (val and vah) else None,
+            "recent_high": r2(recent_high),
+            "recent_low": r2(recent_low),
+            "vwap20": r2(vwap20),
+            "atr14": r2(atr),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
@@ -503,11 +572,17 @@ def pro_signal(ctx) -> ProSignalResult:
     if not risks:
         risks.append("暂无明显风险信号")
 
-    return ProSignalResult(
-        code=ctx.code, name=ctx.name, price=ctx.price,
+    # 当前价与 forecast/锚点统一用日K最新收盘:stock_info 快照可能严重过期
+    # (实测 300308 快照 1116 vs K线收盘 926),预测以收盘口径自洽。
+    kline_close = _safe(df["收盘"].astype(float).iloc[-1], 0.0)
+    last_close = kline_close or _safe(ctx.price, 0.0)
+    result = ProSignalResult(
+        code=ctx.code, name=ctx.name, price=last_close or ctx.price,
         probability_up=prob_up, probability_down=prob_down,
         confidence=confidence, direction=direction, label=label,
         composite=round(composite, 4),
         dimensions=dims, key_signals=key_signals, risks=risks,
         horizon="T+1 ~ T+5 短期方向",
+        forecast=_forecast_block(df, last_close or 0.0, direction, label, composite),
     )
+    return result

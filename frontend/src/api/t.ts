@@ -1,5 +1,17 @@
 import request from './request'
 
+/** T+1 执行明细:卖哪一部分、多少股、为什么能/不能卖 */
+export interface TExecution {
+  total_shares: number
+  available_shares: number
+  locked_today: number
+  sell_shares: number
+  rebuy_shares: number
+  scenario: string
+  exec_text: string
+  notes: string[]
+}
+
 /** 做T操作计划:服务端把方向+区间翻译成可执行步骤(先做哪步/什么价格/何时放弃) */
 export interface TPlan {
   mode: 'sell_first' | 'buy_first' | 'wait'
@@ -17,6 +29,8 @@ export interface TPlan {
   invalidation: string | null
   invalid_levels: number[]
   watch_hint?: string
+  /** T+1 持仓约束下的执行明细(用户提供持仓时) */
+  execution?: TExecution | null
 }
 
 // 短线做 T(日内 T+0)建议

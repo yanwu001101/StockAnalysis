@@ -15,7 +15,7 @@
 
     <template v-else>
       <!-- 做 T -->
-      <TSignalCard v-if="tab === 't'" :signal="tSignal" :code="code" />
+      <TSignalCard v-if="tab === 't'" ref="tCardRef" :signal="tSignal" :code="code" @recalc="onRecalc" />
 
       <!-- 概览（K线 + 核心指标）/ K线 -->
       <section v-if="overviewVisible || klineVisible" class="content-grid" :class="{ 'overview-only': overviewVisible && !klineVisible }">
@@ -46,7 +46,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getStockDetail, getStockKLine, getStockStrategies, getStockF10, getStockPrediction } from '@/api/stock'
-import { getTSignal, type TSignal } from '@/api/t'
+import { getTSignal, type TSignal, type TPositionInput } from '@/api/t'
 import { useUserStore } from '@/stores/user'
 import { useSettingsStore, type KlineAdjust } from '@/stores/settings'
 import { useRefreshable } from '@/composables/useRefreshable'
@@ -86,6 +86,9 @@ const klineVisible = computed(() => tab.value === 'kline' || (tab.value === 'ove
 
 const predictMode = computed<'prob' | 'pro'>(() => (tab.value === 'predict' ? 'pro' : 'prob'))
 const predictRef = ref<InstanceType<typeof PredictionCard>>()
+const tCardRef = ref<InstanceType<typeof TSignalCard>>()
+// 做T持仓输入:用户填总持仓/可卖/成本后按 T+1 规则重算精确股数
+const tPos = ref<TPositionInput | undefined>()
 
 function goPredict() {
   tab.value = 'predict'
@@ -153,17 +156,22 @@ async function loadData() {
   }
   // F10 loads in parallel (slower akshare path).
   loadF10()
-  loadTSignal()
+  loadTSignal(tPos.value)
 }
 
-async function loadTSignal() {
+async function loadTSignal(pos?: TPositionInput) {
   const c = code.value
   if (!c) return
   try {
-    tSignal.value = await getTSignal(c)
+    tSignal.value = await getTSignal(c, pos)
   } catch {
     tSignal.value = null
   }
+}
+
+function onRecalc(pos: TPositionInput | undefined) {
+  tPos.value = pos
+  loadTSignal(pos)
 }
 
 async function loadF10() {

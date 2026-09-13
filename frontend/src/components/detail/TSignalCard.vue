@@ -20,33 +20,37 @@
         {{ signal.price ?? '—' }}
       </span>
       <ChangeText :value="signal.pct_change" class="plan-pct" />
+      <!-- 仓位状态:可卖 / 今日买入锁定 / 总持仓 -->
+      <span v-if="execution" class="pos-status num">
+        可卖 <b>{{ execution.available_shares }}</b> · 今日买入锁定 <b>{{ execution.locked_today }}</b> · 总持仓 <b>{{ execution.total_shares }}</b>
+      </span>
     </div>
 
     <div v-if="plan && plan.mode !== 'wait'" class="plan-steps">
       <template v-if="plan.mode === 'sell_first'">
         <div class="plan-step sell">
-          <div class="ps-head"><span class="ps-no">第一步 · 卖出</span><span class="ps-hint">{{ plan.size_hint }}</span></div>
+          <div class="ps-head"><span class="ps-no">第一步 · 卖出</span><span class="ps-hint" v-if="execution && execution.sell_shares > 0">昨日可卖底仓 {{ execution.sell_shares }} 股</span></div>
           <div class="ps-zone num">{{ plan.sell_zone?.[0] }} ~ {{ plan.sell_zone?.[1] }}</div>
-          <div class="ps-note">分笔卖出,避免一笔打光</div>
+          <div class="ps-note">{{ execution && execution.available_shares > 0 ? '卖出昨日可卖底仓;今日买入的仓位 T+1 不可卖' : '无昨日底仓可卖:本步今日不可执行' }}</div>
         </div>
         <div class="ps-arrow">→ 等待回落</div>
         <div class="plan-step buy">
-          <div class="ps-head"><span class="ps-no">第二步 · 接回</span><span class="ps-hint">买回等量</span></div>
+          <div class="ps-head"><span class="ps-no">第二步 · 接回</span><span class="ps-hint" v-if="execution && execution.rebuy_shares > 0">买回等量 {{ execution.rebuy_shares }} 股</span></div>
           <div class="ps-zone num">{{ plan.buyback_zone?.[0] }} ~ {{ plan.buyback_zone?.[1] }}</div>
-          <div class="ps-note">未到接回区不追接</div>
+          <div class="ps-note">回补部分今日锁定至下一交易日</div>
         </div>
       </template>
       <template v-else>
         <div class="plan-step buy">
-          <div class="ps-head"><span class="ps-no">第一步 · 低吸</span><span class="ps-hint">{{ plan.size_hint }}</span></div>
+          <div class="ps-head"><span class="ps-no">第一步 · 低吸</span><span class="ps-hint" v-if="execution && execution.rebuy_shares > 0">买入 {{ execution.rebuy_shares }} 股(今日锁定)</span></div>
           <div class="ps-zone num">{{ plan.buy_zone?.[0] }} ~ {{ plan.buy_zone?.[1] }}</div>
-          <div class="ps-note">分笔买入,跌破失效位不接</div>
+          <div class="ps-note">跌破失效位不接</div>
         </div>
         <div class="ps-arrow">→ 等待反弹</div>
         <div class="plan-step sell">
-          <div class="ps-head"><span class="ps-no">第二步 · 卖出</span><span class="ps-hint">卖出等量</span></div>
+          <div class="ps-head"><span class="ps-no">第二步 · 卖出</span><span class="ps-hint" v-if="execution && execution.sell_shares > 0">卖出昨日底仓 {{ execution.sell_shares }} 股</span></div>
           <div class="ps-zone num">{{ plan.sellback_zone?.[0] }} ~ {{ plan.sellback_zone?.[1] }}</div>
-          <div class="ps-note">14:50 前未到则按纪律处理</div>
+          <div class="ps-note">{{ execution?.sell_shares ? '卖昨日可卖底仓完成等量闭环' : '今日买入部分 T+1,下一交易日才可卖' }}</div>
         </div>
       </template>
     </div>
@@ -54,6 +58,15 @@
     <div v-else-if="plan" class="plan-wait">
       <div class="pw-line">{{ plan.rules }}</div>
       <div class="pw-line" v-if="plan.watch_hint">{{ plan.watch_hint }}</div>
+      <div class="pw-line" v-if="execution?.exec_text">{{ execution.exec_text }}</div>
+    </div>
+
+    <!-- 执行明细:卖哪一部分、为什么能卖 -->
+    <div class="exec-block" v-if="execution && plan?.mode !== 'wait'">
+      <div class="exec-line">{{ execution.exec_text }}</div>
+      <ul class="exec-notes">
+        <li v-for="(n, i) in execution.notes" :key="i">{{ n }}</li>
+      </ul>
     </div>
 
     <!-- 分时图:买卖区带 + 支撑/压力/失效位直接标注 -->
@@ -78,6 +91,17 @@
 
     <StatGrid :items="metrics" :min-width="isMobile ? 96 : 110" size="sm" variant="inline" class="t-metrics" />
 
+    <!-- 持仓输入:填总持仓/可卖/成本后,按 T+1 规则重算精确股数 -->
+    <div class="t-pos-input">
+      <span class="tpi-label">按我的持仓重算</span>
+      <el-input-number v-model="posShares" :min="0" :step="100" :controls="false" size="small" placeholder="总持仓(股)" />
+      <el-input-number v-model="posAvail" :min="0" :step="100" :controls="false" size="small" placeholder="可卖(股)" />
+      <el-input-number v-model="posCost" :min="0" :precision="2" :step="0.01" :controls="false" size="small" placeholder="成本价" />
+      <el-button type="primary" size="small" @click="recalc">重算</el-button>
+      <el-button v-if="signal.has_position" text size="small" @click="clearPosition">清除</el-button>
+    </div>
+    <div class="tpi-tip">可卖 ≤ 总持仓;总持仓 − 可卖 = 今日买入锁定部分</div>
+
     <div class="t-risks" v-if="signal.risks && signal.risks.length">
       <el-icon><Warning /></el-icon> {{ signal.risks.join('；') }}
     </div>
@@ -89,9 +113,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Warning } from '@element-plus/icons-vue'
-import { PV_LABEL, type TSignal } from '@/api/t'
+import { PV_LABEL, type TSignal, type TPositionInput } from '@/api/t'
 import { useDevice } from '@/composables/useDevice'
 import type { StatItem } from '@/types/ui'
 import AppCard from '@/components/ui/AppCard.vue'
@@ -99,12 +124,25 @@ import StatGrid from '@/components/ui/StatGrid.vue'
 import ChangeText from '@/components/stock/ChangeText.vue'
 import IntradayTChart from '@/components/charts/IntradayTChart.vue'
 
-// 做T决策卡:第一眼给出「哪里卖、哪里买、什么时候不做」。
-// 计划(区间/规则/失效)全部由服务端 plan 计算,前端只做展示。
+// 做T决策卡:第一眼给出「哪里卖、哪里买、卖哪一部分、什么时候不做」。
+// 计划(区间/规则/失效/T+1执行明细)全部由服务端计算,前端只做展示;
+// 持仓输入仅用于把通用建议换算成精确股数。
 const props = defineProps<{ signal: TSignal | null; code: string }>()
+const emit = defineEmits<{ (e: 'recalc', pos: TPositionInput | undefined): void }>()
 const { isMobile } = useDevice()
 
 const plan = computed(() => props.signal?.plan ?? null)
+const execution = computed(() => props.signal?.plan?.execution ?? null)
+
+// 持仓输入由本组件持有;切股票时清空,避免把上一只的持仓带到新股票
+const posShares = ref<number | undefined>()
+const posCost = ref<number | undefined>()
+const posAvail = ref<number | undefined>()
+watch(() => props.code, () => {
+  posShares.value = undefined
+  posCost.value = undefined
+  posAvail.value = undefined
+})
 
 const tagType = computed(() => {
   const m = plan.value?.mode
@@ -130,6 +168,29 @@ const metrics = computed<StatItem[]>(() => {
   }
   return items
 })
+
+function currentPos(): TPositionInput | undefined {
+  return (posShares.value && posCost.value)
+    ? { shares: posShares.value, avg_cost: posCost.value, available: posAvail.value ?? posShares.value }
+    : undefined
+}
+
+function recalc() {
+  if (!posShares.value || !posCost.value) {
+    ElMessage.warning('请填写总持仓与成本价')
+    return
+  }
+  emit('recalc', currentPos())
+}
+
+function clearPosition() {
+  posShares.value = undefined
+  posCost.value = undefined
+  posAvail.value = undefined
+  emit('recalc', undefined)
+}
+
+defineExpose({ currentPos })
 </script>
 
 <style scoped>
@@ -176,6 +237,18 @@ const metrics = computed<StatItem[]>(() => {
 .pr-text { font-size: 13px; color: var(--text-2); line-height: 1.7; min-width: 0; }
 
 .t-metrics { margin-bottom: 12px; }
+.pos-status { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.pos-status b { color: var(--text); font-weight: 600; }
+.exec-block {
+  background: var(--brand-soft); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px;
+}
+.exec-line { font-size: 14px; color: var(--text); line-height: 1.7; }
+.exec-notes { margin: 6px 0 0; padding-left: 18px; }
+.exec-notes li { font-size: 12px; color: var(--text-3); line-height: 1.7; }
+.t-pos-input { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 6px; }
+.t-pos-input .tpi-label { color: var(--text-3); font-size: 13px; }
+.t-pos-input :deep(.el-input-number) { width: 110px; }
+.tpi-tip { font-size: 11px; color: var(--text-4); margin-bottom: 12px; }
 .t-reasons { margin: 0 0 10px; padding-left: 18px; }
 .reasons-cap { list-style: none; margin-left: -18px; font-size: 12px; color: var(--text-3); font-weight: 600; }
 .t-reasons li:not(.reasons-cap) { color: var(--text-3); font-size: 13px; line-height: 1.7; }
@@ -187,5 +260,8 @@ const metrics = computed<StatItem[]>(() => {
   .plan-steps { grid-template-columns: 1fr; gap: 8px; }
   .ps-arrow { text-align: center; }
   .plan-price { font-size: 26px; }
+  .plan-price-row { flex-wrap: wrap; }
+  .pos-status { margin-left: 0; flex-basis: 100%; }
+  .t-pos-input :deep(.el-input-number) { width: calc(50% - 4px); }
 }
 </style>

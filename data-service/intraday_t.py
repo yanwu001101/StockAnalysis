@@ -641,43 +641,148 @@ def _zones(direction, tf: TrendFeatures):
     return buy_zone, sell_zone
 
 
-def _operation_plan(direction, tf, buy_zone, sell_zone):
-    """把方向+区间翻译成用户可直接执行的操作计划:先做哪一步、什么价格、
-    什么时候放弃。卖出/接回区间全部为明确价格,前端不做二次推断。"""
+def _operation_plan(direction, tf, buy_zone, sell_zone, pos, t_plan):
+    """把方向+区间+持仓翻译成 A 股 T+1 规则下可直接执行的操作计划。
+
+    核心约束:今日买入的仓位当日不可卖。每个卖出信号都明确:
+    卖哪一部分(昨日可卖底仓)、多少股(整手,不超过可卖)、为什么能卖。
+    """
     sup = tf.supports[0] if tf.supports else tf.va_low
     res = tf.resists[0] if tf.resists else tf.va_high
     buf = max(0.003 * tf.price, (tf.robust_hi - tf.robust_lo) * 0.05)
+    has_pos = bool(pos.has_position)
+    total_sh = int(pos.shares) if has_pos else 0
+    avail_sh = int(pos.available) if has_pos else 0
+    locked_sh = max(total_sh - avail_sh, 0)
+
+    def _exec(sell_shares=0, after_rebuy=0, scenario="", exec_text="", notes=None):
+        return {
+            "total_shares": total_sh,
+            "available_shares": avail_sh,
+            "locked_today": locked_sh,
+            "sell_shares": int(sell_shares),
+            "rebuy_shares": int(after_rebuy),
+            "scenario": scenario,
+            "exec_text": exec_text,
+            "notes": notes or [],
+        }
 
     if direction == "negative_t" and sell_zone and buy_zone:
         invalid_up = _r((res if res and res > sell_zone[1] else sell_zone[1]) + buf)
         invalid_down = _r((min(sup, buy_zone[0]) if sup else buy_zone[0]) - buf)
+        if not has_pos:
+            # ② 无底仓:先卖后接无法执行,T+1 禁止当日卖
+            return {
+                "mode": "sell_first", "title": "先卖后接(反T)",
+                "sell_zone": sell_zone, "buyback_zone": buy_zone,
+                "size_hint": None, "invalid_levels": [invalid_up, invalid_down],
+                "invalidation": (f"向上有效突破 {invalid_up}:强势不回落,放弃等回落;"
+                                 f"向下有效跌破 {invalid_down}:弱势确认,重新评估。"),
+                "rules": "当前无底仓,反T 的'先卖'一步无法执行(A 股 T+1:今日买入的部分当日不可卖)。",
+                "execution": _exec(0, 0, "no_base",
+                                   "无底仓:今日不可执行卖出,可等回落按『先买后卖』链路低吸,或下一交易日再评估反T。",
+                                   ["低吸若成交,该部分当日锁定,次日转为可卖后才能完成高抛腿。"]),
+                "watch_hint": None,
+            }
+        if avail_sh <= 0:
+            # ② 全部为今日买入(锁定)
+            return {
+                "mode": "sell_first", "title": "先卖后接(反T)",
+                "sell_zone": sell_zone, "buyback_zone": buy_zone,
+                "size_hint": None, "invalid_levels": [invalid_up, invalid_down],
+                "invalidation": (f"向上有效突破 {invalid_up}:强势不回落,持有不动;"
+                                 f"向下有效跌破 {invalid_down}:弱势确认,下一交易日开盘评估减仓。"),
+                "rules": "总持仓全部为今日买入,T+1 锁定:今日不可卖出,不生成卖出指示。",
+                "execution": _exec(0, 0, "all_locked_today",
+                                   f"今日新建仓 {total_sh} 股,受 T+1 限制今日不可卖出,下一交易日转为可卖后再按新信号执行。",
+                                   [f"明日:{total_sh} 股全部转为可卖,以明日信号重新计算做 T。"]),
+                "watch_hint": None,
+            }
+        # ① 有可卖底仓;③ 信号量超过可卖时按可卖封顶
+        sell_shares = int(t_plan.get("t_shares") or 0) or _roundlot(avail_sh / 3) or min(100, avail_sh)
+        capped = sell_shares > avail_sh
+        sell_shares = min(sell_shares, avail_sh)
+        notes = ["卖出部分 = 昨日及更早持有的可卖底仓;今日买入的仓位 T+1 不可卖。"]
+        if capped:
+            notes.append(f"信号建议卖出量超过当前可卖,已按可卖数量 {avail_sh} 股执行。")
+        if locked_sh > 0:
+            notes.append(f"今日新买入 {locked_sh} 股不在本次卖出范围。")
+        notes.append(f"④ 接回买入的股票为当日新买仓,锁定至下一交易日,不可再次当日卖出。")
+        notes.append(f"⑤ 明日:今日买入的 {locked_sh + sell_shares} 股转为可卖,按新信号重新计算。")
         return {
-            "mode": "sell_first",
-            "title": "先卖后接(反T)",
-            "sell_zone": sell_zone,
-            "buyback_zone": buy_zone,
-            "size_hint": "建议卖出底仓的 1/3~1/2,接回等量",
-            "rules": "① 在卖出区分笔卖出部分持仓;② 等待回落到接回区买回等量;"
-                     "③ 未到接回区不追接,14:50 仍未接回则按当时价格处理,不拖到收盘竞价。",
+            "mode": "sell_first", "title": "先卖后接(反T)",
+            "sell_zone": sell_zone, "buyback_zone": buy_zone,
+            "size_hint": f"卖出昨日可卖底仓 {sell_shares} 股,接回等量",
+            "invalid_levels": [invalid_up, invalid_down],
             "invalidation": (f"向上有效突破 {invalid_up}:强势不回落,停止等回落,"
                              "已卖部分回踩分时均价时接回;向下有效跌破 "
                              f"{invalid_down}:弱势确认,取消接回计划,重新评估趋势。"),
-            "invalid_levels": [invalid_up, invalid_down],
+            "rules": "① 在卖出区卖出昨日可卖底仓;② 回落到接回区买回等量;"
+                     "③ 未到接回区不追接,14:50 仍未接回则按当时价格处理。",
+            "execution": _exec(sell_shares, sell_shares, "with_base",
+                               f"卖出昨日可卖底仓 {sell_shares} 股(当前可卖 {avail_sh} 股"
+                               + (f",今日新买入 {locked_sh} 股不可卖" if locked_sh > 0 else "")
+                               + f");执行后剩余总持仓 {total_sh - sell_shares} 股,接回后回补 {sell_shares} 股(今日锁定)。",
+                               notes),
         }
     if direction == "positive_t" and buy_zone and sell_zone:
         invalid_down = _r((min(sup, buy_zone[0]) if sup else buy_zone[0]) - buf)
+        if not has_pos:
+            # ② 无底仓首买:只能买,不能当日卖
+            return {
+                "mode": "buy_first", "title": "先买后卖(正T)",
+                "buy_zone": buy_zone, "sellback_zone": sell_zone,
+                "size_hint": "轻仓低吸(当日买入锁定,T+1 才可卖)",
+                "invalid_levels": [invalid_down],
+                "invalidation": f"有效跌破 {invalid_down}:低吸逻辑失效,不接。",
+                "rules": "① 今日在低吸区买入计划仓位;② 因 T+1,今日买入部分当日不可卖,"
+                         "下一交易日转为可卖后按新信号在压力区分批卖出。",
+                "execution": _exec(0, 0, "first_buy_today",
+                                   "今日首次买入:受 T+1 限制当日不可卖出,下一交易日才可卖;"
+                                   "反弹到卖出区仅作观察,不生成卖出指示。",
+                                   ["明日:今日买入部分转为可卖,按明日信号决定卖出区间。"]),
+            }
+        # 有底仓:正T闭环 = 买今日新仓 + 卖等量昨日可卖底仓(等效当日高抛低吸)
+        add_shares = int(t_plan.get("t_shares") or 0) or _roundlot(avail_sh / 3) or min(100, avail_sh)
+        if avail_sh <= 0:
+            # ③ 全锁定:只能买,不能卖
+            return {
+                "mode": "buy_first", "title": "先买后卖(正T)",
+                "buy_zone": buy_zone, "sellback_zone": sell_zone,
+                "size_hint": f"低吸加仓,总量受资金与风控约束",
+                "invalid_levels": [invalid_down],
+                "invalidation": f"有效跌破 {invalid_down}:低吸逻辑失效,不接。",
+                "rules": "当前持仓全部为今日买入(锁定):今日只能执行买入,禁止卖出指示;"
+                         "低吸部分 T+1 后按新信号在压力区分批卖出。",
+                "execution": _exec(0, 0, "all_locked_today",
+                                   f"总持仓 {total_sh} 股均为今日买入(锁定);低吸继续以资金为限,"
+                                   f"今日无任何卖出指示,下一交易日统一按新信号处理。",
+                                   [f"明日:{total_sh} 股转为可卖。"]),
+            }
+        sell_leg = min(add_shares, avail_sh)
+        notes = ["卖出腿卖的是昨日可卖底仓(等量对冲今日买入),不是今日新买部分。"]
+        if locked_sh > 0:
+            notes.append(f"今日已买入锁定的 {locked_sh} 股不受影响。")
+        notes.append("低吸买入部分当日锁定至下一交易日。")
         return {
-            "mode": "buy_first",
-            "title": "先买后卖(正T)",
-            "buy_zone": buy_zone,
-            "sellback_zone": sell_zone,
-            "size_hint": "买入与卖出等量(当日闭环,不留新增隔夜仓)",
-            "rules": "① 在低吸区分笔买入计划仓位;② 反弹至卖出区卖出等量;"
-                     "③ 14:50 前未反弹到卖出区,按纪律卖出当日新买部分,不侥幸过夜。",
-            "invalidation": f"有效跌破 {invalid_down}:低吸逻辑失效,不接;已有仓位反弹到压力位先减。",
+            "mode": "buy_first", "title": "先买后卖(正T)",
+            "buy_zone": buy_zone, "sellback_zone": sell_zone,
+            "size_hint": f"低吸 {add_shares} 股,反弹卖出昨日可卖底仓 {sell_leg} 股(等量闭环)",
             "invalid_levels": [invalid_down],
+            "invalidation": f"有效跌破 {invalid_down}:低吸逻辑失效,不接;已有仓位反弹到压力位先减。",
+            "rules": "① 在低吸区买入计划仓位(今日锁定);② 反弹至卖出区卖出**等量昨日可卖底仓**完成闭环;"
+                     "③ 14:50 前未反弹,卖出腿取消,低吸部分持有至明日。",
+            "execution": _exec(sell_leg, add_shares, "roundtrip_with_base",
+                               f"低吸买入 {add_shares} 股(今日锁定)+ 反弹卖出昨日可卖底仓 {sell_leg} 股"
+                               f"(当前可卖 {avail_sh} 股)完成等量闭环;净持仓不变,赚取价差。",
+                               notes),
         }
-    # wait:方向不明,给出重新评估的触发价格
+    # wait:方向不明,给出重新评估的触发价格;持仓状态照常展示
+    wait_notes = []
+    if has_pos and locked_sh > 0:
+        wait_notes.append(f"今日买入的 {locked_sh} 股锁定至下一交易日。")
+    if has_pos:
+        wait_notes.append(f"明日:{locked_sh} 股转为可卖,按新信号重新计算。")
     return {
         "mode": "wait",
         "title": "今日观望,暂不做 T",
@@ -689,6 +794,7 @@ def _operation_plan(direction, tf, buy_zone, sell_zone):
         "invalid_levels": [],
         "watch_hint": (f"回落到 {_r(sup)} 附近缩量企稳可重新评估低吸;"
                        f"放量升破 {_r(res)} 再评估反T。"),
+        "execution": _exec(0, 0, "wait", "持有不动,不生成买卖指示。", wait_notes),
     }
 
 
@@ -879,7 +985,7 @@ def signal(code, shares=None, avg_cost=None, available=None,
         risks.append("已近尾盘,注意收盘不确定性")
 
     buy_zone, sell_zone = _zones(direction, tf)
-    operation_plan = _operation_plan(direction, tf, buy_zone, sell_zone)
+    operation_plan = _operation_plan(direction, tf, buy_zone, sell_zone, pos, plan)
 
     trend = None
     if detail_level == "full":

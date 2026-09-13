@@ -9,6 +9,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     ActionQueue: typeof import('./src/components/my/ActionQueue.vue')['default']
     AiAssistantPanel: typeof import('./src/components/my/AiAssistantPanel.vue')['default']
+    AlphaExprInput: typeof import('./src/components/screener/AlphaExprInput.vue')['default']
     AppCard: typeof import('./src/components/ui/AppCard.vue')['default']
     AppDialog: typeof import('./src/components/ui/AppDialog.vue')['default']
     AppLayout: typeof import('./src/components/layout/AppLayout.vue')['default']

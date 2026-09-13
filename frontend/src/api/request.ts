@@ -87,9 +87,21 @@ request.interceptors.response.use(
       return Promise.reject(error)
     }
     const message = error.response?.data?.message || error.response?.data?.msg || error.message || '网络错误'
-    ElMessage.error(message)
+    toastOnce(message, message)
     return Promise.reject(error)
   }
 )
+
+// 同一条错误 30 秒内只弹一次：行情页自动刷新时，上游限流/断网会连环失败，
+// 逐条弹错会变成盖住导航的白色 toast 刷屏（SKILL §34 状态明确 ≠ 轰炸）。
+let lastToastKey = ''
+let lastToastAt = 0
+function toastOnce(key: string, msg: string) {
+  const now = Date.now()
+  if (key === lastToastKey && now - lastToastAt < 30_000) return
+  lastToastKey = key
+  lastToastAt = now
+  ElMessage.error(msg)
+}
 
 export default request

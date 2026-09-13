@@ -502,8 +502,14 @@ h4 { font-size: var(--text-md); }
 
 .el-message {
   border-radius: var(--radius) !important;
-  border: 0 !important;
+  border: 1px solid var(--line) !important;
   box-shadow: var(--shadow-pop) !important;
+  /* 深色主题跟随 surface,否则默认白底在深色 UI 里是刺眼白条 */
+  --el-message-bg-color: var(--surface);
+  --el-message-text-color: var(--text);
+  --el-message-border-color: var(--line);
+  background-color: var(--surface) !important;
+  color: var(--text) !important;
 }
 
 /* — Responsive — */

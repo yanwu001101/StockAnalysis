@@ -50,6 +50,9 @@
   --warn-text:     #956A00;          /* text-grade warning on light bg */
   --warn-soft:     rgba(240, 160, 60, 0.14);
 
+  /* — Loading mask (v-loading 遮罩;深色主题必须跟随,否则是刺眼白条) — */
+  --loading-mask:  rgba(244, 245, 247, 0.8);
+
   /* — Shadows — */
   --shadow-sm:     0 1px 2px rgba(23, 28, 33, 0.05);
   --shadow-card:   0 1px 2px rgba(23, 28, 33, 0.05), 0 1px 3px rgba(23, 28, 33, 0.04);
@@ -151,6 +154,8 @@
   --warn-text:     #FFC94D;
   --warn-soft:     rgba(245, 176, 77, 0.15);
 
+  --loading-mask:  rgba(19, 21, 24, 0.75);
+
   --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.40);
   --shadow-card:   0 1px 3px rgba(0, 0, 0, 0.40);
   --shadow-pop:    0 8px 28px rgba(0, 0, 0, 0.50);
@@ -197,6 +202,7 @@
     --warn:          #F5B04D;
     --warn-text:     #FFC94D;
     --warn-soft:     rgba(245, 176, 77, 0.15);
+    --loading-mask:  rgba(19, 21, 24, 0.75);
     --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.40);
     --shadow-card:   0 1px 3px rgba(0, 0, 0, 0.40);
     --shadow-pop:    0 8px 28px rgba(0, 0, 0, 0.50);
@@ -230,6 +236,7 @@ html:root, html:root[data-theme="light"], html:root[data-theme="dark"] {
   --el-color-danger: var(--color-red);
   --el-color-error: var(--color-red);
   --el-color-warning: var(--warn);
+  --el-mask-color: var(--loading-mask);
   --el-bg-color: var(--surface);
   --el-bg-color-page: var(--bg);
   --el-bg-color-overlay: var(--surface);

@@ -1,9 +1,11 @@
 <template>
-  <div class="stat-grid" :class="[variant, size]" :style="gridStyle">
+  <div class="stat-grid" :class="[variant, size, { 'is-loading': loading }]" :style="gridStyle">
     <div v-for="(it, i) in items" :key="it.key ?? i" class="stat-cell">
       <span class="stat-label">{{ it.label }}</span>
-      <span class="stat-value num" :class="it.cls" :style="it.color ? { color: it.color } : undefined">{{ it.value ?? '—' }}</span>
-      <span v-if="it.foot" class="stat-foot">{{ it.foot }}</span>
+      <!-- 加载中显示骨架条而非"—"大卡片留白；加载完成才是真实的 — / 数值 -->
+      <span v-if="loading" class="skeleton-bar" style="width: 62%;"></span>
+      <span v-else class="stat-value num" :class="it.cls" :style="it.color ? { color: it.color } : undefined">{{ it.value ?? '—' }}</span>
+      <span v-if="it.foot && !loading" class="stat-foot">{{ it.foot }}</span>
     </div>
   </div>
 </template>
@@ -20,7 +22,8 @@ const props = withDefaults(defineProps<{
   /** card：每格独立卡片；plain：嵌在父卡片内的浅底格子；inline：无底色两端对齐行 */
   variant?: 'card' | 'plain' | 'inline'
   size?: 'sm' | 'md' | 'lg'
-}>(), { minWidth: 120, variant: 'plain', size: 'md' })
+  loading?: boolean
+}>(), { minWidth: 120, variant: 'plain', size: 'md', loading: false })
 
 const gridStyle = computed(() => props.cols
   ? { gridTemplateColumns: `repeat(${props.cols}, minmax(0, 1fr))` }

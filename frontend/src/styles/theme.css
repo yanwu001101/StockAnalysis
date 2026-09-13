@@ -375,6 +375,29 @@ h4 { font-size: var(--text-md); }
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
+/* 加载占位：信息优先原则下，任何卡片/图表不得渲染成空白壳 */
+.skeleton-bar {
+  height: 14px;
+  border-radius: 4px;
+  background: var(--surface-hover);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skeleton-block {
+  border-radius: var(--radius);
+  background: var(--surface-hover);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text-4);
+  font-size: var(--text-xs);
+}
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in, .rise { animation: none; }
   * { scroll-behavior: auto !important; }

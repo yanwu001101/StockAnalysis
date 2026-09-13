@@ -1,6 +1,6 @@
 <template>
   <AppCard title="板块涨跌" compact>
-    <BaseChart :option="option" :height="height" />
+    <BaseChart :option="option" :height="height" :loading="loading" />
   </AppCard>
 </template>
 
@@ -12,7 +12,7 @@ import type { SectorData } from '@/types'
 import AppCard from '@/components/ui/AppCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 
-const props = withDefaults(defineProps<{ sectors: SectorData[]; height?: number }>(), { height: 240 })
+const props = withDefaults(defineProps<{ sectors: SectorData[]; height?: number; loading?: boolean }>(), { height: 240, loading: false })
 const tokens = useChartTokens()
 
 const option = computed<EChartsOption | null>(() => {

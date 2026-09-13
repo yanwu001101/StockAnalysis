@@ -1,5 +1,13 @@
 <template>
-  <div ref="chartRef" class="kline-chart" :style="{ height: height + 'px' }"></div>
+  <div class="kline-wrap" :style="{ height: height + 'px' }">
+    <div v-if="loading" class="chart-loading">
+      <div class="skeleton-block" style="flex: 1; height: 100%;"></div>
+    </div>
+    <div v-else-if="!data?.length" class="chart-overlay">
+      <span>暂无K线数据</span>
+    </div>
+    <div v-show="!loading && !!data?.length" ref="chartRef" class="kline-chart" :style="{ height: height + 'px' }"></div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -13,10 +21,12 @@ const props = withDefaults(defineProps<{
   height?: number
   showMacd?: boolean
   showVolume?: boolean
+  loading?: boolean
 }>(), {
   height: 500,
   showMacd: true,
   showVolume: true,
+  loading: false,
 })
 
 const chartRef = ref<HTMLElement>()
@@ -163,5 +173,7 @@ useEcharts(chartRef, buildOption, () => [props.data, tokens.value, props.showMac
 </script>
 
 <style scoped>
+.kline-wrap { position: relative; width: 100%; min-width: 0; }
 .kline-chart { width: 100%; }
+.chart-loading { position: absolute; inset: 0; display: flex; }
 </style>

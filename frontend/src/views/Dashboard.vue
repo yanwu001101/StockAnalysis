@@ -4,7 +4,7 @@
 
     <IndexStrip :indices="indices" />
 
-    <StatGrid :items="summaryCards" :cols="isMobile ? 2 : 4" variant="card" :size="isMobile ? 'md' : 'lg'" class="stats" />
+    <StatGrid :items="summaryCards" :cols="isMobile ? 2 : 4" variant="card" :size="isMobile ? 'md' : 'lg'" :loading="marketStore.loading" class="stats" />
 
     <section class="main-grid">
       <AppCard title="高分股票" sub="综合评分排名前列">
@@ -16,6 +16,7 @@
           :columns="topColumns"
           rank
           default-sort="compositeScore"
+          :loading="marketStore.loading"
           :error="loadError"
           :empty="loadError ? '无法连接后端服务，请检查网络后重试' : '暂无高分股票 · 等待评分任务完成'"
           @retry="loadAll"
@@ -31,9 +32,10 @@
       </AppCard>
 
       <aside class="side-stack">
-        <MarketRankCard :gainers="marketStore.gainers" :losers="marketStore.losers" :most-active="marketStore.mostActive" />
-        <NorthboundChart :data="marketStore.northboundFlow" />
-        <SectorChart :sectors="marketStore.sectors" />
+        <MarketRankCard :gainers="marketStore.gainers" :losers="marketStore.losers" :most-active="marketStore.mostActive" :loading="marketStore.loading" />
+        <SectorChart :sectors="marketStore.sectors" :loading="marketStore.loading" />
+        <!-- 北向 2024-08 起无每日净买入披露，常为替代口径的陈旧数据 → 移至最后 -->
+        <NorthboundChart :data="marketStore.northboundFlow" :loading="marketStore.loading" />
       </aside>
     </section>
   </div>

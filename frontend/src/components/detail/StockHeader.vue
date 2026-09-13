@@ -2,18 +2,24 @@
   <AppCard class="stock-header" :class="{ mobile: isMobile }">
     <div class="sh-row">
       <div class="sh-left">
-        <div class="sh-title">
-          <span class="sh-name">{{ info.name || '—' }}</span>
-          <span class="sh-code mono">{{ info.code || code }}</span>
-          <el-tag v-if="info.industry" size="small" type="info">{{ info.industry }}</el-tag>
-        </div>
-        <div class="sh-price-row">
-          <ChangeText :value="info.price" :by="info.changePercent ?? info.change" mode="price" class="sh-price" />
-          <span class="sh-change">
-            <ChangeText v-if="info.change != null" :value="info.change" mode="number" :digits="2" />
-            <ChangeText :value="info.changePercent" class="sh-pct" />
-          </span>
-        </div>
+        <template v-if="loading">
+          <div class="skeleton-bar" style="width: 200px; height: 20px;"></div>
+          <div class="skeleton-bar" style="width: 260px; height: 28px; margin-top: 10px;"></div>
+        </template>
+        <template v-else>
+          <div class="sh-title">
+            <span class="sh-name">{{ info.name || '—' }}</span>
+            <span class="sh-code mono">{{ info.code || code }}</span>
+            <el-tag v-if="info.industry" size="small" type="info">{{ info.industry }}</el-tag>
+          </div>
+          <div class="sh-price-row">
+            <ChangeText :value="info.price" :by="info.changePercent ?? info.change" mode="price" class="sh-price" />
+            <span class="sh-change">
+              <ChangeText v-if="info.change != null" :value="info.change" mode="number" :digits="2" />
+              <ChangeText :value="info.changePercent" class="sh-pct" />
+            </span>
+          </div>
+        </template>
       </div>
       <div class="sh-right">
         <ScoreGauge :score="score" :size="isMobile ? 64 : 84" />
@@ -37,7 +43,7 @@ import ChangeText from '@/components/stock/ChangeText.vue'
 import WatchlistButton from '@/components/stock/WatchlistButton.vue'
 import ScoreGauge from '@/components/charts/ScoreGauge.vue'
 
-defineProps<{ info: any; code: string; score: number }>()
+defineProps<{ info: any; code: string; score: number; loading?: boolean }>()
 defineEmits<{ (e: 'predict'): void }>()
 const { isMobile } = useDevice()
 </script>

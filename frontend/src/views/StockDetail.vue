@@ -1,6 +1,6 @@
 <template>
   <div class="page-container stock-detail" :class="{ mobile: isMobile }">
-    <StockHeader :info="stockInfo" :code="code" :score="compositeScore" class="detail-header" @predict="goPredict" />
+    <StockHeader :info="stockInfo" :code="code" :score="compositeScore" :loading="detailLoading" class="detail-header" @predict="goPredict" />
 
     <SegmentTabs v-model="tab" :options="tabOptions" block class="detail-tabs" />
 
@@ -24,7 +24,7 @@
             <SegmentTabs v-model="klinePeriod" :options="periodOptions" small />
             <SegmentTabs v-model="klineAdjust" :options="adjustOptions" small />
           </template>
-          <KLineChart :data="klineData" :height="isMobile ? 380 : 480" />
+          <KLineChart :data="klineData" :height="isMobile ? 380 : 480" :loading="loadingKline" />
         </AppCard>
 
         <div v-if="overviewVisible" class="side-panel">
@@ -110,6 +110,9 @@ const strategyScores = ref<Record<string, number>>({})
 const prediction = ref<PredictionResult | null>(null)
 const tSignal = ref<TSignal | null>(null)
 const pageError = ref(false)
+// 加载态：首屏骨架（头部/K线），避免整块空白
+const detailLoading = ref(false)
+const loadingKline = ref(false)
 
 // F10 state
 const f10Data = ref<any>(null)
@@ -123,6 +126,9 @@ async function loadData() {
   abortCtrl?.abort()
   abortCtrl = new AbortController()
   const signal = abortCtrl.signal
+  const firstLoad = !stockInfo.value?.code
+  detailLoading.value = firstLoad
+  loadingKline.value = !klineData.value.length
   try {
     const [detail, kline, strategies, pred] = await Promise.allSettled([
       getStockDetail(c, signal),
@@ -142,7 +148,10 @@ async function loadData() {
       strategyScores.value = map
     }
     if (pred.status === 'fulfilled') prediction.value = pred.value
-  } catch {}
+  } catch {} finally {
+    detailLoading.value = false
+    loadingKline.value = false
+  }
   // F10 loads in parallel (slower akshare path).
   loadF10()
   loadTSignal(tCardRef.value?.currentPos())
@@ -180,9 +189,11 @@ watch([klinePeriod, klineAdjust], () => {
   if (!code.value) return
   if (klineTimer) window.clearTimeout(klineTimer)
   klineTimer = window.setTimeout(() => {
+    loadingKline.value = true
     getStockKLine(code.value, klinePeriod.value, 250, abortCtrl?.signal, klineAdjust.value)
       .then(d => (klineData.value = d))
       .catch(() => {})
+      .finally(() => { loadingKline.value = false })
   }, 200)
 })
 

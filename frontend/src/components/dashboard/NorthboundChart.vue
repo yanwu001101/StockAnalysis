@@ -1,6 +1,6 @@
 <template>
   <AppCard title="北向资金" :sub="sub" compact>
-    <BaseChart :option="option" :height="height" />
+    <BaseChart :option="option" :height="height" :loading="loading" />
   </AppCard>
 </template>
 
@@ -11,7 +11,7 @@ import { useChartTokens, baseTooltip } from '@/composables/useEcharts'
 import AppCard from '@/components/ui/AppCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 
-const props = withDefaults(defineProps<{ data: any[]; height?: number }>(), { height: 200 })
+const props = withDefaults(defineProps<{ data: any[]; height?: number; loading?: boolean }>(), { height: 200, loading: false })
 const tokens = useChartTokens()
 
 // data-service 返回 netBuy / holdMarketCap（元）；旧接口字段是 netFlow。

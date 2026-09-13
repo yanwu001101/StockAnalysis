@@ -20,6 +20,7 @@
 | **P2 批量面板加载器**（5913 只全市场 42.4s；20 只股新旧路径评分一致） | ✅ 2026-09-13 | api/strategies_v2.py `_bulk_load_panels`、jobs/strategy_score.py、/api/v2/screen |
 | **P4 里程碑1 委托单生成器**（/api/paper/orders + PaperPanel 委托单卡 + Java 透传；GUI 已验证） | ✅ 2026-09-13 | api/paper.py、PaperController.java、DataService.java、PaperPanel.vue |
 | **周度全策略体检终版名单**（29 策略 × 周度 131 期，无 🟢；旧口径=代码序宇宙） | ✅ 2026-09-13 | docs/weekly_sweep_2026-09.md + .json |
+| **全站留白治理**（SKILL §34/信息优先：BaseChart/KLineChart/StatGrid/StockHeader 加载骨架 + 空态占位；评分选股进入即自动选股；盘面侧栏 loading 骨架、北向移至末位） | ✅ 2026-09-13 | BaseChart.vue、KLineChart.vue、StatGrid.vue、StockHeader.vue、ScoreScreener.vue、Dashboard.vue、MarketRankCard.vue、theme.css |
 | 3.5 年历史回补（1015 只 × 659,887 行，2023-03~今） | ✅ 已完成 | 数据库 stock_kline_daily |
 | 数据时钟修复（ann_date point-in-time、指数日历） | ✅ 已上线 | data-service/migrations.py |
 
@@ -98,6 +99,8 @@ EOF
 - **alphalab.build_panel 已把 K 线/财务面板索引统一为 DatetimeIndex**——K 线原生是 date 对象，不归一则混合表达式（行情×财务）索引对齐全 NaN；新增面板字段时注意
 - 文件行尾混用 LF/CRLF——python 补丁脚本用「按行分割 + nl 探测」，锚点断言失败先查行尾
 - 前端是 PWA（service worker 预缓存）：rebuild 后第一次 reload 可能仍被旧 SW 控制；验证新 UI 前先注销 SW+清 caches（浏览器 console）或核对资源 hash 与 `frontend/dist/assets` 一致
+- **新卡片/图表必须接 loading 骨架**：BaseChart(`loading`/`placeholder`)、KLineChart(`loading`)、StatGrid(`loading`)、StockHeader(`loading`) 都已支持——禁止裸空白渲染（2026-09-13 全站留白治理的约定）
+- 评分选股页 `runFilter({ silent: true })` 是进入页面自动跑的静默路径，不带成功/失败 toast；手动按钮仍走带提示路径
 - 回测结果受幸存者偏差影响：K 线表只含当前存活 1015 只，绝对收益偏高，横向对比有效； alphalab 回测同理
 - 测试账号 uidemo2026 / Ui#Demo2026!
 - 周度体检原始结果已归档 `docs/weekly_sweep_2026-09.json`（旧口径=代码序宇宙）

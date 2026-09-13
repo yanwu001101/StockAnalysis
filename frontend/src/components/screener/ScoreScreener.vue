@@ -58,13 +58,18 @@
       </AppCard>
 
       <AppCard title="评分分布" compact class="dist-card">
-        <BaseChart :option="distOption" :height="isMobile ? 200 : 280" />
+        <BaseChart :option="distOption" :height="isMobile ? 200 : 280" :loading="loading" />
       </AppCard>
     </div>
 
-    <div v-else class="empty-state">
-      <p>设置筛选条件后点击「开始选股」</p>
-    </div>
+    <EmptyState
+      v-else-if="!loading"
+      variant="no-results"
+      title="没有符合条件的股票"
+      description="放宽综合分 / 市值 / 负债率条件后再试"
+    >
+      <el-button size="small" type="primary" @click="runFilter()">用默认条件重新筛选</el-button>
+    </EmptyState>
   </div>
 </template>
 
@@ -86,6 +91,7 @@ import StockTable from '@/components/stock/StockTable.vue'
 import StrategyStatsPill from '@/components/stock/StrategyStatsPill.vue'
 import ProSignalPill from '@/components/stock/ProSignalPill.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const strategyStore = useStrategyStore()
 const settings = useSettingsStore()
@@ -136,7 +142,8 @@ function resetFilters() {
   filters.limit = settings.defaultLimit
 }
 
-async function runFilter() {
+async function runFilter(opts?: { silent?: boolean }) {
+  const silent = opts?.silent === true
   loading.value = true
   try {
     const list: any[] = await runScreener({
@@ -152,10 +159,10 @@ async function runFilter() {
     })
     for (const r of list) r.proSignal = undefined
     results.value = list
-    ElMessage.success(`筛选完成，共 ${results.value.length} 只`)
+    if (!silent) ElMessage.success(`筛选完成，共 ${results.value.length} 只`)
     loadProSignals()
   } catch {
-    ElMessage.error('筛选失败，请稍后重试')
+    if (!silent) ElMessage.error('筛选失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -245,7 +252,12 @@ const distOption = computed<EChartsOption | null>(() => {
 
 function exportResults() { ElMessage.info('导出功能开发中') }
 
-onMounted(() => strategyStore.loadFromStorage())
+onMounted(() => {
+  strategyStore.loadFromStorage()
+  // 信息优先：进入页面即按默认条件跑一次（静默），避免筛选区下一整屏空白。
+  // keep-alive 回访（已有结果）不重复请求。
+  if (!results.value.length) runFilter({ silent: true })
+})
 watch(sortBy, applySort)
 useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh: false })
 </script>
@@ -266,7 +278,6 @@ useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh:
   gap: 16px;
   align-items: start;
 }
-.empty-state { text-align: center; padding: 80px 20px; color: var(--text-3); }
 @media (max-width: 1100px) {
   .results-area { grid-template-columns: 1fr; }
 }
@@ -274,6 +285,5 @@ useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh:
   .score-screener { gap: 12px; }
   .filter-grid { grid-template-columns: 1fr; gap: 12px; }
   .results-area { gap: 12px; }
-  .empty-state { padding: 48px 16px; }
 }
 </style>

@@ -34,12 +34,19 @@ public class SchemaMigration {
             createAdminAuditLogTable();
             createBacktestRunTable();
             createPortfolioPositionTable();
+            addPortfolioT1Columns();
             createUserAiConfigTable();
             createAiAnalysisRunTable();
             log.info("[migration] Phase4 admin schema applied");
         } catch (Exception e) {
             log.error("[migration] Phase4 admin schema failed: {}", e.getMessage(), e);
         }
+    }
+
+    private void addPortfolioT1Columns() {
+        // A 股 T+1:记录最近买入日与当日买入股数,今日买入部分不生成卖出信号
+        ensureColumn("portfolio_position", "last_buy_date", "DATE NULL", "avg_cost");
+        ensureColumn("portfolio_position", "locked_shares", "DECIMAL(18,2) NOT NULL DEFAULT 0", "last_buy_date");
     }
 
     private void addUserAdminColumns() {

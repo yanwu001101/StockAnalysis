@@ -125,6 +125,10 @@ class AkShareSource(AbstractSource):
             df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
         df["code"] = code
         df = parser.to_numeric_cols(df, ["open", "close", "high", "low", "volume", "amount"])
+        # akshare stock_zh_a_hist 的成交量单位是"手";库内统一为"股"(与 eastmoney / tencent 源一致),
+        # 否则同一只股票在不同来源接缝处会出现 100 倍的量能跳变。
+        if "volume" in df.columns:
+            df["volume"] = df["volume"] * 100
         return df.tail(count)
 
     async def fetch_fundamental(self, code: str, periods: int = 8) -> pd.DataFrame:

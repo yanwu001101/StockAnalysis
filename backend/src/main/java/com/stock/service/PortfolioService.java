@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.*;
 
 @Service
@@ -70,8 +71,36 @@ public class PortfolioService {
                 row.setName("");
             }
         }
+        // ---- A 股 T+1:今日买入部分记录为锁定,当日不生成卖出信号 ----
+        LocalDate today = LocalDate.now();
+        BigDecimal todayBought = decimal(body.get("todayBought"), BigDecimal.ZERO);
+        BigDecimal buyPrice = decimal(body.get("buyPrice"), BigDecimal.ZERO);
+        if (todayBought.compareTo(BigDecimal.ZERO) > 0) {
+            // "记录买入"快捷路径:在原持仓上累加今日买入,并按买入价更新成本
+            BigDecimal prevShares = row.getId() == null ? BigDecimal.ZERO : nz(row.getShares());
+            BigDecimal prevCost = row.getId() == null ? BigDecimal.ZERO : nz(row.getAvgCost());
+            // 编辑表单同时改总股数时带 sharesIsTotal=true;"记录买入"快捷路径不带,按累加处理
+            boolean explicitShares = Boolean.TRUE.equals(body.get("sharesIsTotal")) && row.getId() != null;
+            if (!explicitShares) {
+                shares = prevShares.add(todayBought);
+                if (buyPrice.compareTo(BigDecimal.ZERO) > 0 && shares.compareTo(BigDecimal.ZERO) > 0) {
+                    avgCost = prevCost.multiply(prevShares).add(buyPrice.multiply(todayBought))
+                        .divide(shares, 4, RoundingMode.HALF_UP);
+                }
+            }
+            BigDecimal alreadyLocked = today.equals(row.getLastBuyDate()) ? nz(row.getLockedShares()) : BigDecimal.ZERO;
+            row.setLastBuyDate(today);
+            row.setLockedShares(alreadyLocked.add(todayBought).min(shares));
+        } else if (body.containsKey("lastBuyDate") || body.containsKey("lockedShares")) {
+            String lbd = string(body.get("lastBuyDate"));
+            row.setLastBuyDate(lbd.isEmpty() ? null : LocalDate.parse(lbd.length() > 10 ? lbd.substring(0, 10) : lbd));
+            row.setLockedShares(decimal(body.get("lockedShares"), BigDecimal.ZERO).max(BigDecimal.ZERO).min(shares));
+        } else if (row.getId() == null) {
+            row.setLockedShares(BigDecimal.ZERO);
+        }
         row.setShares(shares);
-        row.setAvailableShares(decimal(body.get("availableShares"), shares));
+        BigDecimal availableInput = decimal(body.get("availableShares"), null);
+        row.setAvailableShares(availableInput == null ? shares : availableInput.min(shares));
         row.setAvgCost(avgCost);
         row.setTargetWeight(decimal(body.get("targetWeight"), new BigDecimal("20")));
         row.setSource(stringOr(body.get("source"), "manual"));
@@ -309,7 +338,28 @@ public class PortfolioService {
         if ("bearish".equals(signal)) reasons.add("综合策略信号偏空。");
         if ("bullish".equals(signal)) reasons.add("综合策略信号偏多。");
 
-        suggestedShares = executableShares(action, suggestedShares, nz(row.getAvailableShares()));
+        // A 股 T+1 闸门:今日买入且无可卖底仓时,任何卖出类动作都不能在今天执行
+        BigDecimal availToday = availableToday(row);
+        BigDecimal lockedNow = lockedToday(row);
+        String blockedAction = null;
+        boolean sellType = "stop_loss".equals(action) || "take_profit".equals(action)
+            || "t_sell".equals(action) || "reduce".equals(action);
+        if (sellType && availToday.compareTo(BigDecimal.ZERO) <= 0) {
+            blockedAction = action;
+            action = "hold";
+            label = lockedNow.compareTo(BigDecimal.ZERO) > 0 ? "今日买入·T+1 锁定" : "无可卖股数·持有";
+            type = "info";
+            suggestedShares = BigDecimal.ZERO;
+            reasons.add(0, lockedNow.compareTo(BigDecimal.ZERO) > 0
+                ? "今日买入 " + lockedNow.setScale(0, RoundingMode.DOWN) + " 股受 T+1 限制当日不可卖出,原「" + labelOf(blockedAction) + "」信号顺延至下一交易日再评估。"
+                : "当前可卖股数为 0,卖出类信号无法执行,顺延至下一交易日。");
+            steps.clear();
+            steps.add("今日不做任何卖出操作;明日开盘后按新信号重新评估。");
+        } else if (sellType && lockedNow.compareTo(BigDecimal.ZERO) > 0) {
+            reasons.add("今日买入的 " + lockedNow.setScale(0, RoundingMode.DOWN) + " 股不可卖,卖出建议只针对昨日及更早的 "
+                + availToday.setScale(0, RoundingMode.DOWN) + " 股可卖底仓。");
+        }
+        suggestedShares = executableShares(action, suggestedShares, availToday);
         Map<String, Object> consensus = strategyConsensus(in.strategies);
         String noAiSummary = noAiSummary(label, score, pnlPct, weight, consensus, priceKnown);
         Map<String, Object> out = view(row, in.detail, in.strategies);
@@ -321,6 +371,7 @@ public class PortfolioService {
         out.put("strategyScore", round(score, 2));
         out.put("strategySignal", signal);
         out.put("action", action);
+        out.put("blockedAction", blockedAction);
         out.put("actionLabel", label);
         out.put("actionType", type);
         out.put("confidence", confidence);
@@ -346,6 +397,10 @@ public class PortfolioService {
         out.put("name", !string(row.getName()).isEmpty() ? row.getName() : (d == null ? "" : d.getString("name")));
         out.put("shares", nz(row.getShares()));
         out.put("availableShares", nz(row.getAvailableShares()));
+        out.put("availableToday", availableToday(row));
+        out.put("lockedToday", lockedToday(row));
+        out.put("lastBuyDate", row.getLastBuyDate() == null ? null : row.getLastBuyDate().toString());
+        out.put("t1Locked", lockedToday(row).compareTo(BigDecimal.ZERO) > 0 && availableToday(row).compareTo(BigDecimal.ZERO) <= 0);
         out.put("avgCost", money(nz(row.getAvgCost())));
         out.put("targetWeight", pct(nz(row.getTargetWeight())));
         out.put("source", row.getSource());
@@ -637,6 +692,44 @@ public class PortfolioService {
         return v == null ? BigDecimal.ZERO : v;
     }
 
+    /** 今日锁定股数:仅当最近买入日 = 今天时生效,次一交易日自动为 0。 */
+    static BigDecimal lockedToday(PortfolioPosition row) {
+        if (row == null || row.getLastBuyDate() == null) return BigDecimal.ZERO;
+        if (!LocalDate.now().equals(row.getLastBuyDate())) return BigDecimal.ZERO;
+        return nz(row.getLockedShares()).max(BigDecimal.ZERO).min(nz(row.getShares()));
+    }
+
+    /** 今日可卖股数 = min(用户填写的可用数, 总持仓 − 今日锁定)。 */
+    static BigDecimal availableToday(PortfolioPosition row) {
+        BigDecimal shares = nz(row.getShares());
+        BigDecimal unlocked = shares.subtract(lockedToday(row)).max(BigDecimal.ZERO);
+        BigDecimal declared = row.getAvailableShares() == null ? shares : nz(row.getAvailableShares());
+        if (declared.compareTo(BigDecimal.ZERO) <= 0 && lockedToday(row).compareTo(BigDecimal.ZERO) <= 0) {
+            // 旧数据可用数为 0 且无锁定记录:按总持仓可卖(与旧版行为一致)
+            declared = shares;
+        }
+        return declared.min(unlocked).max(BigDecimal.ZERO);
+    }
+
+    /** 供决策层(data-service)使用的持仓视图:code/shares/available/locked_today/avg_cost/last_buy_date。 */
+    public List<Map<String, Object>> positionsForDecision(Long userId) {
+        List<PortfolioPosition> rows = positionMapper.selectList(new LambdaQueryWrapper<PortfolioPosition>()
+            .eq(PortfolioPosition::getUserId, userId));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (PortfolioPosition row : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("code", row.getCode());
+            m.put("name", row.getName());
+            m.put("shares", nz(row.getShares()));
+            m.put("available", availableToday(row));
+            m.put("locked_today", lockedToday(row));
+            m.put("avg_cost", nz(row.getAvgCost()));
+            m.put("last_buy_date", row.getLastBuyDate() == null ? null : row.getLastBuyDate().toString());
+            out.add(m);
+        }
+        return out;
+    }
+
     private static double dbl(Object value) {
         if (value == null) return 0.0;
         try { return Double.parseDouble(value.toString()); } catch (Exception e) { return 0.0; }
@@ -644,6 +737,16 @@ public class PortfolioService {
 
     private static Object firstNonNull(Object a, Object b) {
         return a != null ? a : b;
+    }
+
+    private static String labelOf(String action) {
+        return switch (action == null ? "" : action) {
+            case "stop_loss" -> "止损/减仓";
+            case "take_profit" -> "高抛/落袋";
+            case "t_sell" -> "做T-先高抛";
+            case "reduce" -> "减仓观察";
+            default -> action;
+        };
     }
 
     private static BigDecimal roundLot(BigDecimal shares) {

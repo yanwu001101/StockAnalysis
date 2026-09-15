@@ -12,7 +12,9 @@
           <span class="code mono">{{ row.code }} · {{ row.industry || '行业待同步' }}</span>
         </div>
         <div class="position-numbers">
-          <b class="num">{{ Number(row.shares || 0).toFixed(0) }} 股</b>
+          <b class="num">{{ Number(row.shares || 0).toFixed(0) }} 股
+            <span v-if="Number(row.lockedToday) > 0" class="lock-tag">今日买入 {{ Number(row.lockedToday).toFixed(0) }} 锁定 · 可卖 {{ Number(row.availableToday ?? 0).toFixed(0) }}</span>
+          </b>
           <span>成本 {{ fixedOrDash(row.avgCost) }} / 现价 {{ fixedOrDash(row.price) }}</span>
         </div>
         <div class="row-actions">
@@ -53,6 +55,7 @@ defineEmits<{
 .pr-head { display: flex; flex-direction: column; min-width: 0; }
 .stock-link { color: var(--text); font-weight: 700; text-decoration: none; }
 .code { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+.lock-tag { font-size: 11px; font-weight: 500; color: var(--warn-text); background: var(--warn-soft); padding: 1px 6px; border-radius: var(--radius-sm); margin-left: 6px; }
 .position-numbers {
   grid-column: 1 / -1;
   display: flex;

@@ -278,6 +278,28 @@ public class DataService {
     // =====================================================================
     // Helpers
     // =====================================================================
+    // 决策层 — 排名快照 / 稳定候选池 / 最终决策(data-service /api/decision)
+    // =====================================================================
+    public JSONObject getDecisionToday(JSONObject body) { return postObj("/api/decision/today", body); }
+
+    public JSONObject getDecisionSnapshots(String date) {
+        return getObjNoCache("/api/decision/snapshots" + qs("date", date));
+    }
+
+    public JSONObject getDecisionSnapshot(String id, Integer limit) {
+        return getObjNoCache("/api/decision/snapshot/" + id + (limit == null ? "" : "?limit=" + limit));
+    }
+
+    public JSONObject getDecisionStockHistory(String code, Integer n) {
+        return getObjNoCache("/api/decision/stock/" + code + "/history" + (n == null ? "" : "?n=" + n));
+    }
+
+    public JSONObject runDecisionSnapshot(JSONObject body) { return postObj("/api/decision/snapshot/run", body); }
+
+    /** 评分选股(快照口径):同一快照下结果确定,附行情时间/数据源/排名变化拆解。 */
+    public JSONObject getScreenerSnapshot(JSONObject request) { return postObj("/api/v2/screen/snapshot", request); }
+
+    // =====================================================================
 
     /** GET, parsed as JSONObject, with full L1 + L2 + single-flight caching. */
     private JSONObject cached(String key, String path, int ttlSeconds) {

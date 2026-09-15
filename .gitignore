@@ -8,6 +8,7 @@ venv/
 
 # Java
 backend/target/
+backend/.m2/
 *.class
 *.jar
 *.log

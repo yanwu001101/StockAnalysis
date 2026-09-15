@@ -15,6 +15,7 @@ import cache
 import eastmoney
 import kline_repo
 import scheduler
+import spot_meta
 from repo.base import fetch_df
 from strategies import (
     score_macd_ma, score_multi_factor, score_momentum_breakout,
@@ -180,6 +181,7 @@ def fetch_spot() -> pd.DataFrame:
             df = _accept(em_realtime.fetch_all_spot())
             if df is not None:
                 print(f"[data-service] spot via em_realtime (curl_cffi push2delay): {len(df)} rows")
+                spot_meta.record("eastmoney:" + str(df.attrs.get("source_host") or "push2delay"), len(df))
                 return df
             print("[data-service] em_realtime spot incomplete; falling back to eastmoney aiohttp")
         except Exception as e:
@@ -189,6 +191,7 @@ def fetch_spot() -> pd.DataFrame:
         try:
             df = _accept(eastmoney.fetch_all_spot())
             if df is not None:
+                spot_meta.record("eastmoney:aiohttp", len(df))
                 return df
             print("[data-service] eastmoney spot incomplete; falling back to akshare")
         except Exception as e:
@@ -201,8 +204,11 @@ def fetch_spot() -> pd.DataFrame:
                 df = retry_call(ak.stock_zh_a_spot, retries=2, wait=2)
             except Exception as e2:
                 print(f"[data-service] all spot sources failed; falling back to DB snapshot: {e2}")
-                return fetch_spot_from_db()
+                out = fetch_spot_from_db()
+                spot_meta.record("db:stock_kline_daily(收盘回退)", len(out))
+                return out
         df = df.copy()
+        spot_meta.record("akshare", len(df))
         code_col = first_existing(df.columns, ["代码", "证券代码"])
         name_col = first_existing(df.columns, ["名称", "证券简称"])
         industry_col = first_existing(df.columns, ["行业", "所属行业", "板块名称"])
@@ -1240,6 +1246,8 @@ try:
     from api.expression import bp as expr_bp
     from api.admin import bp as admin_bp
     from api.t_signal import bp as t_bp
+    from api.decision import bp as decision_bp
+    app.register_blueprint(decision_bp)
     app.register_blueprint(backtest_bp)
     app.register_blueprint(factorlab_bp)
     app.register_blueprint(alphalab_bp)

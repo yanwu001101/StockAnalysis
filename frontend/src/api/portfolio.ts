@@ -9,6 +9,13 @@ export interface PortfolioPositionInput {
   avgCost: number
   targetWeight?: number
   notes?: string
+  /** 今日买入股数:服务端累加持仓并按 A 股 T+1 锁定,当日不生成卖出信号 */
+  todayBought?: number
+  buyPrice?: number
+  /** 编辑表单里 shares 已是总股数(含今日买入)时为 true;"记录买入"快捷路径不传 */
+  sharesIsTotal?: boolean
+  lastBuyDate?: string
+  lockedShares?: number
 }
 
 export function getPortfolioPositions(): Promise<any[]> {

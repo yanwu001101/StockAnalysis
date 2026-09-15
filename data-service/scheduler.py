@@ -23,6 +23,7 @@ import cache
 import eastmoney
 import kline_repo
 import db
+import spot_meta
 from pipelines import spot as spot_pipe
 from pipelines import lhb as lhb_pipe
 from pipelines import moneyflow as mf_pipe
@@ -52,7 +53,20 @@ def refresh_spot_cache():
     try:
         cache.delete("spot")
         cache.delete("spot_v2")
-        df = eastmoney.fetch_all_spot()
+        df = None
+        try:
+            import em_realtime
+            df = em_realtime.fetch_all_spot()
+            if df is not None and not df.empty and "代码" in df.columns:
+                df["代码"] = df["代码"].astype(str).str.zfill(6)
+                spot_meta.record("eastmoney:" + str(df.attrs.get("source_host") or "push2delay"), len(df))
+        except Exception as e:
+            log.debug("[scheduler] em_realtime spot failed: %s", e)
+            df = None
+        if df is None or df.empty:
+            df = eastmoney.fetch_all_spot()
+            if df is not None and not df.empty:
+                spot_meta.record("eastmoney:aiohttp", len(df))
         if df is not None and not df.empty:
             cache.set("spot", df, 60)
             log.info("[scheduler] spot cache refreshed: %d rows", len(df))
@@ -74,7 +88,20 @@ def warmup_klines(top_n: int = WARMUP_TOP_N):
         log.info("[scheduler] MySQL unavailable; skipping warmup")
         return
     try:
-        spot = eastmoney.fetch_all_spot()
+        # 全市场快照优先用 warm 缓存 / em_realtime(curl_cffi);aiohttp 批量源在本机常被拦截,
+        # 之前一旦它失败整个日K增量就跳过,导致因子日K停在几天前。
+        spot = cache.get("spot")
+        if spot is None or getattr(spot, "empty", True):
+            try:
+                import em_realtime
+                spot = em_realtime.fetch_all_spot()
+                if spot is not None and not spot.empty and "代码" in spot.columns:
+                    spot["代码"] = spot["代码"].astype(str).str.zfill(6)
+            except Exception as e:
+                log.warning("[scheduler] warmup: em_realtime spot failed: %s", e)
+                spot = None
+        if spot is None or getattr(spot, "empty", True):
+            spot = eastmoney.fetch_all_spot()
         if spot is None or spot.empty:
             log.warning("[scheduler] warmup: empty spot, skipping")
             return
@@ -182,6 +209,16 @@ def refresh_strategy_scores():
         notifier.job_failed("策略评分重算", str(e))
 
 
+def _rank_snapshot_safe():
+    """交易时段每 15 分钟一次排名快照(决策层的数据基础);周末不跑。"""
+    try:
+        from jobs import rank_snapshot
+        rank_snapshot.run()
+    except Exception as e:
+        log.warning("[scheduler] rank snapshot failed: %s", e)
+        notifier.job_failed("排名快照", str(e))
+
+
 def _daily_push_safe():
     try:
         from jobs import daily_push
@@ -267,6 +304,21 @@ def start():
             max_instances=1,
             coalesce=True,
         )
+
+        # Rank snapshots: 09:35/09:45, then every 15 min until 11:30 and 13:15-14:45, plus 15:05 close anchor
+        for jid, hour, minute in (
+            ("rank_snapshot_open", "9", "35,45"),
+            ("rank_snapshot_am", "10", "0,15,30,45"),
+            ("rank_snapshot_am2", "11", "0,15,30"),
+            ("rank_snapshot_pm", "13", "15,30,45"),
+            ("rank_snapshot_pm2", "14", "0,15,30,45"),
+            ("rank_snapshot_close", "15", "5"),
+        ):
+            sched.add_job(
+                _rank_snapshot_safe,
+                CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute, timezone="Asia/Shanghai"),
+                id=jid, replace_existing=True, max_instances=1, coalesce=True,
+            )
 
         # Daily summary push at 17:45 — after scoring has landed
         sched.add_job(

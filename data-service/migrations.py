@@ -99,6 +99,10 @@ def ensure_schema() -> list[str]:
             # MySQL 驱动不支持一次执行分号分隔的多语句 — 逐条执行
             for stmt in [x.strip() for x in PAPER_TABLES_DDL.split(";") if x.strip()]:
                 conn.execute(text(stmt))
+            # 决策层:排名快照头表 + 明细表
+            from decision.snapshot import DDL as SNAPSHOT_DDL
+            for stmt in [x.strip() for x in SNAPSHOT_DDL.split(";") if x.strip()]:
+                conn.execute(text(stmt))
         if applied:
             logger.info("[migrations] applied: %s", ", ".join(applied))
     except Exception as e:

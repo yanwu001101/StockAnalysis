@@ -643,6 +643,116 @@ def screen():
     return jsonify(json_safe(results[:limit]))
 
 
+@bp.route("/screen/snapshot", methods=["POST"])
+def screen_snapshot():
+    """从最近一次排名快照出选股结果(确定性:同一快照下任何一次请求结果相同)。
+
+    body 与 /screen 相同(strategies/filters/limit/requireTriggered);可选 snapshotId。
+    用户自定义权重在快照的策略明细上重算综合分;strategyParams(策略内部参数)无法
+    在快照上重算,若传入则返回 meta.mode='live' 提示调用方改走 /screen。
+
+    返回 {items, meta, prev}:
+      items[].change  相对上一快照:排名/综合分变化 + 因子组贡献差 + 行情差 + 口径变化
+      meta            快照 id / 计算时间 / 行情时间 / 数据源 / 宇宙 / 窗口
+    """
+    from decision import groups, snapshot
+    from api.decision import rank_changes
+
+    body = request.get_json(silent=True) or {}
+    strategy_params = body.get("strategyParams") or body.get("strategy_params") or {}
+    if strategy_params:
+        return jsonify({"items": [], "meta": {"mode": "live", "reason": "strategyParams 需实时计算"}})
+    sid = body.get("snapshotId") or body.get("snapshot_id") or snapshot.latest_id()
+    if not sid:
+        return jsonify({"items": [], "meta": {"mode": "none", "reason": "尚无排名快照"}})
+    head = snapshot.header(sid)
+    if not head:
+        return jsonify({"items": [], "meta": {"mode": "none", "reason": f"快照 {sid} 不存在"}})
+
+    limit = int(body.get("limit") or 50)
+    filters = body.get("filters") or {}
+    min_score = float(filters.get("minScore", 50))
+    min_roe = float(filters.get("minRoe", 0))
+    max_debt_ratio = float(filters.get("maxDebtRatio", 100))
+    min_market_cap_yi = float(filters.get("minMarketCap", 100))
+    industries: list = filters.get("industries") or []
+    weights = _parse_weights(body)
+    require_triggered = [str(x) for x in (body.get("requireTriggered") or body.get("require_triggered") or []) if x]
+
+    items = snapshot.items(sid)
+    prev_ids = snapshot.recent_ids(1, before=sid)
+    prev_id = prev_ids[0] if prev_ids else None
+    prev_items = snapshot.items_multi([prev_id]).get(prev_id) if prev_id else None
+
+    def _rescored(rows):
+        out = []
+        for it in rows:
+            strat = it.get("strategies") or []
+            comp = groups.composite_from(strat, weights) if weights else float(it.get("composite") or 0)
+            out.append((comp, it))
+        out.sort(key=lambda x: (-x[0], x[1]["code"]))
+        return out
+
+    now_ranked = _rescored(items)
+    changes = {}
+    if prev_items:
+        # 上一快照也按同一权重重算排名后再比,保证"排名变化"口径一致
+        prev_ranked = _rescored(prev_items)
+        prev_fake = [dict(it, rank=i, composite=c) for i, (c, it) in enumerate(prev_ranked, 1)]
+        now_fake = [dict(it, rank=i, composite=c) for i, (c, it) in enumerate(now_ranked, 1)]
+        changes = rank_changes(now_fake, prev_fake, weights)
+
+    results = []
+    for i, (comp, it) in enumerate(now_ranked, 1):
+        roe = float(it.get("roe") or 0)
+        debt = float(it.get("debt_ratio") or 0)
+        cap = it.get("market_cap_yi")
+        if cap is not None and cap > 0 and cap < min_market_cap_yi:
+            continue
+        if industries and it.get("industry") not in industries:
+            continue
+        if roe < min_roe or debt > max_debt_ratio or comp < min_score:
+            continue
+        strat = it.get("strategies") or []
+        triggered_map = {x["id"]: bool(x.get("triggered")) for x in strat}
+        if require_triggered and not all(triggered_map.get(x) for x in require_triggered):
+            continue
+        effective = [x for x in strat if not x.get("no_data") and (weights is None or (weights.get(x["id"], 0) > 0))]
+        bullish = sum(1 for x in effective if x.get("signal") == "bullish")
+        bearish = sum(1 for x in effective if x.get("signal") == "bearish")
+        trig = sum(1 for x in effective if x.get("triggered"))
+        signal = "bullish" if comp >= 55 else "bearish" if comp <= 30 else "neutral"
+        g = groups.group_scores(strat, weights) if weights else it.get("groups")
+        results.append({
+            "code": it["code"], "name": it.get("name") or it["code"], "industry": it.get("industry") or "",
+            "price": _finite_number(it.get("price"), 2, 0),
+            "changePercent": _finite_number(it.get("pct_change"), 2, 0),
+            "volume": it.get("volume"), "amount": it.get("amount"),
+            "marketCap": _finite_number(cap, 0, 0),
+            "roe": roe, "debtRatio": debt,
+            "compositeScore": round(comp, 2), "snapshotRank": i, "signal": signal,
+            "strategies": {x["id"]: x.get("score") for x in strat},
+            "triggered": triggered_map,
+            "strategyStats": {"effective": len(effective), "total": len(strat),
+                              "bullish": bullish, "bearish": bearish, "triggered": trig},
+            "groups": g, "buy": it.get("buy"), "klineDate": it.get("kline_date"),
+            "change": changes.get(it["code"]),
+        })
+        if len(results) >= limit:
+            break
+
+    meta = {
+        "mode": "snapshot", "snapshot_id": sid, "computed_at": head.get("computed_at"),
+        "quote_time": head.get("quote_time"), "quote_source": head.get("quote_source"),
+        "universe_n": head.get("universe_n"), "scored_n": head.get("scored_n"),
+        "kline_date": max((x.get("kline_date") or "" for x in items), default=None) or None,
+        "weights": "custom" if weights else "default",
+        "prev_snapshot_id": prev_id,
+    }
+    return jsonify(json_safe({"items": results, "meta": meta,
+                              "prev": snapshot.header(prev_id) if prev_id else None}))
+
+
 @bp.route("/strategy-tops")
 def strategy_tops():
     """Return top-N codes for every strategy from the pre-computed table.

@@ -17,7 +17,13 @@
             </h4>
             <p>{{ item.ruleSummary }}</p>
           </div>
-          <el-tag :type="tagType(item.actionType)" effect="light">{{ item.actionLabel }}</el-tag>
+          <div class="action-tags">
+            <el-tag :type="tagType(item.actionType)" effect="light">{{ item.actionLabel }}</el-tag>
+            <el-tag v-if="Number(item.lockedToday) > 0" type="warning" effect="plain" size="small">今日买入 {{ item.lockedToday }} 股 T+1 锁定</el-tag>
+          </div>
+        </div>
+        <div v-if="item.blockedAction" class="t1-block">
+          原信号「{{ blockedLabel(item.blockedAction) }}」因今日可卖股数为 0 已拦截,今日不生成卖出指示;可卖 {{ item.availableToday ?? item.availableShares }} 股。
         </div>
 
         <StatGrid :items="ticket(item)" :cols="isMobile ? 2 : 4" size="sm" class="trade-ticket" />
@@ -67,6 +73,10 @@ function tagType(type: string) {
   return 'info'
 }
 
+function blockedLabel(a: string) {
+  return ({ stop_loss: '止损/减仓', take_profit: '高抛/落袋', t_sell: '做T-先高抛', reduce: '减仓观察' } as Record<string, string>)[a] || a
+}
+
 function consensusText(item: any) {
   const c = item.strategyConsensus || {}
   const effective = Number(c.effective || 0)
@@ -98,6 +108,8 @@ function ticket(item: any): StatItem[] {
 .action-warning { border-left-color: var(--warn); }
 .action-success { border-left-color: var(--up); }
 .action-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.action-tags { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.t1-block { margin-top: 8px; font-size: 12px; color: var(--warn-text); background: var(--warn-soft); padding: 6px 10px; border-radius: var(--radius-sm); }
 .action-top h4 { margin: 0; font-size: 16px; display: flex; align-items: baseline; gap: 8px; }
 .name-link { color: var(--text); text-decoration: none; }
 .action-top h4 span { color: var(--text-3); font-size: 12px; }

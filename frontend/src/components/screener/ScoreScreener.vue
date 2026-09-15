@@ -37,10 +37,14 @@
       </div>
     </AppCard>
 
+    <SnapshotMetaBar v-if="meta" :snapshot="metaSnapshot" :prev="prevHeader" :kline-date="meta.kline_date" :note="metaNote">
+      <span v-if="meta.mode === 'snapshot'" class="meta-hint">同一快照下刷新结果不变;下一快照最晚 15 分钟后(交易时段)</span>
+    </SnapshotMetaBar>
+
     <div v-if="results.length || loading" class="results-area">
       <AppCard class="result-card">
         <template #title>筛选结果 <span class="count num">{{ results.length }}</span></template>
-        <template #sub>点击查看个股详情</template>
+        <template #sub>{{ meta?.mode === 'snapshot' ? '实时排名 = 模型当前动态结果,不等于买入建议;买入决策请看「决策」页' : '点击查看个股详情' }}</template>
         <template #actions>
           <SegmentTabs v-model="sortBy" :options="sortOptions" small />
           <el-button v-if="!isMobile" size="small" @click="exportResults">
@@ -53,6 +57,13 @@
           </template>
           <template #cell-proSignal="{ row }">
             <ProSignalPill :signal="row.proSignal" :code="row.code" />
+          </template>
+          <template #cell-change="{ row }">
+            <RankChangeCell :change="row.change" :rank="row.snapshotRank" :composite-now="row.compositeScore" :price="row.price" :prev-slot="prevHeader?.slot" />
+          </template>
+          <template #cell-buyState="{ row }">
+            <el-tag v-if="row.buy" :type="BUY_STATE_TYPE[row.buy.state as BuyState]" size="small" effect="light">{{ row.buy.label }}</el-tag>
+            <span v-else class="muted">—</span>
           </template>
         </StockTable>
       </AppCard>
@@ -78,6 +89,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { EChartsOption } from 'echarts'
 import { runScreener } from '@/api/strategy'
+import { runScreenerSnapshot, BUY_STATE_TYPE, type BuyState, type ScreenSnapshotMeta, type SnapshotHeader } from '@/api/decision'
 import { getStockProSignal } from '@/api/stock'
 import { useStrategyStore } from '@/stores/strategy'
 import { useSettingsStore } from '@/stores/settings'
@@ -92,6 +104,8 @@ import StrategyStatsPill from '@/components/stock/StrategyStatsPill.vue'
 import ProSignalPill from '@/components/stock/ProSignalPill.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SnapshotMetaBar from '@/components/decision/SnapshotMetaBar.vue'
+import RankChangeCell from '@/components/decision/RankChangeCell.vue'
 
 const strategyStore = useStrategyStore()
 const settings = useSettingsStore()
@@ -100,6 +114,20 @@ const tokens = useChartTokens()
 
 const loading = ref(false)
 const results = ref<any[]>([])
+// 快照口径:results 来自最近一次排名快照(服务端按用户权重重算),同一快照下刷新不变
+const meta = ref<ScreenSnapshotMeta | null>(null)
+const prevHeader = ref<SnapshotHeader | null>(null)
+const metaSnapshot = computed<SnapshotHeader | null>(() => meta.value?.mode === 'snapshot' ? ({
+  snapshot_id: meta.value.snapshot_id!, computed_at: meta.value.computed_at!, quote_time: meta.value.quote_time ?? null,
+  quote_source: meta.value.quote_source ?? null, universe_n: meta.value.universe_n ?? 0, scored_n: meta.value.scored_n ?? 0,
+  trade_date: '', slot: '', buyzone_n: 0, weights_key: meta.value.weights || 'default', elapsed_ms: 0, status: 'ok',
+}) : null)
+const metaNote = computed(() => {
+  if (!meta.value) return null
+  if (meta.value.mode === 'live') return '本次为实时计算(未入快照):' + (meta.value.reason || '') + ';刷新可能变化'
+  if (meta.value.mode === 'none') return meta.value.reason || '尚无快照,已改为实时计算'
+  return null
+})
 const industryOptions = ref<string[]>([])
 type SortKey = 'composite' | 'strategy' | 'pro'
 const sortBy = ref<SortKey>('composite')
@@ -119,6 +147,8 @@ const columns: StockColumn[] = [
   { key: 'marketCap', label: '市值(亿)', type: 'num', digits: 0, format: r => (r.marketCap > 0 ? r.marketCap : null) },
   { key: 'signal', label: '信号', type: 'signal', align: 'center' },
   { key: 'proSignal', label: '专业信号', align: 'center', tooltip: 'Leading 指标: T+1~T+5 短期方向' },
+  { key: 'buyState', label: '买点状态', align: 'center', tooltip: '评分高 ≠ 现在可买:按快照时刻价格与回踩买点区判断;只对综合分前 120 名计算', mobile: 'secondary' },
+  { key: 'change', label: 'Δ排名', align: 'center', tooltip: '相对上一快照(同一权重口径)的排名变化;点开看趋势/量价/板块等各组贡献', mobile: 'secondary' },
 ]
 
 // Defaults are deliberately permissive — composite scores live in the 30-70
@@ -146,7 +176,7 @@ async function runFilter(opts?: { silent?: boolean }) {
   const silent = opts?.silent === true
   loading.value = true
   try {
-    const list: any[] = await runScreener({
+    const req = {
       strategies: strategyStore.getConfigMap(),
       filters: {
         minScore: filters.minScore,
@@ -156,7 +186,20 @@ async function runFilter(opts?: { silent?: boolean }) {
         industries: filters.industries,
       },
       limit: filters.limit,
-    })
+    }
+    // 先走快照口径(确定性 + 带时间戳/数据源/变化拆解);无快照时退回实时计算
+    let list: any[] = []
+    let snap: { items: any[]; meta: ScreenSnapshotMeta; prev?: SnapshotHeader | null } | null = null
+    try { snap = await runScreenerSnapshot(req) } catch { snap = null }
+    if (snap && snap.meta?.mode === 'snapshot') {
+      list = snap.items
+      meta.value = snap.meta
+      prevHeader.value = snap.prev || null
+    } else {
+      list = await runScreener(req)
+      meta.value = { mode: snap?.meta?.mode === 'live' ? 'live' : 'none', reason: snap?.meta?.reason }
+      prevHeader.value = null
+    }
     for (const r of list) r.proSignal = undefined
     results.value = list
     if (!silent) ElMessage.success(`筛选完成，共 ${results.value.length} 只`)
@@ -265,6 +308,8 @@ useRefreshable('综合评分选股', runFilter, { immediate: false, autoRefresh:
 <style scoped>
 .score-screener { display: flex; flex-direction: column; gap: 16px; }
 .count { color: var(--brand); font-weight: 600; margin-left: 4px; }
+.meta-hint { color: var(--text-4); }
+.muted { color: var(--text-4); }
 .filter-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -31,6 +31,15 @@ public class ScreenerController {
         return ApiResponse.ok(data);
     }
 
+    /**
+     * 快照口径的评分选股:从最近一次排名快照按用户权重/过滤重算,
+     * 同一快照下多次请求结果一致;响应为 {items, meta, prev}。
+     */
+    @PostMapping("/screen/snapshot")
+    public ApiResponse<?> screenSnapshot(@RequestBody Map<String, Object> body) {
+        return ApiResponse.ok(dataService.getScreenerSnapshot(new JSONObject(body)));
+    }
+
     @GetMapping("/strategies")
     public ApiResponse<?> strategies() {
         // Ten quantitative strategies — see data-service/strategies/__init__.py

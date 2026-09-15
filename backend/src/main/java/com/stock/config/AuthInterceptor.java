@@ -61,7 +61,8 @@ public class AuthInterceptor implements HandlerInterceptor {
             path.startsWith("/api/strategy-tops") ||
             path.startsWith("/api/backtest") || path.startsWith("/api/lhb") ||
             path.startsWith("/api/moneyflow") || path.startsWith("/api/condition-fields") ||
-            path.startsWith("/api/expression") || path.startsWith("/api/t/")) {
+            path.startsWith("/api/expression") || path.startsWith("/api/t/") ||
+            path.startsWith("/api/decision/")) {
             return true;
         }
 

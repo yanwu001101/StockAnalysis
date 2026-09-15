@@ -27,6 +27,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '盘面', icon: 'Odometer', mobileIcon: 'DataLine' },
       },
       {
+        path: 'decision',
+        name: 'Decision',
+        component: () => import('@/views/Decision.vue'),
+        meta: { title: '决策', icon: 'Aim', mobileIcon: 'Aim' },
+      },
+      {
         path: 'screener',
         name: 'Screener',
         component: () => import('@/views/Screener.vue'),

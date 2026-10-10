@@ -36,10 +36,33 @@ _RUNS_MAX = 50
 # Tables we surface row-counts for. Keep alphabetical so the UI is stable.
 _TABLES = [
     "stock_announcement", "stock_concept", "stock_dividend", "stock_fundamental",
-    "stock_info", "stock_kline_daily", "stock_kline_minute", "stock_kline_weekly",
+    "stock_info", "stock_kline_daily", "stock_kline_weekly",
     "stock_lhb", "stock_moneyflow", "stock_northbound", "stock_shareholder",
     "user", "watchlist", "watchlist_group",
 ]
+
+# 表 → 时间列（用于覆盖度/新鲜度看板）
+_FRESH_TABLES = {
+    "stock_kline_daily": "trade_date",
+    "stock_kline_weekly": "trade_date",
+    "stock_moneyflow": "trade_date",
+    "stock_fundamental": "report_date",
+    "stock_lhb": "trade_date",
+    "stock_shareholder": "report_date",
+}
+
+
+def _active_universe_size() -> int:
+    """现货快照里成交额>0 的股票数——各表覆盖度的分母。"""
+    try:
+        df = cache.get("spot")
+        if df is None or not hasattr(df, "columns") or "成交额" not in df.columns:
+            return 0
+        import pandas as pd
+        amt = pd.to_numeric(df["成交额"], errors="coerce").fillna(0)
+        return int((amt > 0).sum())
+    except Exception:
+        return 0
 
 
 def _mysql_status() -> dict:
@@ -47,6 +70,7 @@ def _mysql_status() -> dict:
     if eng is None:
         return {"connected": False}
     rows: dict = {}
+    freshness: dict = {}
     try:
         with eng.connect() as conn:
             for t in _TABLES:
@@ -55,7 +79,24 @@ def _mysql_status() -> dict:
                     rows[t] = int(r[0]) if r else 0
                 except Exception:
                     rows[t] = None  # table missing or other error
-        return {"connected": True, "tables": rows}
+            # 覆盖度与新鲜度:行数会说谎(旧表行数大但只覆盖 1031 只)。
+            # 分母用现货快照活跃股数,让「覆盖了多少只能算的票」一眼可见。
+            denom = _active_universe_size()
+            for t, date_col in _FRESH_TABLES.items():
+                try:
+                    r = conn.execute(text(
+                        f"SELECT COUNT(DISTINCT code), MAX({date_col}) FROM {t}"
+                    )).fetchone()
+                    codes = int(r[0]) if r and r[0] is not None else 0
+                    freshness[t] = {
+                        "codes": codes,
+                        "maxDate": str(r[1]) if r and r[1] is not None else None,
+                        "coveragePct": round(codes / denom * 100, 1) if denom else None,
+                        "universe": denom,
+                    }
+                except Exception as e:
+                    freshness[t] = {"error": str(e)}
+        return {"connected": True, "tables": rows, "freshness": freshness}
     except Exception as e:
         return {"connected": False, "error": str(e)}
 

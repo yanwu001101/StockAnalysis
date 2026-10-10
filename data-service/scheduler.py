@@ -18,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 import datetime as dt
+import pandas as pd
 
 import cache
 import eastmoney
@@ -26,6 +27,8 @@ import db
 import spot_meta
 from pipelines import spot as spot_pipe
 from pipelines import lhb as lhb_pipe
+from pipelines._helpers import gather_codes
+from pipelines.kline import _to_legacy_chinese as _to_legacy
 from pipelines import moneyflow as mf_pipe
 from pipelines import northbound as nb_pipe
 
@@ -33,7 +36,9 @@ log = logging.getLogger(__name__)
 
 WARMUP_ON_START = os.getenv("WARMUP_ON_START", "false").lower() in ("1", "true", "yes")
 WARMUP_DELAY_SEC = int(os.getenv("WARMUP_DELAY_SEC", "60"))
-WARMUP_TOP_N = int(os.getenv("WARMUP_TOP_N", "300"))
+# 0 = 全市场活跃股（成交额>0）。历史值 300 会让榜外股票永远拿不到每日增量,
+# 因子/回测宇宙被悄悄截断——覆盖度必须显式跟住现货快照。
+WARMUP_TOP_N = int(os.getenv("WARMUP_TOP_N", "0"))
 WARMUP_BATCH_SIZE = int(os.getenv("WARMUP_BATCH_SIZE", "50"))
 
 _sched: BackgroundScheduler | None = None
@@ -48,28 +53,59 @@ def _chunks(seq, n: int):
         yield seq[i:i + n]
 
 
-def refresh_spot_cache():
-    # Force-refresh the in-memory/Redis spot cache by deleting then re-fetching.
+def _spot_ok(df) -> bool:
+    """宇宙按市值排序:没有市值列的残帧会把 top800 排错,宁可不留。"""
+    return (df is not None and not df.empty and "总市值_亿" in df.columns
+            and len(df) >= 4000)
+
+
+def _fetch_spot_chain() -> pd.DataFrame:
+    """全市场快照多源链。每个源各自护栏——单源抛错(东财被墙即抛
+    Server disconnected)绝不能掀掉整条链。腾讯批量行情带总市值且无
+    指纹墙,排首位;东财两源留作参考口径(行业/量比更全)的兜底。"""
+    df = pd.DataFrame()
     try:
-        cache.delete("spot")
-        cache.delete("spot_v2")
-        df = None
+        import tx_realtime
+        df = tx_realtime.fetch_all_spot()
+        if df is not None and not df.empty:
+            spot_meta.record("tencent:qt.gtimg.cn", len(df))
+    except Exception as e:
+        log.warning("[scheduler] tx_realtime spot failed: %s", e)
+        df = pd.DataFrame()
+    if not _spot_ok(df):
         try:
             import em_realtime
-            df = em_realtime.fetch_all_spot()
-            if df is not None and not df.empty and "代码" in df.columns:
-                df["代码"] = df["代码"].astype(str).str.zfill(6)
-                spot_meta.record("eastmoney:" + str(df.attrs.get("source_host") or "push2delay"), len(df))
+            d2 = em_realtime.fetch_all_spot()
+            if d2 is not None and not d2.empty and "代码" in d2.columns:
+                d2["代码"] = d2["代码"].astype(str).str.zfill(6)
+                spot_meta.record("eastmoney:" + str(d2.attrs.get("source_host") or "push2delay"), len(d2))
+                if _spot_ok(d2):
+                    df = d2
         except Exception as e:
             log.debug("[scheduler] em_realtime spot failed: %s", e)
-            df = None
-        if df is None or df.empty:
-            df = eastmoney.fetch_all_spot()
-            if df is not None and not df.empty:
-                spot_meta.record("eastmoney:aiohttp", len(df))
+    if not _spot_ok(df):
+        try:
+            d3 = eastmoney.fetch_all_spot()
+            if d3 is not None and not d3.empty:
+                spot_meta.record("eastmoney:aiohttp", len(d3))
+                if _spot_ok(d3):
+                    df = d3
+        except Exception as e:
+            log.debug("[scheduler] eastmoney aiohttp spot failed: %s", e)
+    return df
+
+
+def refresh_spot_cache():
+    # 抓新后直接覆盖写(不预删缓存:全量抓取需 ~20-30s,预删会让并发 API 请求
+    # 也触发冷抓取,行情接口被拖到 30s+)。东财 clist 被墙后主源是腾讯批量行情,
+    # 每分钟全量打 qt.gtimg.cn 会被限流,调度侧已同步放宽到 5 分钟一档。
+    try:
+        df = _fetch_spot_chain()
         if df is not None and not df.empty:
-            cache.set("spot", df, 60)
+            cache.set("spot", df, 300)
             log.info("[scheduler] spot cache refreshed: %d rows", len(df))
+        else:
+            log.warning("[scheduler] spot chain returned no usable frame, cache untouched")
         try:
             import asyncio
             v2 = asyncio.run(spot_pipe.run())
@@ -81,50 +117,101 @@ def refresh_spot_cache():
         log.warning("[scheduler] refresh_spot_cache failed: %s", e)
 
 
-def warmup_klines(top_n: int = WARMUP_TOP_N):
-    # Pull spot, then concurrently upsert daily/weekly K-lines for the top N (by market cap)
-    # into MySQL. Designed to be safe on second-run (incremental via kline_repo).
+def _kline_fallback(codes: list[str], count: int) -> int:
+    """legacy aiohttp 主路漏掉的股票，用 httpx 客户端的第二条腿补。
+
+    每只按 新浪→东财 顺序取（两个源都是 period='daily' 的日线；新浪与库内
+    口径实测逐 bar 一致，东财 fqt=1 放最后以免开接缝）。
+    """
+    import asyncio
+
+    from sources.eastmoney import default as em_src
+    from sources.sina import default as sina_src
+
+    async def _run():
+        res = await gather_codes(
+            list(codes),
+            lambda c: _first_nonempty([sina_src(), em_src()], c, count),
+            concurrency=6,
+        )
+        total = 0
+        for code, df in res.items():
+            if df is not None and not df.empty:
+                total += kline_repo.upsert_daily(code, _to_legacy(df))
+        return total
+
+    return asyncio.run(_run())
+
+
+async def _first_nonempty(sources, code: str, count: int):
+    import pandas as pd
+
+    for src in sources:
+        try:
+            df = await src.fetch_kline(code, period="daily", count=count)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                return df
+        except Exception as e:
+            log.debug("[scheduler] kline fallback src=%s %s err=%s", src.name, code, e)
+    return None
+
+
+def warmup_klines(top_n: int = WARMUP_TOP_N, count: int = 250):
+    # Pull spot, then concurrently upsert daily/weekly K-lines for the universe
+    # (top_n<=0 = 全部活跃股) into MySQL. Safe on second-run (incremental upsert).
     if db.get_engine() is None:
         log.info("[scheduler] MySQL unavailable; skipping warmup")
         return
     try:
-        # 全市场快照优先用 warm 缓存 / em_realtime(curl_cffi);aiohttp 批量源在本机常被拦截,
-        # 之前一旦它失败整个日K增量就跳过,导致因子日K停在几天前。
+        # 全市场快照:warm 缓存优先,否则走多源链(腾讯主源,单源抛错不掀整链)。
+        # 历史上 aiohttp 源一抛 Server disconnected 整个日K增量就被跳过,因子日K停在几天前。
         spot = cache.get("spot")
+        if (spot is None or getattr(spot, "empty", True)
+                or "总市值_亿" not in getattr(spot, "columns", [])):
+            spot = _fetch_spot_chain()
         if spot is None or getattr(spot, "empty", True):
-            try:
-                import em_realtime
-                spot = em_realtime.fetch_all_spot()
-                if spot is not None and not spot.empty and "代码" in spot.columns:
-                    spot["代码"] = spot["代码"].astype(str).str.zfill(6)
-            except Exception as e:
-                log.warning("[scheduler] warmup: em_realtime spot failed: %s", e)
-                spot = None
-        if spot is None or getattr(spot, "empty", True):
-            spot = eastmoney.fetch_all_spot()
-        if spot is None or spot.empty:
             log.warning("[scheduler] warmup: empty spot, skipping")
             return
         sort_col = "总市值_亿" if "总市值_亿" in spot.columns else None
         if sort_col:
             spot = spot.sort_values(sort_col, ascending=False, na_position="last")
-        codes = spot["代码"].astype(str).str.zfill(6).head(top_n).tolist()
-        log.info("[scheduler] warmup start: %d codes", len(codes))
+        codes = spot["代码"].astype(str).str.zfill(6)
+        # 停牌/无成交股票当日无新棒,且会稀释宇宙——与决策宇宙同口径过滤
+        if "成交额" in spot.columns:
+            amt = pd.to_numeric(spot["成交额"], errors="coerce").fillna(0)
+            codes = codes[amt.values > 0]
+        codes = codes.tolist()
+        if top_n and top_n > 0:
+            codes = codes[:top_n]
+        log.info("[scheduler] warmup start: %d codes (count=%d)", len(codes), count)
 
         total_daily = 0
         total_weekly = 0
         t0 = time.time()
         for batch in _chunks(codes, WARMUP_BATCH_SIZE):
-            # Daily
-            daily_map = eastmoney.batch_klines(batch, klt=101, count=250)
+            # Daily — legacy aiohttp 主路（单股 push2his 未被墙）
+            daily_map = eastmoney.batch_klines(batch, klt=101, count=count)
             for code, df in daily_map.items():
                 if df is not None and not df.empty:
                     total_daily += kline_repo.upsert_daily(code, df)
             # Weekly (every code, less frequent)
-            weekly_map = eastmoney.batch_klines(batch, klt=102, count=200)
+            weekly_map = eastmoney.batch_klines(batch, klt=102, count=max(count // 5, 60))
             for code, df in weekly_map.items():
                 if df is not None and not df.empty:
                     total_weekly += kline_repo.upsert_weekly(code, df)
+            # 兜底：主路漏掉的股票走第二条腿。legacy 内部已按 腾讯→新浪→同花顺
+            # 依次尝试,整批失败通常是 aiohttp 通道被限——换 httpx 客户端的源再打一次。
+            # 顺序按复权基准实测排：sources.sina 与库内逐 bar 完全一致(600 根 0 差),
+            # 东财 httpx(fqt=1) 放最后,避免在腾讯口径序列上开新接缝。
+            missing = [c for c in batch if not daily_map.get(c) or daily_map[c].empty]
+            if missing:
+                try:
+                    n = _kline_fallback(missing, count)
+                    total_daily += n
+                    if n:
+                        log.info("[scheduler] kline fallback served %d rows for %d codes", n, len(missing))
+                except Exception as e:
+                    log.warning("[scheduler] kline fallback failed: %s", e)
             log.info("[scheduler] warmup batch %s done (daily=%d, weekly=%d so far, elapsed=%.1fs)",
                      batch[0], total_daily, total_weekly, time.time() - t0)
         log.info("[scheduler] warmup done: daily=%d, weekly=%d in %.1fs",
@@ -156,7 +243,13 @@ def refresh_lhb():
 def _get_universe_codes(top_n: int = 300) -> list[str]:
     """Get top-N stock codes by market cap from spot cache."""
     df = cache.get("spot")
-    if df is None or df.empty:
+    if df is None or df.empty or "总市值_亿" not in df.columns:
+        try:
+            import tx_realtime
+            df = tx_realtime.fetch_all_spot()
+        except Exception:
+            df = None
+    if df is None or df.empty or "总市值_亿" not in df.columns:
         try:
             df = eastmoney.fetch_all_spot()
         except Exception:
@@ -172,6 +265,25 @@ def _get_universe_codes(top_n: int = 300) -> list[str]:
     )
 
 
+def _get_amount_codes(top_n: int = 600) -> list[str]:
+    """按成交额取活跃股作资金流宇宙——主力净额集中在活跃股上,市值口径
+    会把低换手权重股排进来、把高换手中盘股排出去。"""
+    df = cache.get("spot")
+    if df is None or df.empty or "成交额" not in getattr(df, "columns", []):
+        try:
+            import tx_realtime
+            df = tx_realtime.fetch_all_spot()
+        except Exception:
+            df = None
+    if df is None or df.empty or "成交额" not in df.columns or "代码" not in df.columns:
+        return _get_universe_codes(300)
+    d = pd.DataFrame({
+        "code": df["代码"].astype(str).str.zfill(6),
+        "amt": pd.to_numeric(df["成交额"], errors="coerce"),
+    }).dropna()
+    return d.sort_values("amt", ascending=False)["code"].head(top_n).tolist()
+
+
 def refresh_moneyflow_northbound(days: int = 5):
     """Pull money flow + northbound holdings for top-N universe.
 
@@ -180,22 +292,58 @@ def refresh_moneyflow_northbound(days: int = 5):
     if db.get_engine() is None:
         log.info("[scheduler] MySQL unavailable; skipping moneyflow/northbound")
         return
-    codes = _get_universe_codes(300)
-    if not codes:
+    mf_codes = _get_amount_codes(600)
+    if not mf_codes:
         log.warning("[scheduler] empty universe; skipping moneyflow/northbound")
         return
     try:
-        asyncio.run(mf_pipe.run_batch(codes, days=days))
-        log.info("[scheduler] moneyflow refresh done (days=%d)", days)
+        asyncio.run(mf_pipe.run_batch(mf_codes, days=days))
+        log.info("[scheduler] moneyflow refresh done (days=%d, codes=%d)", days, len(mf_codes))
     except Exception as e:
         log.warning("[scheduler] moneyflow refresh failed: %s", e)
         notifier.job_failed("资金流刷新", str(e))
+    nb_codes = _get_universe_codes(300)
     try:
-        asyncio.run(nb_pipe.run_batch(codes, days=days))
+        asyncio.run(nb_pipe.run_batch(nb_codes, days=days))
         log.info("[scheduler] northbound refresh done (days=%d)", days)
     except Exception as e:
         log.warning("[scheduler] northbound refresh failed: %s", e)
         notifier.job_failed("北向资金刷新", str(e))
+
+
+def _index_kline_safe():
+    """基准指数日线（沪深300/中证500）。这些 bar 同时是回测器的交易日历,
+    停更会让最近窗口的会话表被静默截断,超额收益也变成跟旧曲线比。"""
+    try:
+        import asyncio
+        from pipelines import index_kline as idx_pipe
+        n = asyncio.run(idx_pipe.run())
+        log.info("[scheduler] index kline refresh: %d rows", n)
+    except Exception as e:
+        log.warning("[scheduler] index kline refresh failed: %s", e)
+        notifier.job_failed("基准指数日线刷新", str(e))
+
+
+def _stock_list_safe():
+    """交易所官方清单刷新:补新股/改名/补齐缺失行业。周日 20:00 跑,周一开盘生效。"""
+    try:
+        from jobs import stock_list
+        stats = stock_list.run()
+        log.info("[scheduler] stock_list refresh: %s", stats)
+    except Exception as e:
+        log.warning("[scheduler] stock_list refresh failed: %s", e)
+        notifier.job_failed("股票基础清单刷新", str(e))
+
+
+def _industry_fill_safe():
+    """每日 30 只的小配额补行业:新股入库后不必等整周,又不会突发打爆单股行情。"""
+    try:
+        from jobs import stock_list
+        n = stock_list.fill_only(fill_limit=30)
+        if n:
+            log.info("[scheduler] industry fill done: %d codes", n)
+    except Exception as e:
+        log.warning("[scheduler] industry fill failed: %s", e)
 
 
 def refresh_strategy_scores():
@@ -254,10 +402,21 @@ def start():
             coalesce=True,
         )
 
-        # Spot refresh during trading hours
+        # 基准指数日线 16:20——先于 16:30 的全市场增量,回测日历与基准曲线当天可用
+        sched.add_job(
+            _index_kline_safe,
+            CronTrigger(day_of_week="mon-fri", hour=16, minute=20, timezone="Asia/Shanghai"),
+            id="index_kline_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # Spot refresh during trading hours (5 min: full-market batch quotes
+        # now take ~20-30s via tencent; 1-min cadence would hammer the host)
         sched.add_job(
             refresh_spot_cache,
-            CronTrigger(hour="9-15", minute="*/1", timezone="Asia/Shanghai"),
+            CronTrigger(hour="9-15", minute="*/5", timezone="Asia/Shanghai"),
             id="spot_refresh",
             replace_existing=True,
             max_instances=1,
@@ -279,6 +438,26 @@ def start():
             refresh_moneyflow_northbound,
             CronTrigger(hour=17, minute=10, timezone="Asia/Shanghai"),
             id="mf_nb_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # 股票基础清单（新股/改名/行业补齐）——周日 20:00，周一开盘前生效
+        sched.add_job(
+            _stock_list_safe,
+            CronTrigger(day_of_week="sun", hour=20, minute=0, timezone="Asia/Shanghai"),
+            id="stock_list_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # 缺失行业的每日小配额补齐（30 只 / 1s 间隔，开盘前跑）
+        sched.add_job(
+            _industry_fill_safe,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=40, timezone="Asia/Shanghai"),
+            id="industry_fill",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

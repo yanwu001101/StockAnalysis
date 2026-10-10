@@ -254,7 +254,13 @@ def _select_universe(spot: pd.DataFrame, universe_n: int, min_cap: float) -> pd.
     df = spot.copy()
     code_col = "代码" if "代码" in df.columns else "code"
     cap_col = "总市值_亿" if "总市值_亿" in df.columns else ("market_cap_yi" if "market_cap_yi" in df.columns else None)
+    amt_col = "成交额" if "成交额" in df.columns else ("amount" if "amount" in df.columns else None)
     df[code_col] = df[code_col].astype(str).str.zfill(6)
+    if amt_col:
+        # 停牌/全天无成交 = 不可交易,不得进候选池(实测:停牌的中国重工曾以
+        # 「进入买点 / is_actionable」排进决策分第 4,照做会挂单买不到)。
+        # 开盘头几分钟偶发的 0 成交会在下一快照(15 分钟一档)回到池内。
+        df = df[pd.to_numeric(df[amt_col], errors="coerce").fillna(0) > 0]
     if cap_col:
         df[cap_col] = pd.to_numeric(df[cap_col], errors="coerce")
         df = df[df[cap_col] >= min_cap]
@@ -460,13 +466,27 @@ def headers(trade_date: dt.date | str | None = None, limit: int = 40) -> list[di
 
 
 def recent_ids(n: int = 8, before: str | None = None) -> list[str]:
-    """最近 n 个快照 id,时间升序。before 给定时只取更早的(用于'上一快照')。"""
+    """最近 n 个快照 id,时间升序,且与锚点快照同 trade_date。
+
+    before 给定时锚点为该快照(用于'上一快照');否则锚点为最新快照。
+    同交易日护栏:隔夜因子重算、停摆缺口都会让跨日排名对比失真
+    (σ(排名)/Δ排名 变成纯噪声),窗口只在当日快照内取。
+    """
     if before:
-        df = fetch_df(f"SELECT snapshot_id FROM {HEADER_TABLE} WHERE status='ok' AND snapshot_id < :b "
-                      "ORDER BY computed_at DESC LIMIT :n", {"b": before, "n": int(n)})
+        adf = fetch_df(f"SELECT trade_date FROM {HEADER_TABLE} WHERE snapshot_id=:s", {"s": before})
+        if adf.empty:
+            return []
+        cond, params = "status='ok' AND trade_date=:d AND snapshot_id<:b", {
+            "d": str(adf.iloc[0]["trade_date"]), "b": before, "n": int(n)}
     else:
-        df = fetch_df(f"SELECT snapshot_id FROM {HEADER_TABLE} WHERE status='ok' "
-                      "ORDER BY computed_at DESC LIMIT :n", {"n": int(n)})
+        adf = fetch_df(f"SELECT trade_date FROM {HEADER_TABLE} WHERE status='ok' "
+                       "ORDER BY computed_at DESC LIMIT 1")
+        if adf.empty:
+            return []
+        cond, params = "status='ok' AND trade_date=:d", {
+            "d": str(adf.iloc[0]["trade_date"]), "n": int(n)}
+    df = fetch_df(f"SELECT snapshot_id FROM {HEADER_TABLE} WHERE {cond} "
+                  "ORDER BY computed_at DESC LIMIT :n", params)
     ids = [str(x) for x in df["snapshot_id"].tolist()] if not df.empty else []
     return list(reversed(ids))
 

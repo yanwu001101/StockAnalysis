@@ -189,6 +189,27 @@ def today():
                         "snapshot": None})
     window_ids = snapshot.recent_ids(pool.WINDOW_N)
     head = snapshot.header(latest)
+
+    # 数据新鲜度护栏:快照日 vs 最近交易日(以日K日历为准,自动排除节假日)。
+    # 管线停摆时若不提示,用户会把几天前的数字当成今日决策依据。
+    last_td = None
+    try:
+        import db
+        from sqlalchemy import text
+        eng = db.get_engine()
+        if eng is not None:
+            with eng.connect() as conn:
+                last_td = conn.execute(text("SELECT MAX(trade_date) FROM stock_kline_daily")).scalar()
+    except Exception as e:
+        log.debug("[decision] trading calendar lookup failed: %s", e)
+    stale, stale_note = False, None
+    snap_date = str(head.get("trade_date"))[:10] if head and head.get("trade_date") else None
+    if last_td and snap_date:
+        gap = (dt.date.fromisoformat(str(last_td)[:10]) - dt.date.fromisoformat(snap_date)).days
+        if gap > 0:
+            stale = True
+            stale_note = (f"快照日期 {snap_date} 落后最近交易日 {str(last_td)[:10]}"
+                          f"({gap} 天):当日快照未生成,以下数字不可当作当日依据")
     p = pool.cached_pool(window_ids)
 
     # ② 可卖底仓的做T信号:仅对 available>0 的持仓算(lite 批量,分时数据实时抓取)
@@ -230,6 +251,9 @@ def today():
         "sample_ok": p.get("sample_ok"),
         "sample_note": (None if p.get("sample_ok")
                         else f"当前仅 {p.get('sample_n')} 个快照,排名稳定度需要 ≥{pool.MIN_SAMPLES} 个快照才可评估"),
+        "last_trading_date": str(last_td)[:10] if last_td else None,
+        "stale": stale,
+        "stale_note": stale_note,
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "trade_date_today": str(dt.date.today()),
         "positions_n": len(positions),

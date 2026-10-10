@@ -14,7 +14,7 @@ import asyncio
 import random
 import threading
 import time
-from typing import Dict
+from typing import Dict, Tuple
 from urllib.parse import urlparse
 
 from config import settings
@@ -36,7 +36,7 @@ class RateLimiter:
     def __init__(self):
         self._buckets: Dict[str, _Bucket] = {}
         self._lock = threading.Lock()
-        self._alocks: Dict[str, asyncio.Lock] = {}
+        self._alocks: Dict[Tuple[int, str], asyncio.Lock] = {}
 
     def _bucket(self, host: str) -> _Bucket:
         b = self._buckets.get(host)
@@ -50,10 +50,18 @@ class RateLimiter:
         return b
 
     def _alock(self, host: str) -> asyncio.Lock:
-        lk = self._alocks.get(host)
-        if lk is None:
-            lk = asyncio.Lock()
-            self._alocks[host] = lk
+        # asyncio.Lock 绑定首次使用它的循环;本服务多处用 asyncio.run() 新建
+        # 循环跑同一段代码,跨循环复用同一把锁会直接 RuntimeError(被 get_text
+        # 吞掉后表现为「该源没有数据」)。故按 (循环, host) 持有。
+        key = (id(asyncio.get_running_loop()), host)
+        with self._lock:
+            lk = self._alocks.get(key)
+            if lk is None:
+                lk = asyncio.Lock()
+                self._alocks[key] = lk
+            if len(self._alocks) > 512:      # 循环销毁后其锁不会再被取用
+                self._alocks = {k: v for k, v in self._alocks.items()
+                                if k[0] == key[0]}
         return lk
 
     @staticmethod

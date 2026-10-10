@@ -138,6 +138,140 @@ def f10(code: str):
     return jsonify(out)
 
 
+@bp.route("/<code>/financials")
+def financials(code: str):
+    """财务趋势(季度) + 行业分位估值。
+
+    纯 DB + spot 缓存的快路径,与 /f10(akshare 慢路径)解耦。
+    行业中位数按成员原始值在 pandas 侧取中位,不用 AVG(被极端值拉偏)。
+    缺数据一律 null,前端显示「—」,禁止写 0。
+    """
+    import numpy as np
+
+    code = str(code).zfill(6)
+    eng = db.get_engine()
+    out: dict = {"code": code, "industry": None, "quarters": [], "valuation": None}
+
+    spot = cache.get("spot")
+    target_row = None
+    industry = None
+    ind_codes: list[str] = []
+    if spot is not None and hasattr(spot, "columns") and "代码" in spot.columns and "行业" in spot.columns:
+        s = spot.copy()
+        s["代码"] = s["代码"].astype(str).str.zfill(6)
+        m = s["代码"] == code
+        if m.any():
+            target_row = s[m].iloc[0]
+            ind = str(target_row.get("行业", "") or "").strip()
+            if ind and ind != "-":
+                industry = ind
+                ind_codes = s.loc[s["行业"].astype(str).str.strip() == industry, "代码"].tolist()
+    out["industry"] = industry
+
+    if eng is None:
+        return jsonify(out)
+
+    with eng.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT report_date, revenue, net_profit, revenue_yoy, net_profit_yoy, "
+            "roe, gross_margin, debt_ratio, eps "
+            "FROM stock_fundamental WHERE code=:c ORDER BY report_date DESC LIMIT 10"
+        ), {"c": code}).fetchall()
+        quarters = []
+        for r in rows:
+            quarters.append({
+                "reportDate": r[0].isoformat() if r[0] else None,
+                "revenue": float(r[1]) if r[1] is not None else None,
+                "netProfit": float(r[2]) if r[2] is not None else None,
+                "revenueYoy": float(r[3]) if r[3] is not None else None,
+                "netProfitYoy": float(r[4]) if r[4] is not None else None,
+                "roe": float(r[5]) if r[5] is not None else None,
+                "grossMargin": float(r[6]) if r[6] is not None else None,
+                "debtRatio": float(r[7]) if r[7] is not None else None,
+                "eps": float(r[8]) if r[8] is not None else None,
+            })
+        quarters.reverse()
+        out["quarters"] = quarters
+
+        # 行业各报告期中位数(只取目标出现过的报告期,省扫描量)
+        if ind_codes and quarters:
+            dates = [q["reportDate"] for q in quarters]
+            csv = ",".join(f"'{c}'" for c in ind_codes)
+            dts = ",".join(f"'{d}'" for d in dates)
+            mrows = conn.execute(text(
+                f"SELECT report_date, revenue_yoy, net_profit_yoy, roe "
+                f"FROM stock_fundamental WHERE code IN ({csv}) AND report_date IN ({dts})"
+            )).fetchall()
+        else:
+            mrows = []
+
+        # 行业最新报告期 ROE(用于 ROE 分位)
+        roe_rows = []
+        if ind_codes:
+            csv = ",".join(f"'{c}'" for c in ind_codes)
+            roe_rows = conn.execute(text(
+                f"SELECT f.code, f.roe FROM stock_fundamental f "
+                f"INNER JOIN (SELECT code, MAX(report_date) AS rd FROM stock_fundamental "
+                f"  WHERE code IN ({csv}) GROUP BY code) m "
+                f"ON f.code=m.code AND f.report_date=m.rd "
+                f"WHERE f.roe IS NOT NULL"
+            )).fetchall()
+
+    # 行业中位数聚合
+    ind_med: dict[str, dict] = {}
+    if mrows:
+        mdf = pd.DataFrame(mrows, columns=["rd", "rev_yoy", "np_yoy", "roe"])
+        for rd, g in mdf.groupby("rd"):
+            key = rd.isoformat() if hasattr(rd, "isoformat") else str(rd)
+            ind_med[key] = {
+                "revenueYoy": float(g["rev_yoy"].median()) if g["rev_yoy"].notna().any() else None,
+                "netProfitYoy": float(g["np_yoy"].median()) if g["np_yoy"].notna().any() else None,
+                "roe": float(g["roe"].median()) if g["roe"].notna().any() else None,
+                "count": int(len(g)),
+            }
+    for q in out["quarters"]:
+        med = ind_med.get(q["reportDate"] or "", {})
+        q["indRevenueYoy"] = med.get("revenueYoy")
+        q["indNetProfitYoy"] = med.get("netProfitYoy")
+        q["indRoe"] = med.get("roe")
+        q["indCount"] = med.get("count")
+
+    # 估值:当前 PE/PB(来自 spot)在行业内的分位;ROE 分位基于最新报告期
+    val: dict = {"industry": industry, "industrySize": len(ind_codes)}
+    if target_row is not None:
+        def _f(v):
+            try:
+                f = float(v)
+                return f if np.isfinite(f) else None
+            except (TypeError, ValueError):
+                return None
+        pe = _f(target_row.get("市盈率"))
+        pb = _f(target_row.get("市净率"))
+        val["pe"] = pe if pe is not None and pe > 0 else None
+        val["pb"] = pb if pb is not None and pb > 0 else None
+        if ind_codes and target_row is not None and len(spot) and "市盈率" in spot.columns:
+            ss = spot.copy()
+            ss["代码"] = ss["代码"].astype(str).str.zfill(6)
+            peers = ss[ss["代码"].isin(ind_codes)]
+            pe_vals = pd.to_numeric(peers.get("市盈率"), errors="coerce")
+            pe_vals = pe_vals[(pe_vals > 0) & np.isfinite(pe_vals)]
+            pb_vals = pd.to_numeric(peers.get("市净率"), errors="coerce")
+            pb_vals = pb_vals[(pb_vals > 0) & np.isfinite(pb_vals)]
+            if val["pe"] is not None and len(pe_vals):
+                val["pePctile"] = round(float((pe_vals <= val["pe"]).mean() * 100), 1)
+            if val["pb"] is not None and len(pb_vals):
+                val["pbPctile"] = round(float((pb_vals <= val["pb"]).mean() * 100), 1)
+    if roe_rows:
+        roe_vals = [float(r[1]) for r in roe_rows if r[1] is not None]
+        latest = out["quarters"][-1] if out["quarters"] else None
+        if latest and latest.get("roe") is not None and roe_vals:
+            val["roe"] = latest["roe"]
+            val["roePctile"] = round(float(sum(1 for v in roe_vals if v <= latest["roe"]) / len(roe_vals) * 100), 1)
+            val["roeQuarters"] = len(roe_vals)
+    out["valuation"] = val
+    return jsonify(out)
+
+
 def _peer_compare(code: str) -> dict:
     """Return same-industry stocks ranked alongside the target."""
     spot = cache.get("spot")

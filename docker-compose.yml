@@ -48,7 +48,10 @@ services:
       - EM_JITTER_MIN_MS=50
       - EM_JITTER_MAX_MS=200
       - EM_SPOT_MODE=auto
-      - WARMUP_ON_START=true
+      # 开机不再自动全市场暖机:日K已全量在库(5531 只/434 万行),每次重启都打
+      # 1.1 万次请求会触发行情源限流(2026-10-11 实测把东财单股/push2his 打成分钟级封锁)。
+      # 日常增量靠 16:30 任务;重建库后手动 POST /api/admin/warmup。
+      - WARMUP_ON_START=false
     depends_on:
       mysql:
         condition: service_healthy

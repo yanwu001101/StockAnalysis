@@ -15,6 +15,7 @@ Source adapters call:
 """
 from __future__ import annotations
 import asyncio
+import threading
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -26,44 +27,61 @@ from core.retry import retry, FatalError
 
 
 # ---------------------------------------------------------------------------
-# Shared async client (singleton per event-loop is fine; httpx is thread-safe
-# enough for our worker model with 1 process * 8 threads).
+# Async clients — 每个事件循环各持一份。
+#
+# httpx.AsyncClient 的连接池与 anyio 内部锁绑定在首次驱动它的事件循环上。
+# 本服务大量同步入口(tx_realtime / pipelines / 调度器 / 各 job)习惯用
+# asyncio.run() 临时新建循环来跑同一段异步代码,若共享同一个 client,
+# 第二个循环再去拿这把属于已关闭循环的锁就会永久阻塞——实测并发全市场
+# 抓取会把 gunicorn 的 worker 全部挂死,连 /health 都不返回(CPU 0%)。
+# 故按循环持有客户端,并回收已关闭循环的残留。
 # ---------------------------------------------------------------------------
 
-_client: Optional[httpx.AsyncClient] = None
-_client_lock = asyncio.Lock()
+_clients: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
+_clients_guard = threading.Lock()
+
+
+def _new_client() -> httpx.AsyncClient:
+    limits = httpx.Limits(
+        max_connections=settings.http.max_connections,
+        max_keepalive_connections=settings.http.max_keepalive,
+    )
+    timeout = httpx.Timeout(
+        settings.http.timeout_s,
+        connect=settings.http.connect_timeout_s,
+    )
+    return httpx.AsyncClient(
+        http2=settings.http.http2,
+        limits=limits,
+        timeout=timeout,
+        verify=settings.http.verify_ssl,
+        follow_redirects=True,
+    )
 
 
 async def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is not None and not _client.is_closed:
-        return _client
-    async with _client_lock:
-        if _client is not None and not _client.is_closed:
-            return _client
-        limits = httpx.Limits(
-            max_connections=settings.http.max_connections,
-            max_keepalive_connections=settings.http.max_keepalive,
-        )
-        timeout = httpx.Timeout(
-            settings.http.timeout_s,
-            connect=settings.http.connect_timeout_s,
-        )
-        _client = httpx.AsyncClient(
-            http2=settings.http.http2,
-            limits=limits,
-            timeout=timeout,
-            verify=settings.http.verify_ssl,
-            follow_redirects=True,
-        )
-        return _client
+    loop = asyncio.get_running_loop()
+    client = _clients.get(loop)
+    if client is not None and not client.is_closed:
+        return client
+    # 循环已关闭 → 连接池作废,只能丢引用(asyncio.run 退出时该循环已清理)
+    for dead in [k for k in _clients if k is not loop and k.is_closed()]:
+        _clients.pop(dead, None)
+    with _clients_guard:
+        client = _clients.get(loop)
+        if client is None or client.is_closed:
+            client = _new_client()
+            _clients[loop] = client
+    return client
 
 
 async def shutdown() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+    for client in list(_clients.values()):
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+    _clients.clear()
 
 
 # ---------------------------------------------------------------------------

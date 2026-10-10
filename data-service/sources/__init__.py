@@ -21,11 +21,13 @@ from sources.xueqiu import default as xq_default
 
 
 _CHAINS: dict[str, list[AbstractSource]] = {
-    "spot": [em_default(), ak_default()],
+    # tencent 优先:qt.gtimg.cn 无指纹墙且带总市值;东财 clist 2026-09 起全面拦截
+    "spot": [tx_default(), em_default(), ak_default()],
     "kline": [em_default(), tx_default(), sina_default(), ths_default(), ak_default()],
     "minute_kline": [em_default(), tx_default()],
     "fundamental": [ts_default(), em_default(), ak_default()],
-    "moneyflow": [em_default(), ak_default()],
+    # 新浪 ssl_qsfx_lscjfb 无墙;东财 fflow daykline 2026-09 起被拦截
+    "moneyflow": [sina_default(), em_default(), ak_default()],
     "northbound_holdings": [ts_default(), em_default(), ak_default()],
     "lhb": [em_default()],
     "shareholder": [em_default()],

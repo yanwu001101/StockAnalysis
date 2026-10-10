@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Money flow blueprint (main funds / northbound / industry rotation)."""
 from __future__ import annotations
+import datetime as dt
+import threading
 import time
 from typing import Optional
 
@@ -75,7 +77,6 @@ def _latest_date(table: str):
 
 
 def _needs_refresh(table: str, max_age_days: int) -> bool:
-    import datetime as dt
     latest = _latest_date(table)
     if latest is None:
         return True
@@ -84,30 +85,102 @@ def _needs_refresh(table: str, max_age_days: int) -> bool:
     return (dt.date.today() - latest).days > max_age_days
 
 
+def _mf_stale() -> bool:
+    """资金流以最近交易日为锚:kline 日更(16:30),资金流 17:10 落地。
+    自然日口径会在周一/长假后误判「不旧」而永不补数,必须比对两张表的
+    MAX(trade_date)。"""
+    latest = _latest_date("stock_moneyflow")
+    anchor = _latest_date("stock_kline_daily")
+    if anchor is None:
+        return latest is None
+    if latest is None:
+        return True
+    if hasattr(latest, "date"):
+        latest = latest.date()
+    return latest < anchor
+
+
+# 同步 warm 跑在请求路径里(每 code 一次 HTTP),必须单飞 + 每日一次,
+# 否则并发请求会叠加成请求风暴;失败时清除标记让下次请求重试。
+_WARM_LOCK = threading.Lock()
+_WARM_ATTEMPTED: dict[str, dt.date] = {}
+
+
+def _warm_gate(table: str) -> bool:
+    today = dt.date.today()
+    if _WARM_ATTEMPTED.get(table) == today:
+        return False
+    if not _WARM_LOCK.acquire(blocking=False):
+        return False
+    _WARM_ATTEMPTED[table] = today
+    return True
+
+
+def _warm_codes(days: int, cap: int = 360) -> list[str]:
+    """暖存宇宙 = 窗口内已有数的股(保连续) + 成交额 top(资金流集中在
+    活跃股;市值口径会漏掉高换手中盘股)。"""
+    eng = db.get_engine()
+    codes: list[str] = []
+    if eng is not None:
+        with eng.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT DISTINCT code FROM stock_moneyflow "
+                "WHERE trade_date >= (CURDATE() - INTERVAL :d DAY)"
+            ), {"d": days}).fetchall()
+        codes = [str(r[0]).zfill(6) for r in rows]
+    df = cache.get("spot")
+    if df is not None and hasattr(df, "columns") and "成交额" in df.columns and "代码" in df.columns:
+        import pandas as pd
+        d = pd.DataFrame({
+            "code": df["代码"].astype(str).str.zfill(6),
+            "amt": pd.to_numeric(df["成交额"], errors="coerce"),
+        }).dropna()
+        top = d.sort_values("amt", ascending=False)["code"].head(240).tolist()
+        seen = set(codes)
+        codes += [c for c in top if c not in seen]
+    return codes[:cap]
+
+
 def _warm_moneyflow(days: int, limit: int) -> None:
-    if not _needs_refresh("stock_moneyflow", max(2, days)):
+    if not _mf_stale():
         return
+    if not _warm_gate("moneyflow"):
+        return
+    ok = False
     try:
         import asyncio
         from pipelines import moneyflow as mf_pipe
-        codes = _top_codes(limit)
+        codes = _warm_codes(days)
         if codes:
             asyncio.run(mf_pipe.run_batch(codes, days=max(days, 10)))
+        ok = True
     except Exception as e:
         print(f"[moneyflow] warm moneyflow failed: {e}")
+    finally:
+        if not ok:
+            _WARM_ATTEMPTED.pop("moneyflow", None)
+        _WARM_LOCK.release()
 
 
 def _warm_northbound(days: int, limit: int) -> None:
     if not _needs_refresh("stock_northbound", max(7, days * 2)):
         return
+    if not _warm_gate("northbound"):
+        return
+    ok = False
     try:
         import asyncio
         from pipelines import northbound as nb_pipe
         codes = _top_codes(limit)
         if codes:
             asyncio.run(nb_pipe.run_batch(codes, days=max(days, 30)))
+        ok = True
     except Exception as e:
         print(f"[moneyflow] warm northbound failed: {e}")
+    finally:
+        if not ok:
+            _WARM_ATTEMPTED.pop("northbound", None)
+        _WARM_LOCK.release()
 
 
 @bp.route("/main-rank")
@@ -124,6 +197,9 @@ def main_rank():
         return jsonify([])
     _warm_moneyflow(days, min(max(limit * 4, 80), 240))
     order = "DESC" if direction == "inflow" else "ASC"
+    latest_mf = _latest_date("stock_moneyflow")
+    as_of = latest_mf.isoformat() if latest_mf is not None else None
+    stale = _mf_stale()
     with eng.connect() as conn:
         rows = conn.execute(text(
             f"SELECT code, SUM(main_net) AS net_sum, "
@@ -151,6 +227,8 @@ def main_rank():
             "superLargeSum": float(r[2] or 0),
             "largeSum": float(r[3] or 0),
             "days": int(r[4] or 0),
+            "asOf": as_of,
+            "stale": stale,
         })
     return jsonify(out)
 

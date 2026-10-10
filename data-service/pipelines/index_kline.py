@@ -14,6 +14,7 @@ import pandas as pd
 from core.trace import PIPELINE_ROWS, logger
 from repo import index_kline_repo
 from sources.eastmoney import default as _em_default
+from sources.sina import default as _sina_default
 
 # 东财指数 secid：沪市指数前缀 1.，深市 0.
 BENCHMARKS: dict[str, str] = {
@@ -24,18 +25,25 @@ BENCHMARKS: dict[str, str] = {
 
 async def run(codes: Iterable[str] | None = None, count: int = 900) -> int:
     """Sync index daily bars (default ~3.5 years, enough for backtest windows)."""
-    src = _em_default()
+    em = _em_default()
+    sina = _sina_default()
     wanted = dict(BENCHMARKS)
     if codes:
         keep = set(codes)
         wanted = {k: v for k, v in BENCHMARKS.items() if k in keep}
     total = 0
     for code, secid in wanted.items():
-        try:
-            df = await src.fetch_index_kline(secid, count=count)
-        except Exception as e:
-            logger.warning("[pipeline:index_kline] %s fetch failed: %s", code, e)
-            continue
+        df = pd.DataFrame()
+        for src in (em, sina):
+            try:
+                df = await src.fetch_index_kline(secid, count=count)
+            except Exception as e:
+                logger.warning("[pipeline:index_kline] %s src=%s failed: %s", code, src.name, e)
+                df = pd.DataFrame()
+            if df is not None and not df.empty:
+                if src is not em:
+                    logger.info("[pipeline:index_kline] %s served by %s", code, src.name)
+                break
         if df is None or df.empty:
             continue
         df = df.copy()

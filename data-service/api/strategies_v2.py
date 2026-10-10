@@ -568,7 +568,12 @@ def screen():
     ind_col = "industry" if "industry" in df.columns else "行业"
     price_col = "price" if "price" in df.columns else "最新价"
     chg_col = "pct_change" if "pct_change" in df.columns else "涨跌幅"
+    amt_col = "amount" if "amount" in df.columns else (
+        "成交额" if "成交额" in df.columns else None)
 
+    if amt_col:
+        # 停牌/全天无成交 = 下不了单,不进选股结果(与 decision/snapshot 同口径)
+        df = df[pd.to_numeric(df[amt_col], errors="coerce").fillna(0) > 0]
     if cap_col:
         cap_values = pd.to_numeric(df[cap_col], errors="coerce")
         df = df[cap_values.isna() | (cap_values <= 0) | (cap_values >= min_market_cap_yi)]
@@ -910,3 +915,65 @@ def stock_pro_signal(code: str):
         "horizon": result.horizon,
         "forecast": result.forecast,
     }))
+
+
+@bp.route("/strategies/batch", methods=["POST"])
+def strategies_batch():
+    """批量取多只股票的 v2 综合分与策略统计（盘面高分表用，替掉逐股 N+1）。
+
+    与 /screen 同一引擎、同一默认权重（_bulk_load_panels + _score_all），
+    保证同一只股票在盘面与选股页看到同一套数字（SKILL：批量体检与详情共用引擎）。
+    返回 items 顺序与入参 codes 一致，前端按 code 映射即可。
+    """
+    body = request.get_json(silent=True) or {}
+    codes: list[str] = []
+    seen: set[str] = set()
+    for c in (body.get("codes") or []):
+        s = str(c).strip().zfill(6)
+        if s and s not in seen:
+            seen.add(s)
+            codes.append(s)
+        if len(codes) >= 60:
+            break
+    if not codes:
+        return jsonify({"items": []})
+
+    panels: dict[str, StrategyContext] = {}
+    for s in range(0, len(codes), _BULK_CHUNK):
+        try:
+            panels.update(_bulk_load_panels(codes[s:s + _BULK_CHUNK]))
+        except Exception as e:
+            print(f"[strategies_batch] bulk load failed: {e}")
+
+    # 权重口径与 /screen、/stock/<code>/score 完全一致：前端传了就用用户的配置，
+    # 没传则用默认权重。否则盘面与选股页会出现两个「综合分」。
+    weights = _parse_weights(body)
+    strategy_params = body.get("strategyParams") or body.get("strategy_params") or {}
+
+    items = []
+    for code in codes:
+        ctx = panels.get(code)
+        if ctx is None:
+            try:
+                ctx = _load_ctx(code)
+            except Exception:
+                ctx = None
+        if ctx is None:
+            items.append({"code": code, "total": None, "signal": None, "strategyStats": None})
+            continue
+        composite, signal, _, out_list = _score_all(ctx, weights, strategy_params)
+        effective = [it for it in out_list
+                     if not it.get("no_data") and not (it.get("details") or {}).get("disabled")]
+        items.append({
+            "code": code,
+            "total": composite,
+            "signal": signal,
+            "strategyStats": {
+                "effective": len(effective),
+                "total": len(out_list),
+                "bullish": sum(1 for it in effective if it.get("signal") == "bullish"),
+                "bearish": sum(1 for it in effective if it.get("signal") == "bearish"),
+                "triggered": sum(1 for it in effective if it.get("triggered")),
+            },
+        })
+    return jsonify(json_safe({"items": items}))

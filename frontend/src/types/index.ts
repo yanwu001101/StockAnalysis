@@ -62,6 +62,33 @@ export interface KLineData {
 }
 
 // Market types
+export interface BreadthBin { label: string; count: number }
+
+export interface MarketBreadth {
+  /** 参与统计的「当日有成交」股票数;停牌/无成交不计入(见 excluded) */
+  sampled: number
+  excluded: number
+  up: number
+  down: number
+  flat: number
+  limitUp: number
+  limitDown: number
+  touchedUp: number
+  touchedDown: number
+  brokenUp: number
+  brokenDown: number
+  /** 炸板率 % = 触板未封住 / 触板;无触板时为 null */
+  brokenRate: number | null
+  brokenRateDown: number | null
+  upOver5: number
+  downOver5: number
+  medianChange: number | null
+  totalAmountYi: number | null
+  /** 成交额前 5% 个股占全市场成交额比例 % — 衡量资金集中度 */
+  top5pctAmountShare: number | null
+  histogram: BreadthBin[]
+}
+
 export interface MarketSummary {
   totalStocks: number
   upCount: number
@@ -70,16 +97,23 @@ export interface MarketSummary {
   avgChange: number
   topGainers: Stock[]
   topLosers: Stock[]
-  northboundFlow: number
+  /** 北向每日净买入自 2024-08 停止披露,恒为 null;不得回退成 0 */
+  northboundFlow: number | null
   hotSectors: SectorData[]
+  breadth?: MarketBreadth | null
 }
 
 export interface SectorData {
   name: string
   change: number
-  flow: number
-  momentum: number
+  /** 资金流/动量口径当前无可用数据源 → null,不是 0 */
+  flow: number | null
+  momentum: number | null
   rank: number
+  count?: number
+  amountYi?: number | null
+  leader?: string | null
+  leaderChange?: number | null
 }
 
 // Watchlist

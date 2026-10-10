@@ -1,14 +1,23 @@
 <template>
-  <div class="snap-meta" :class="{ stale }">
+  <div class="snap-meta" :class="{ stale: stale || !!staleNote }">
     <template v-if="snapshot">
-      <span class="sm-item"><span class="sm-k">本次计算</span><b class="num">{{ fmt(snapshot.computed_at) }}</b></span>
-      <span class="sm-item"><span class="sm-k">行情时间</span><b class="num">{{ snapshot.quote_time ? fmt(snapshot.quote_time) : '—' }}</b></span>
-      <span class="sm-item"><span class="sm-k">数据源</span><b>{{ snapshot.quote_source || '—' }}</b></span>
-      <span v-if="klineDate" class="sm-item"><span class="sm-k">因子日K截止</span><b class="num">{{ klineDate }}</b></span>
-      <span class="sm-item"><span class="sm-k">快照</span><b class="mono">{{ snapshot.snapshot_id }}</b><span v-if="prev" class="sm-prev">上一 {{ prev.slot }}</span></span>
+      <!-- 默认一行摘要（快照号/行情/宇宙/滞后告警），完整元信息点「详情」展开 -->
+      <span class="sm-item"><span class="sm-k">快照</span><b class="mono">{{ snapshot.snapshot_id }}</b></span>
+      <span class="sm-item"><span class="sm-k">行情</span><b class="num">{{ snapshot.quote_time ? fmt(snapshot.quote_time) : '—' }}</b></span>
       <span class="sm-item"><span class="sm-k">宇宙</span><b class="num">{{ snapshot.scored_n }}</b><span class="sm-k">/{{ snapshot.universe_n }} 只</span></span>
-      <span v-if="stale" class="sm-warn">快照已超过 {{ staleMinutes }} 分钟,盘中请等待下一快照(每 15 分钟)</span>
-      <span v-if="note" class="sm-warn">{{ note }}</span>
+      <span v-if="staleNote" class="sm-warn">⚠ {{ staleNote }}</span>
+      <span v-else-if="stale" class="sm-warn">⚠ 快照已滞后 {{ staleMinutes }} 分钟</span>
+      <button class="sm-toggle" type="button" @click="expanded = !expanded">
+        {{ expanded ? '收起 ▲' : '详情 ▼' }}
+      </button>
+      <template v-if="expanded">
+        <span class="sm-item"><span class="sm-k">本次计算</span><b class="num">{{ fmt(snapshot.computed_at) }}</b></span>
+        <span class="sm-item"><span class="sm-k">数据源</span><b>{{ snapshot.quote_source || '—' }}</b></span>
+        <span v-if="klineDate" class="sm-item"><span class="sm-k">因子日K截止</span><b class="num">{{ klineDate }}</b></span>
+        <span v-if="prev" class="sm-item"><span class="sm-k">上一快照</span><b class="mono">{{ prev.slot }}</b></span>
+        <span v-if="stale" class="sm-warn">盘中请等待下一快照（每 15 分钟）</span>
+        <span v-if="note" class="sm-warn">{{ note }}</span>
+      </template>
     </template>
     <template v-else>
       <span class="sm-warn">{{ note || '尚无排名快照' }}</span>
@@ -18,16 +27,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { SnapshotHeader } from '@/api/decision'
 
 // 快照元信息条:让用户一眼看到"这组数字是什么时候、用什么行情、哪个数据源算出来的"。
 // 同一快照 id 下的数据不会变;变化只会在快照 id 变化时出现。
+const expanded = ref(false)
+
 const props = defineProps<{
   snapshot: SnapshotHeader | null | undefined
   prev?: SnapshotHeader | null
   klineDate?: string | null
   note?: string | null
+  /** 快照日落后最近交易日时的显式告警(盘外/停摆场景,由服务端判定) */
+  staleNote?: string | null
 }>()
 
 function fmt(s: string) {
@@ -60,6 +73,10 @@ const stale = computed(() => {
 .sm-prev { color: var(--text-4); margin-left: 4px; }
 .sm-warn { color: var(--warn-text); }
 .snap-meta.stale { outline: 1px solid var(--warn); }
+.sm-toggle {
+  border: none; background: none; cursor: pointer;
+  font-size: 12px; color: var(--brand); padding: 2px 4px; white-space: nowrap;
+}
 @media (max-width: 768px) {
   .snap-meta { gap: 4px 12px; padding: 8px 10px; }
 }

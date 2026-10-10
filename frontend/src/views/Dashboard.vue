@@ -1,10 +1,15 @@
 <template>
   <div class="page-container dashboard">
-    <PageHeader title="今日盘面" sub="综合评分、北向资金与板块轮动一览" />
+    <PageHeader title="今日盘面" sub="市场宽度、涨停梯队、行业资金分布与高分股票一览" />
 
     <IndexStrip :indices="indices" />
 
     <StatGrid :items="summaryCards" :cols="isMobile ? 2 : 4" variant="card" :size="isMobile ? 'md' : 'lg'" :loading="marketStore.loading" class="stats" />
+
+    <section class="breadth-grid">
+      <MarketBreadthCard :breadth="marketStore.summary?.breadth" :loading="marketStore.loading" />
+      <SectorHeatmap :sectors="marketStore.sectors" :loading="marketStore.loading" :height="isMobile ? 240 : 300" />
+    </section>
 
     <section class="main-grid">
       <AppCard title="高分股票" sub="综合评分排名前列">
@@ -44,9 +49,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useMarketStore } from '@/stores/market'
+import { useStrategyStore } from '@/stores/strategy'
 import { useRefreshable } from '@/composables/useRefreshable'
 import { useDevice } from '@/composables/useDevice'
-import { getStockStrategies } from '@/api/stock'
+import { postStrategiesBatch } from '@/api/stock'
 import type { StockColumn, StatItem } from '@/types/ui'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import AppCard from '@/components/ui/AppCard.vue'
@@ -56,6 +62,8 @@ import ScorePill from '@/components/stock/ScorePill.vue'
 import StrategyStatsPill from '@/components/stock/StrategyStatsPill.vue'
 import IndexStrip from '@/components/dashboard/IndexStrip.vue'
 import MarketRankCard from '@/components/dashboard/MarketRankCard.vue'
+import MarketBreadthCard from '@/components/dashboard/MarketBreadthCard.vue'
+import SectorHeatmap from '@/components/dashboard/SectorHeatmap.vue'
 import NorthboundChart from '@/components/dashboard/NorthboundChart.vue'
 import SectorChart from '@/components/dashboard/SectorChart.vue'
 
@@ -79,31 +87,32 @@ const topColumns: StockColumn[] = [
   { key: 'price', label: '最新价', type: 'price' },
   { key: 'changePercent', label: '涨跌幅', type: 'change' },
   { key: 'compositeScore', label: '评分', type: 'score', align: 'center', sortable: true },
-  { key: 'compositeScoreV2', label: '综合策略分', type: 'score', align: 'center', sortable: true, tooltip: '22 个策略加权综合分（v2）' },
+  { key: 'compositeScoreV2', label: '综合策略分', type: 'score', align: 'center', sortable: true, tooltip: '策略加权综合分（v2 引擎，与选股页同一权重口径）' },
   { key: 'strategyStats', label: '策略评分', align: 'center', tooltip: '看多策略数 / 有效策略数 · 触发数', mobile: 'secondary' },
   { key: 'signal', label: '信号', type: 'signal', align: 'center' },
 ]
 
-// 高分股票表格里的 v2 综合分与策略统计按需补拉，6 路并发。
+// 高分表的 v2 综合分与策略统计：一次批量请求，与选股页同一引擎（_bulk_load_panels +
+// _score_all），替掉原先每只股一次 /stock/<code>/strategies 的 20 路 N+1。
+// 旧路径其实一直是坏的：legacy 接口不返回 aggregate，「策略评分」列永远显示「—」。
 async function preloadStrategyDetails() {
-  const concurrency = 6
   const list = topStocks.value
-  let idx = 0
-  const worker = async () => {
-    while (idx < list.length) {
-      const i = idx++
-      const row: any = list[i]
-      if (row.compositeScoreV2 !== undefined) continue
-      try {
-        const d: any = await getStockStrategies(row.code)
-        row.compositeScoreV2 = Math.round(d.total ?? d.composite_score ?? 0)
-        row.strategyStats = d.aggregate || null
-      } catch {
-        row.strategyStats = null
-      }
-    }
+  if (!list.length) return
+  const codes = list.map((r: any) => String(r.code).padStart(6, '0'))
+  try {
+    const res = await postStrategiesBatch(codes, useStrategyStore().getConfigMap())
+    const map = new Map<string, any>((res?.items || []).map((it: any) => [String(it.code).padStart(6, '0'), it]))
+    list.forEach((row: any) => {
+      const it = map.get(String(row.code).padStart(6, '0'))
+      row.compositeScoreV2 = it?.total ?? null      // null = 算不出 → 显示「—」
+      row.strategyStats = it?.strategyStats ?? null
+    })
+  } catch {
+    list.forEach((row: any) => {
+      row.compositeScoreV2 = null
+      row.strategyStats = null
+    })
   }
-  await Promise.all(Array(concurrency).fill(0).map(() => worker()))
 }
 
 watch(() => marketStore.topStocks, (v) => {
@@ -128,6 +137,12 @@ useRefreshable('今日盘面', loadAll)
 <style scoped>
 .dashboard { display: flex; flex-direction: column; gap: 16px; }
 .dashboard > :deep(.page-header) { margin-bottom: 0; }
+.breadth-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 16px;
+  align-items: start;
+}
 .main-grid {
   display: grid;
   grid-template-columns: 1fr 340px;
@@ -137,10 +152,10 @@ useRefreshable('今日盘面', loadAll)
 .side-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .dim-load { color: var(--text-4); font-size: 13px; letter-spacing: 1px; }
 @media (max-width: 1100px) {
-  .main-grid { grid-template-columns: 1fr; }
+  .main-grid, .breadth-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
   .dashboard { gap: 12px; }
-  .main-grid, .side-stack { gap: 12px; }
+  .main-grid, .side-stack, .breadth-grid { gap: 12px; }
 }
 </style>

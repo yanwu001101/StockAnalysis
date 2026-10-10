@@ -8,6 +8,7 @@
       <span class="win-label">统计窗口</span>
       <SegmentTabs v-model="windowDays" :options="windowOptions" small />
     </template>
+    <div v-if="staleNote" class="stale-note">{{ staleNote }}</div>
     <StockTable
       :rows="rows" :columns="columns" :loading="loading" rank
       :error="loadError"
@@ -55,12 +56,38 @@ const rows = computed<any[]>(() => {
   return mainRows.value
 })
 
+// 北向逐日披露 2024-08 起停,后端会退回最后可得窗口并标 stale。
+// 不写出来会被读成「近 N 日加仓榜」,属过期数据伪装。
+const staleNote = computed(() => {
+  if (props.kind === 'nb') {
+    const first = nbRows.value[0]
+    if (!first?.stale) return ''
+    const to = String(first.lastDate || '').slice(0, 10)
+    return `交易所已停止北向逐日披露,下表为最后可得窗口 ${to ? `（截至 ${to}）` : ''},非近期数据`
+  }
+  if (props.kind === 'main') {
+    const first = mainRows.value[0]
+    if (first?.stale) {
+      const to = String(first.asOf || '').slice(0, 10)
+      return `资金流数据落后于最近交易日${to ? `（截至 ${to}）` : ''},当日盘后更新前请勿当作最新依据`
+    }
+    const thin = mainRows.value.filter(r => r.days < windowDays.value).length
+    if (mainRows.value.length && thin === mainRows.value.length) {
+      return `窗口设为 ${windowDays.value} 日,但当前个股资金流仅覆盖 ${mainRows.value[0].days} 天(历史回补中)`
+    }
+  }
+  return ''
+})
+
 const MAIN_COLUMNS: StockColumn[] = [
   { key: 'price', label: '最新价', type: 'price' },
   { key: 'changePercent', label: '涨跌幅', type: 'change' },
-  { key: 'mainNetSum', label: '主力净额', type: 'amount' },
+  { key: 'mainNetSum', label: '主力净额', type: 'amount', tooltip: '窗口内累计净流入 = 超大单 + 大单(净额口径,单位随全局设置)' },
   { key: 'superLargeSum', label: '超大单', type: 'amount' },
   { key: 'largeSum', label: '大单', type: 'amount' },
+  { key: 'days', label: '覆盖', type: 'num', digits: 0, align: 'center',
+    tooltip: '窗口内有资金流数据的天数——少于窗口天数说明该股历史不全,累计值偏小',
+    format: (r: MainFlowRow) => `${r.days}/${windowDays.value}`, mobile: 'hidden' },
 ]
 const NB_COLUMNS: StockColumn[] = [
   { key: 'price', label: '最新价', type: 'price', by: 'sharesDiff' },
@@ -101,4 +128,13 @@ useRefreshable('资金流向', load)
 
 <style scoped>
 .win-label { font-size: 12px; color: var(--text-3); }
+.stale-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--warn-text);
+  background: var(--warn-soft);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
 </style>

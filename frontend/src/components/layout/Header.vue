@@ -20,13 +20,6 @@
           <span class="pill-label">跌</span>
           <span class="pill-val num">{{ marketStore.summary.downCount }}</span>
         </span>
-        <span class="pill-sep"></span>
-        <span class="pill-item">
-          <span class="pill-label">北向</span>
-          <span class="pill-val num" :class="marketStore.summary.northboundFlow >= 0 ? 'price-up' : 'price-down'">
-            {{ formatFlow(marketStore.summary.northboundFlow) }}
-          </span>
-        </span>
       </div>
 
       <el-tooltip content="刷新市场概览" placement="bottom">
@@ -79,11 +72,6 @@ async function refreshData() {
 function handleLogout() {
   userStore.logout()
   router.push('/login')
-}
-
-function formatFlow(val: number) {
-  if (!val) return '--'
-  return (val / 10000).toFixed(1) + '亿'
 }
 </script>
 

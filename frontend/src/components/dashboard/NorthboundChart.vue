@@ -1,6 +1,11 @@
 <template>
   <AppCard title="北向资金" :sub="sub" compact>
-    <BaseChart :option="option" :height="height" :loading="loading" />
+    <div v-if="discontinued" class="nb-stopped">
+      <strong>逐日披露已停止</strong>
+      <p>交易所自 2024-08-19 起不再公布北向每日净买入与实时额度。最后可得口径为截至
+        {{ lastDate }} 的{{ series.label }},此后不再更新,故不以「实时」图表呈现。</p>
+    </div>
+    <BaseChart v-else :option="option" :height="height" :loading="loading" />
   </AppCard>
 </template>
 
@@ -33,7 +38,20 @@ const series = computed(() => {
   return { label: '持股市值日变动', values, rows: kept }
 })
 
+const lastDate = computed(() => String(props.data?.[props.data.length - 1]?.date || '').slice(0, 10))
+const loadingOnly = computed(() => !!props.loading && !(props.data?.length))
+
+// 末点距今 >30 天即视为「已停披露」而非「当期数据」:继续画柱图会被读成实时行情,
+// 属 SKILL §30 禁止的过期数据伪装。
+const discontinued = computed(() => {
+  const d = lastDate.value
+  if (!d || loadingOnly.value) return false
+  const t = new Date(`${d}T00:00:00`).getTime()
+  return Number.isFinite(t) && (Date.now() - t) / 86400000 > 30
+})
+
 const sub = computed(() => {
+  if (discontinued.value) return `自 2024-08 停止逐日披露 · 最后口径截至 ${lastDate.value}`
   const last = props.data?.[props.data.length - 1]
   const stale = last?.stale ? ` · 数据截至 ${last.date}` : ''
   return series.value.label === '净买入' ? `每日净买入${stale}` : `持股市值日变动（无净买入披露时的替代口径）${stale}`
@@ -69,3 +87,18 @@ const option = computed<EChartsOption | null>(() => {
   }
 })
 </script>
+
+<style scoped>
+.nb-stopped {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.nb-stopped strong { color: var(--warn-text); font-size: 13px; }
+.nb-stopped p { margin: 0; color: var(--text-3); }
+</style>

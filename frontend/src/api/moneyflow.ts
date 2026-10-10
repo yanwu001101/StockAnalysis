@@ -10,6 +10,10 @@ export interface MainFlowRow {
   superLargeSum: number
   largeSum: number
   days: number
+  /** 资金流最新交易日(ISO),早于最近交易日即 stale */
+  asOf?: string | null
+  /** true = 资金流落后于最近交易日,当日数据待盘后更新 */
+  stale?: boolean
 }
 
 export interface NbFlowRow {
@@ -23,6 +27,8 @@ export interface NbFlowRow {
   currentRatio: number
   firstDate: string
   lastDate: string
+  /** true = 近期窗口内无数据,退回到最后可得窗口(北向 2024-08 起停止逐日披露) */
+  stale?: boolean
 }
 
 export interface SectorRow {
@@ -54,6 +60,3 @@ export function getSectorFlow(): Promise<SectorRow[]> {
   return request.get('/moneyflow/sector')
 }
 
-export function getStockFlow(code: string, days = 60): Promise<StockFlowPoint[]> {
-  return request.get(`/moneyflow/stock/${code}`, { params: { days } })
-}

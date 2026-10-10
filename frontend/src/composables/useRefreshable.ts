@@ -25,7 +25,9 @@ export function useRefreshable(
 
   onMounted(async () => {
     attach()
-    if (immediate) await store.invokeReloader(true)
+    // 只跑自己的 loader：全局 invokeReloader 会让同页其它组件的 loader 也被连带
+    // 触发，N 个组件挂载就是 N 倍请求。
+    if (immediate) await store.invokeLabel(label, true)
     firstMountDone = true
   })
 
@@ -33,9 +35,9 @@ export function useRefreshable(
   onActivated(() => {
     if (!firstMountDone) return  // 首次挂载已由 onMounted 处理,避免重复
     attach()
-    // 数据展示页(autoRefresh: true)切回时立刻刷一次新数据
+    // 数据展示页(autoRefresh: true)切回时立刻刷一次自己的数据
     // 用户输入页(autoRefresh: false)保留之前结果,不触发
-    if (autoRefresh) store.invokeReloader(true)
+    if (autoRefresh) store.invokeLabel(label, true)
   })
 
   onBeforeUnmount(detach)

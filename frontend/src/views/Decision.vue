@@ -5,7 +5,7 @@
       <el-button v-if="user.token" size="small" :loading="running" @click="rerun">重跑快照</el-button>
     </PageHeader>
 
-    <SnapshotMetaBar :snapshot="data?.snapshot" :prev="prevHeader" :kline-date="klineDate" :note="data?.sample_note || (data?.status === 'no_snapshot' ? data?.message : null)">
+    <SnapshotMetaBar :snapshot="data?.snapshot" :prev="prevHeader" :kline-date="klineDate" :note="data?.sample_note || (data?.status === 'no_snapshot' ? data?.message : null)" :stale-note="data?.stale_note">
       <span v-if="data?.window?.length" class="win">窗口:{{ data.window.map(w => w.slot).join(' · ') }}</span>
     </SnapshotMetaBar>
 

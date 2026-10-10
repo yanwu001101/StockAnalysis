@@ -116,6 +116,9 @@ export interface DecisionToday {
   sample_n?: number
   sample_ok?: boolean
   sample_note?: string | null
+  last_trading_date?: string | null
+  stale?: boolean
+  stale_note?: string | null
   generated_at?: string
   trade_date_today?: string
   positions_n?: number
@@ -142,9 +145,6 @@ export function getDecisionSnapshots(date?: string): Promise<{ snapshots: Snapsh
   return request.get('/decision/snapshots', { params: date ? { date } : {} })
 }
 
-export function getDecisionSnapshot(id: string, limit?: number): Promise<{ snapshot: SnapshotHeader; prev: SnapshotHeader | null; items: any[] }> {
-  return request.get(`/decision/snapshot/${id}`, { params: limit ? { limit } : {} })
-}
 
 export interface StockSnapshotPoint {
   snapshot_id: string
@@ -167,9 +167,6 @@ export interface StockSnapshotPoint {
   change: RankChange | null
 }
 
-export function getDecisionStockHistory(code: string, n = 24): Promise<{ code: string; history: StockSnapshotPoint[] }> {
-  return request.get(`/decision/stock/${code}/history`, { params: { n } })
-}
 
 export function runDecisionSnapshot(): Promise<{ status: string; snapshot?: SnapshotHeader; message?: string }> {
   return request.post('/decision/snapshot/run', {})
@@ -205,10 +202,6 @@ export const BUY_STATE_TYPE: Record<BuyState, 'success' | 'warning' | 'info' | '
   bearish: 'danger',
 }
 
-export const GROUP_LABEL: Record<string, string> = {
-  trend: '趋势', momentum: '动量', volume_price: '量价', fund: '资金',
-  sector: '板块', quality: '基本面', risk: '低波/风险',
-}
 
 export const PART_LABEL: Record<keyof DecisionParts, string> = {
   composite: '综合评分', rank_stability: '排名稳定度', trend_stability: '趋势稳定度',

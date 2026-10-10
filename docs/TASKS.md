@@ -19,17 +19,34 @@
 | 模拟盘面板（净值/持仓/调仓/重置） | ✅ 已上线 | frontend/src/components/screener/PaperPanel.vue |
 | **P2 批量面板加载器**（5913 只全市场 42.4s；20 只股新旧路径评分一致） | ✅ 2026-09-13 | api/strategies_v2.py `_bulk_load_panels`、jobs/strategy_score.py、/api/v2/screen |
 | **P4 里程碑1 委托单生成器**（/api/paper/orders + PaperPanel 委托单卡 + Java 透传；GUI 已验证） | ✅ 2026-09-13 | api/paper.py、PaperController.java、DataService.java、PaperPanel.vue |
-| **周度全策略体检终版名单**（29 策略 × 周度 131 期，无 🟢；旧口径=代码序宇宙） | ✅ 2026-09-13 | docs/weekly_sweep_2026-09.md + .json |
+| **周度全策略体检终版名单**（29 策略 × 周度 131 期，无 🟢；旧口径=代码序宇宙） | ✅ 已归档（2026-10-11 已被下方 v2 取代） | docs/weekly_sweep_2026-09.md + .json |
+| **周度全策略体检 v2（全市场日K池重跑）**（与 09 名单同参数、只换池：成交额前 300 从 1015 只里挑 → 从 5531 只里挑，价格类 n 104~131→135 无缺口；29 策略耗时 2621s。结论：**仍无 🟢**（最高 \|t\|=1.62，边缘项 \|ICIR\| 0.12~0.15 远<0.3）；旧 🟡「日频动量反转T」扩池后 t -1.78→-1.36 **被撤销**，MAX/RSRS 降为无证据（RSRS 方向翻正）；新增 🟠 观察北向/低波动/A股短期反转三项但均不得加权。附带查出：三个 ⚪ 策略卡的是**字段**不是窗口，基本面类策略卡在 `stock_fundamental` 只有 5 期（龙虎榜 n=25 属样本不足）。跑测脚本把全市场 pivot 的 TTL 提到 4h 以免 29 次重复 pivot（进程内局部改动，不影响服务） | ✅ 2026-10-11 | docs/weekly_sweep_2026-10.md + .json、factorlab.py |
 | **全站留白治理**（SKILL §34/信息优先：BaseChart/KLineChart/StatGrid/StockHeader 加载骨架 + 空态占位；评分选股进入即自动选股；盘面侧栏 loading 骨架、北向移至末位） | ✅ 2026-09-13 | BaseChart.vue、KLineChart.vue、StatGrid.vue、StockHeader.vue、ScoreScreener.vue、Dashboard.vue、MarketRankCard.vue、theme.css |
 | **移动端布局修复**（FactorLabPanel rating-head 移动端断点：评分块对半换行/标题整行下移/metric-line 收窄——修复结果卡横向溢出错位；score-block 补齐样式定义；RefreshBar 窄壳溢出防护） | ✅ 2026-09-13 | FactorLabPanel.vue、RefreshBar.vue |
-| 3.5 年历史回补（1015 只 × 659,887 行，2023-03~今） | ✅ 已完成 | 数据库 stock_kline_daily |
+| 3.5 年历史回补（1015 只 × 659,887 行，2023-03~今） | ✅ 已完成（2026-10-11 已扩至 5531 只/434 万行，见下） | 数据库 stock_kline_daily |
 | 数据时钟修复（ann_date point-in-time、指数日历） | ✅ 已上线 | data-service/migrations.py |
+| **腾讯全市场行情源**（东财 clist 自 2026-09 起 TLS 指纹层全面拦截，curl_cffi 也失效；qt.gtimg.cn 批量报价无墙，~5866 只含总市值；legacy 中文列 tx_realtime.py + v2 英文列 sources/tencent.fetch_spot 双形态；spot 链 tencent 优先；调度 5 分钟/TTL 300；北交所 92/4/8 前缀映射已修） | ✅ 2026-10-10 | data-service/tx_realtime.py、sources/tencent.py、sources/__init__.py、scheduler.py、app.py |
+| **决策快照窗口同交易日护栏**（recent_ids 只取锚点同 trade_date 快照；停摆 24 天缺口曾使 Δ排名 ▲121/稳定度 σ 全失真；跨日对比属因子重算噪声，窗口只算当日） | ✅ 2026-10-10 | data-service/decision/snapshot.py `recent_ids` |
+| **spot 帧补行业列**（qt.gtimg.cn 行情不含行业，而板块涨跌/领涨板块/板块强度/sector_flow 全部按 spot 的「行业」列聚合 → 缺列即整条链空。改：stock_industry_map 从 stock_info 联表，模块缓存 1h，缺行业填 "-" 沿用消费方既有过滤惯例；两套帧都补） | ✅ 2026-10-11 | sources/tencent.py、tx_realtime.py |
+| **httpx 跨事件循环死锁修复**（`_client` 原为模块级单例，而 tx_realtime/pipelines/调度器/各 job 都用 asyncio.run() 新建循环复用同一 client → 连接池与 anyio 锁属于已关闭循环，永久阻塞：并发全市场抓取曾把 gunicorn worker 全部挂死、/health 无响应且 CPU 0%。改：客户端按运行中的循环持有并回收已关闭循环的残留；ratelimit 的 asyncio.Lock 同样按 (循环,host) 持有） | ✅ 2026-10-11 | core/http_client.py、core/ratelimit.py |
+| **spot 冷抓取单飞 + 时段化 TTL**（冷缓存时并发请求曾各抓一次全市场：6 个请求 60s 且重复打腾讯接口。改：进程内锁 + 锁内写缓存（写在锁外会让等待者重复抓）；盘中 TTL 300s、盘外 3600s——非交易时段这一帧就是最后收盘） | ✅ 2026-10-11 | app.py `fetch_spot` `_spot_ttl` |
+| **停牌股不得进候选**（实测：停牌的中国重工 601989 全天 0 成交，却以宇宙第 14、「进入买点」、is_actionable=True 出现在今日新建仓候选——照做挂单买不到。改：宇宙入口与选股页按 成交额>0 过滤，与模拟盘既有的「停牌跳过」对齐） | ✅ 2026-10-11 | decision/snapshot.py `_select_universe`、api/strategies_v2.py |
+| **北向停披露显式化 + 涨跌幅榜剔新股**（北向卡不再用 2024-08 的数据画"实时"柱图，改显式停披露说明；资金页加仓榜加最后可得窗口标注；summary 的 northboundFlow 由硬编码 0 改 null（缺失禁写 0）；顶栏北向 pill 移除；涨幅/跌幅榜与 topGainers 剔 N/C 前缀首日新股，XD/XR、TCL 不误伤） | ✅ 2026-10-11 | NorthboundChart.vue、MoneyFlowPanel.vue、Header.vue、app.py `_drop_new_listings` |
+| **决策页数据过期显式提示**（/api/decision/today 以日K日历 MAX(trade_date) 判最近交易日，快照日落后可见告警 + 高亮描边，盘外/周末不再静默展示旧数字；实测 9-16 旧快照 → stale=true/23 天，周日快照 → 无误报） | ✅ 2026-10-11 | api/decision.py、SnapshotMetaBar.vue、Decision.vue |
+| **主力资金源换新浪**（东财 fflow/daykline 被墙后 stock_moneyflow 停在 09-18、主力榜恒空。改：sina `ssl_qsfx_lscjfb` 进 moneyflow 源链首位（r0~r3_net 元口径，main=超大+大 与东财一致；r1 缺失置 null 不冒充）；/main-rank 响应加 asOf/stale；warm 改交易锚定（比对 stock_moneyflow vs stock_kline_daily 的 MAX(trade_date)）+ 单飞每日一次 + 宇宙=窗口已有股∪成交额 top240；17:10 调度宇宙改成交额 top600；前端主力标签加「覆盖 N/窗口」列与过期/覆盖不足提示；全市场 5870 只×60 日一次性回补 → 33.1 万行 / 5486 只 / 2010-07~2026-10-09） | ✅ 2026-10-11 | sources/sina.py、sources/__init__.py、api/moneyflow.py、scheduler.py、MoneyFlowPanel.vue、api/moneyflow.ts |
+| **个股财务与估值 tab**（新端点 /api/stock/<code>/financials：最近 10 个报告期营收/净利/YoY/ROE/EPS + 同期行业中位数（pandas 取中位，不用 AVG）+ PE/PB/ROE 行业内分位；Java 需加显式 Controller 映射（逐端点白名单，无泛化透传）TTL 600s；前端 FinancialsCard=三张分位条（标注方向：PE/PB 越低越便宜、ROE 越高越强）+ 营收/净利润/ROE 三视图（柱=金额 亿，线=YoY%，虚线=行业中位）+ 诚实脚注（报告期数与区间、累计口径、无行业对照）；缺数据一律 null 显示「—」，无财务记录整卡走空态；与 F10 同业排名交叉一致 600519：PB 94.7%≈18/19、PE 35.7%≈5/19、ROE 94.7%≈2/19） | ✅ 2026-10-11 | api/f10.py、backend StockController/DataService、FinancialsCard.vue、StockDetail.vue、api/stock.ts |
+| **日K覆盖扩至全市场**（1031 只 → **5531 只 / 434 万行**，周K 5494 只；一次性回补 count=850（≈3.5 年）5514 只活跃股耗时 615s。根因是调度器只刷市值 top300 → 榜外股票永远拿不到增量、因子与回测宇宙被悄悄截断。改：`WARMUP_TOP_N` 默认 0=全市场活跃股（成交额>0，与决策宇宙同口径），warmup_klines 支持 count；新股/科创/北交所均覆盖（301236 850 根、688981 850 根、920002 140 根、688825 长鑫科技 49 根）。/api/admin/health-detail 新增 freshness{codes,maxDate,coveragePct,universe}——行数会说谎,覆盖度才是真相） | ✅ 2026-10-11 | scheduler.py `warmup_klines`、api/admin.py `_mysql_status` |
+| **日K增量第二条腿 + 口径实测**（legacy `batch_klines` 内部其实是 **腾讯→新浪→同花顺**（不是东财!），所以库内基线=这两家的口径；实测 sources.sina 与库内 **600 根逐 bar 零差**（600519/601398/000651/300750），故 warmup 漏取股票改走 `_kline_fallback`＝新浪→东财httpx（东财 fqt=1 放最后，避免在既有口径上开新接缝）。WARMUP_ON_START 改 false：每次重启打 1.1 万次请求纯属浪费且会触发行情源限流,增量靠 16:30 任务,重建库后手动 POST /api/admin/warmup） | ✅ 2026-10-11 | scheduler.py `_kline_fallback`、docker-compose.yml |
+| **A股基础清单刷新（新股/改名/行业）**（官方清单口径：上交所主板1702+科创618、深交所2904、北交所349≈5573 只。只维护 code/name（update_columns=['name'] 绝不碰 industry/market_cap/财务列）→ 实跑**新增 45 只次新股**（长鑫科技/燧原科技/沈鼓集团等，2026-07 后上市）+ **113 处改名**（修掉 spot 快照带来的 `XD`/`*ST` 前缀与 8 字截断名）。缺失行业用东财单股 f127（申万口径，与现值同源；深市清单里的证监会分类 taxonomy 不同，不采用）——配额 30 只/1s，每日 08:40 跑，周日 20:00 全量刷新。空 industry 已被 `stock_industry_map` 过滤，不会在板块图里长出空名分桶。**传导链已打通**：`tx_realtime`/现货帧的代码清单就是 `stock_info`（`_stock_info_codes` 现返回 5912 只并含 688825/601091），此前新股在盘面/选股/决策/F10 全线不可见的根因即此——周一 09:00 现货刷新起新股自动进入各消费方 | ✅ 2026-10-11（新股/改名已落库；380 只行业补齐受东财封锁延后到每日小配额任务） | jobs/stock_list.py、scheduler.py |
+| **基准指数日线停更修复（回测基准 + 交易日历）**（index_kline_daily 的 000300/000905 停在 2026-09-11（落后 21 个交易日），唯一写入方 jobs/postmarket.py 不在调度表内 → 回测基准曲线与「指数 bar 充当的交易日历」被静默截断，最近窗口的超额收益是在跟旧曲线比。改：①sources/sina 补 `fetch_index_kline`（东财 secid `1.000300` → 新浪 `sh000300`），管线改东财→新浪双源；②调度新增每日 16:20 `index_kline_refresh`（先于 16:30 全市场增量）。实跑：东财 push2his 仍在封锁期，两只指数均由新浪供数，900→914 根追平 2026-10-09；口径交叉校验 库内 close 4317.255 == 实时 4317.25、7251.006 == 7251.01） | ✅ 2026-10-11 | pipelines/index_kline.py、sources/sina.py、scheduler.py |
+| **盘面请求风暴治理（重复订阅 + 策略分 N+1）**（根因不是「双 onMounted」而是 refresh store 的**单槽 reloader**：`registerReloader` 覆盖前一个组件的 loader，而每个 `useRefreshable` 组件挂载都调 `invokeReloader()`＝跑「当前」那个 → 同页 N 个组件＝同一批接口拉 N 次，且可能跑的是别人的 loader。改：①store 改多路注册（Map<label,{fn,autoRefresh,running}>）+ `invokeLabel`（组件挂载/keep-alive 切回只跑自己的，各自防重入）+ `invokeReloader`（全局刷新按钮/轮询才把所有各跑一次），`reloader` 保留真值语义以兼容 RefreshBar 显隐；②新增 `POST /api/v2/strategies/batch`（复用 `_bulk_load_panels` + `_score_all` + `_parse_weights`，与 /screen、/stock/<code>/score 同引擎同权重口径，上限 60 只），Java 加 `POST /api/stock/strategies/batch`；③Dashboard 用 1 次批量替掉 20 次逐股 GET。**顺带修好一个死 UI**：legacy `/api/stock/<code>/strategies` 根本不返回 `aggregate`，盘面「策略评分」列一直显示 `—`，现在 20 行全部渲染真实「看多/有效·触发」。实测一次盘面加载：8 个市场接口各 1 次（原 3 次）+ 1 次批量 POST（原 20 次）；个股页同样每接口只发一次） | ✅ 2026-10-11 | stores/refresh.ts、useRefreshable.ts、api/strategies_v2.py、backend StockController/DataService、Dashboard.vue |
 
 ## 关键结论（新会话勿被旧数字误导）
 
-- **⚠ 宇宙口径已变更（2026-09-13）**：factorlab 的截面宇宙从「按代码排序前 N」改为「日均成交额前 N」（更标准、避免深市偏差）。`docs/weekly_sweep_2026-09` 的旧数字用的是代码序口径，与新口径结果**不可直接对比**；下次全策略体检用新口径重跑后才能更新终版名单。
+- **⚠ 宇宙口径已变更（2026-09-13 → 2026-10-11 两次迭代）**：factorlab 的截面宇宙从「按代码排序前 N」改为「日均成交额前 N」；2026-10-11 日K覆盖又从 1015 只扩到 5531 只（同一 N=300 但池子大 5 倍）。`docs/weekly_sweep_2026-09` 是「1015 只池 + 成交额序」的旧数字，与新池结果**不可直接混用**；当前有效名单是 `docs/weekly_sweep_2026-10.md`。
 - **⚠ 回测口径已变更（2026-09-13）**：engine.run() 从「信号日收盘成交」改为「t 收盘信号 → t+1 开盘成交」（修复轻度前视）。历史回测结果整体会略降（尤其高换手策略），这是挤掉水分，不是退化。
-- **周度终版名单（旧口径）**：无任何策略达 🟢。🟡 观察：日频动量反转T（反向）；🟠：MAX反向/A股短期反转/RSRS；⚪ 待面板化重测：Magic Formula、行业动量轮动、资金价量背离。详见 docs/weekly_sweep_2026-09.md。
+- **周度终版名单（2026-10-11 v2，全市场日K池 5531 只、n=135）**：**仍无任何策略达 🟢**（最高 |t|=1.62，且三个边缘项 |ICIR| 仅 0.12~0.15 远<0.3）。旧名单的 🟡「日频动量反转T」在扩池后 **t -1.78→-1.36 被撤销**（窄池放大伪信号的典型）；MAX 反向、RSRS 也降为无证据（RSRS 方向翻正）。新增 🟠 边缘观察：北向(t=1.62)/低波动异象(t=1.42)/A股短期反转(t=1.41)，均不得加权。详见 docs/weekly_sweep_2026-10.md + .json。⚪ 三项（Magic Formula/行业动量轮动/资金价量背离）**扩池未解决**——它们缺的是横截面字段（EBIT 与盈利收益率、行业指数序列、可用资金流口径），不是窗口问题。
+- **样本量受限项（不得过度承诺）**：`stock_fundamental` 多数股票只有 2025Q1~2026Q1 五期（全表 5534 只、平均 4.27 期/只），导致 Piotroski n=108、应计利润 n=126、资产增长 n=74、**龙虎榜机构跟随 n=25**（其 +8.20% 净价差属"样本不足以判断"）。价格类策略已享受扩池红利（n 104~131 → 135 无缺口）。
 - **AlphaLab 时间语义**：时序算子向后窗口；截面因子值 t 日收盘可知；组合回测 t+1 开盘成交；财务按公告日进入（无未来函数）。无历史市值数据，**不提供市值字段**（防止用当前市值回填历史）。
 - 预测概率已改为历史校准胜率（9,400 观测回放），未校准时明确标注"模型评分"。
 
@@ -37,7 +54,13 @@
 
 | # | 优先级 | 任务 | 要点/验收标准 | 涉及文件 |
 |---|---|---|---|---|
-| 0 | 🟡 中 | **全策略周度体检按流动性宇宙重跑** | 宇宙口径已变（代码序→成交额序），旧名单需重跑刷新：UI 全策略体检（周度、2024-03 起）→ 按五态出 v2 名单，与旧名单对比并归档 | FactorLabPanel 全策略体检 |
+| 0 | 🟢 低 | **覆盖度剩余短板**（2026-10-11 体检，指数已修复） | /api/admin/health-detail freshness 实测：股东户数 stock_shareholder 仅 297 只(5.4%)、分红 stock_dividend 的 cash_per_10 大面积空、分钟K stock_kline_minute 0 行（做T 走实时接口未受影响）。日K/周K/资金流/基准指数均已 99%+ | pipelines/shareholder.py、dividend.py、minute kline |
+| 0 | 🟢 低 | **决策宇宙可放宽** | 日K 已覆盖 5531 只，快照宇宙 top800（按市值≥50亿）不再是数据可得性约束，可评估扩到 1200~1500 或改按成交额分层；扩前需测单次快照构建耗时（当前 ~70s） | decision/snapshot.py `_select_universe`、scheduler 快照档位 |
+| 0 | 🟢 低 | **行业补齐残余 350 只左右**（新股/改名已完成） | 东财单股接口受本次突发封锁，`fill_missing_industry` 返回 0。已排在每日 08:40 的 30 只/1s 小配额任务，正常约两周排空；只需确认 `SELECT COUNT(*) FROM stock_info WHERE industry='' OR industry='-'` 逐日下降即可。若长期为 0，考虑换雪球/自建申万映射 | jobs/stock_list.py、api/admin.py freshness |
+| 0 | 🟢 低 | **`/api/user/info` 在浏览过程中被反复拉取** | 实测一次盘面+个股浏览约发 10+ 次 `user/info`（每次路由切换与多个组件各自触发）。不影响正确性但费流量：给 userStore 加短 TTL 缓存或单飞即可。 | frontend/src/stores/user.ts、router/index.ts |
+| 0 | 🟢 低 | **概念成分管线暂无消费方** | `stock_concept` 0 行且只有 admin 表清单引用它，前端无概念视图 → THS(playwright)/akshare-东财两条腿都被墙时不影响功能；等真需要概念数据时再选源 | pipelines/concept.py |
+| 0 | 🟡 中 | **三个 ⚪ 策略需要的是字段而非窗口**（2026-10-11 扩池重跑后仍未解决） | Magic Formula 缺 EBIT/盈利收益率（`stock_fundamental.ebit` 大面积空）；行业动量轮动缺行业指数序列（`index_kline_daily` 只有 000300/000905，需申万/东财行业指数日线）；资金价量背离需可用的资金流口径（北向已停披露，主力净额虽已回补 5486 只但要核对历史深度与 as-of 时点）。做法：先用 factorlab 的 coverage 诊断定位「哪一列在第几期为空」，再决定回补源。 | factorlab.py、pipelines/fundamental.py、新 pipelines/industry_index.py |
+| 0 | 🟡 中 | **`stock_fundamental` 历史深度只有 5 期** | 5534 只 × 平均 4.27 期（多数只有 2025Q1~2026Q1），基本面类策略期数被卡（Piotroski n=108、资产增长 n=74、龙虎榜 n=25）→ 统计结论受限、pead/accruals 一类策略无法充分检验。回补 2022 至今各报告期（东财 datacenter 业绩报表 or tushare `income/fina_indicator`，注意 ann_date 必须真实可得以免前视）。 | pipelines/fundamental.py、jobs/weekend.py、sources/eastmoney.py |
 | 0 | 🟡 中 | **AlphaLab 帮助面板移动端适配** | 字段/算子 popover 宽 380px，小屏可能溢出；检查移动端并收窄 | AlphaExprInput.vue |
 | 1 | 🔴 高 | **P4 里程碑2 券商适配（需券商客户端环境，未开工）** | `BrokerAdapter` 抽象接口 + EasytraderAdapter（Windows 同花顺 GUI 自动化）与 QMT/PTrade(xtquant)，检测到已安装且显式开启才启用。**安全红线：默认绝不自动下单；状态流转 待执行→已执行→已回填（里程碑1 已有「已执行」localStorage 标记）** | 新 broker_adapter.py |
 | 2 | 🟡 中 | **coverage 类策略重测** | P2 面板化已落地，Magic Formula / 行业动量轮动 / 资金价量背离 三策略原 coverage 不足，用 UI 体检（周度、2024-03 起）重测并更新终版名单 | factorlab.py 体检入口 |
@@ -90,10 +113,20 @@ print("PARITY OK")
 EOF
 # 回测引擎 t+1 验收：每笔成交价 == 次日开盘价×(1±滑点)，且成交日不是信号日
 # （见 2026-09-13 会话：29/29 笔零偏差；评分缓存第二遍省 ~25%）
+# 周度全策略体检（29 策略约 44 分钟，进程与 web worker 隔离；逐策略增量落盘）
+docker exec -d -e SWEEP_END=2026-10-09 -e SWEEP_OUT=/tmp/weekly_sweep.json \
+  stock-data-service sh -c "python /app/tools/weekly_sweep.py > /tmp/weekly_sweep.log 2>&1"
+python data-service/tools/sweep_compare.py docs/weekly_sweep_2026-10.json /tmp/weekly_sweep.json
 ```
 
 ## 已知问题/坑
 
+- **禁止用 `asyncio.run()` 包 http_client 的异步代码后再复用 client**：httpx.AsyncClient 与 asyncio.Lock 绑定首次驱动它们的循环，跨循环复用不是报错而是**静默永久阻塞**（CPU 0%、gunicorn worker 全挂、/health 都不返回，日志只剩半句"Fetching market spot"）。已按循环持有（core/http_client.py `_clients`），新增同步入口时沿用 `http_client.run()` 或确保走 `_get_client()`，别自己缓存 client
+- **Vue setup 里 `watch(x, fn, { immediate: true })` 的同步回调不能引用其后才声明的 `let`**（TDZ：`Cannot access 'x' before initialization`）；若该调用包在 `try/catch` 里会被静默吞掉，表现为「请求根本没发出且不再重试」。要么把状态声明提前，要么 initial 加载走独立入口（2026-10-11 财务 tab 踩过）
+- **Java 网关是逐端点显式 Controller + 白名单缓存，没有泛化透传**：新增 data-service 接口必须同步改 StockController/DataService（`docker compose build backend` 内置 mvn，约 1 分钟），否则 18080 返回 `{"code":404,"message":"接口不存在"}` 而 5001 直连正常。`/api/moneyflow/stock/<code>` 至今未放行（无前端消费方）
+- **东财全市场 clist 已死**（2026-09 起）：push2/push2delay 连 curl_cffi chrome 指纹都返回 0 行，别再调 em_realtime.fetch_all_spot 排障——全市场行情走 tx_realtime（qt.gtimg.cn）。东财**单股**行情接口（push2his K线/trends2/details）可用；**fflow 资金流（含 daykline）也被墙**——资金流走新浪 `ssl_qsfx_lscjfb`（sina 源已在链首位）
+- **`docker cp` 进容器不是部署**（2026-10-11 踩过）：data-service/frontend 都没有 bind mount，`docker compose up -d <svc>` 会用**镜像**重建容器，静默抹掉此前 cp 进去的所有改动（一次抹掉了 sina 资金流链、/financials、admin freshness 三块已验证代码）。正确流程：改完 → `docker compose build <svc>` → `up -d` → 在容器内 `ls/grep` 确认文件真的在，再验接口。临时排障可以 cp，但必须 `docker restart`（不是 compose up）才不被覆盖
+- **对东财单股接口突发请求会换来分钟级封锁**（2026-10-11 实测）：380 只 × 0.15s 间隔之后，`push2/api/qt/stock/get` 与 `push2his kline`（httpx）全部返回 None，而同主机的 `trends2` 与 legacy aiohttp 路径仍通——封锁是按 host+指纹分档的。所以批量补齐一律走小配额（jobs/stock_list 30 只/1s）而不是并发扫
 - 容器内跑 python 脚本用 `docker exec -i`（stdin 要传）；host 直连东财被 TLS 指纹拦截，数据抓取一律在容器内跑
 - **容器内测试脚本严禁 `import app`**——app.py 在 import 时就启动调度器；universe 用 `cache.get("spot")`（redis 共享，服务进程已暖）
 - **alphalab 与 factorlab 的宇宙必须同源**——两个"前 N"集合若不相交（如代码序 vs 流动性序），覆盖门槛会把所有期数清零（2026-09-13 踩过）；provider 与 codes 一起传给 analyze_scores
@@ -102,7 +135,7 @@ EOF
 - 前端是 PWA（service worker 预缓存）：rebuild 后第一次 reload 可能仍被旧 SW 控制；验证新 UI 前先注销 SW+清 caches（浏览器 console）或核对资源 hash 与 `frontend/dist/assets` 一致
 - **新卡片/图表必须接 loading 骨架**：BaseChart(`loading`/`placeholder`)、KLineChart(`loading`)、StatGrid(`loading`)、StockHeader(`loading`) 都已支持——禁止裸空白渲染（2026-09-13 全站留白治理的约定）
 - 评分选股页 `runFilter({ silent: true })` 是进入页面自动跑的静默路径，不带成功/失败 toast；手动按钮仍走带提示路径
-- 回测结果受幸存者偏差影响：K 线表只含当前存活 1015 只，绝对收益偏高，横向对比有效； alphalab 回测同理
+- 回测结果受幸存者偏差影响：K 线表现含 5531 只（2026-10-11 起=全市场活跃股），但**仍只含当前在市股票**，退市股从未入库 → 绝对收益仍偏高，横向对比有效；alphalab 回测同理
 - 测试账号 uidemo2026 / Ui#Demo2026!
 - 周度体检原始结果已归档 `docs/weekly_sweep_2026-09.json`（旧口径=代码序宇宙）
 

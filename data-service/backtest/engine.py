@@ -426,10 +426,13 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
     buyable_open = tradable & open_px.notna() & (open_px < limit_up)
     sellable_open = tradable & open_px.notna() & (open_px > limit_down)
 
-    # Pre-load full panel once so the rebalance loop never re-queries MySQL.
+    # Pre-load panel once so the rebalance loop never re-queries MySQL.
     # This is the only price we pay to kill the look-ahead: every rebalance
     # date now re-scores using ONLY data available on that date.
-    panel = _load_panel(codes, end)
+    # 必须传 start：不传就没有日期下界，K线/北向/龙虎榜/资金流会按**全历史**
+    # 载入（资金流加深到 700 天/只后实测把容器吃到 10 GiB+ 并拖停 Docker VM）。
+    # start - 400 天的下界足够覆盖 260 根 K 线 + 60 日北向/龙虎榜/30 日资金流的预热窗口。
+    panel = _load_panel(codes, end, start=start)
     if not panel:
         return {"error": "panel load failed"}
 

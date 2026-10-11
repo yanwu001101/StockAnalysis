@@ -311,6 +311,18 @@ def refresh_moneyflow_northbound(days: int = 5):
         notifier.job_failed("北向资金刷新", str(e))
 
 
+def _industry_index_safe():
+    """申万二级行业指数日线：行业动量策略的 as-of 数据源（表内已有则只增量）。"""
+    try:
+        import asyncio
+        from pipelines import industry_index as ind_pipe
+        res = asyncio.run(ind_pipe.run())
+        log.info("[scheduler] industry index refresh: %s", res)
+    except Exception as e:
+        log.warning("[scheduler] industry index refresh failed: %s", e)
+        notifier.job_failed("行业指数刷新", str(e))
+
+
 def _index_kline_safe():
     """基准指数日线（沪深300/中证500）。这些 bar 同时是回测器的交易日历,
     停更会让最近窗口的会话表被静默截断,超额收益也变成跟旧曲线比。"""
@@ -428,6 +440,16 @@ def start():
             refresh_lhb,
             CronTrigger(hour=17, minute=0, timezone="Asia/Shanghai"),
             id="lhb_refresh",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # 行业指数（申万二级）16:22——行业动量策略的排名面板依赖它
+        sched.add_job(
+            _industry_index_safe,
+            CronTrigger(day_of_week="mon-fri", hour=16, minute=22, timezone="Asia/Shanghai"),
+            id="industry_index_refresh",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

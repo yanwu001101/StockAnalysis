@@ -23,6 +23,7 @@ from sqlalchemy import bindparam, text
 
 import cache
 import db
+from core import sector_rank
 from pipelines import spot as spot_pipe
 from strategies import REGISTRY
 from strategies.base import StrategyContext
@@ -118,8 +119,17 @@ def _refresh_sector_rank() -> None:
 
 
 def _sector_rank(industry: str) -> tuple[Optional[float], int]:
+    """行业相对强度排名。
+
+    优先用行业指数日线算 20 日动量排名（与 sector_rotation 策略文档同口径，
+    也是 factorlab/回测用的同一个 core.sector_rank）；行业指数表还没回补时
+    （新库）才退回当日涨跌幅快照排名——那条路径会把横截面动量退化成日内情绪。
+    """
     if not industry:
         return None, 0
+    got = sector_rank.rank_at(str(industry))
+    if got:
+        return got
     if time.time() - _SECTOR_TS > 300 or not _SECTOR_RANK:
         _refresh_sector_rank()
     rk = _SECTOR_RANK.get(str(industry))

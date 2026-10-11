@@ -32,6 +32,7 @@ from sqlalchemy import text
 
 import db
 from backtest.metrics import compute
+from core import sector_rank
 from core.trace import logger
 from strategies import REGISTRY, by_id
 from strategies.base import StrategyContext
@@ -309,6 +310,26 @@ def _fund_asof(fund_full: pd.DataFrame, as_of: dt.date, n: int = 12) -> pd.DataF
     return sliced if not sliced.empty else None
 
 
+_INDUSTRY_MAP_TS = 0.0
+_INDUSTRY_MAP: dict[str, str] = {}
+
+
+def _industry_of(code: str) -> str:
+    """code → 申万二级行业名（与 stock_info.industry 同口径，缓存 1 小时）。"""
+    global _INDUSTRY_MAP, _INDUSTRY_MAP_TS
+    now = time.time()
+    if not _INDUSTRY_MAP or now - _INDUSTRY_MAP_TS > 3600:
+        try:
+            from sources.tencent import stock_industry_map
+            m = stock_industry_map()
+            if m:
+                _INDUSTRY_MAP = {str(k).zfill(6): str(v) for k, v in m.items()}
+                _INDUSTRY_MAP_TS = now
+        except Exception:
+            pass
+    return _INDUSTRY_MAP.get(str(code).zfill(6), "")
+
+
 def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.date) -> float:
     """Re-score one code using ONLY data <= as_of. Returns 0 on hard failure;
     we let the strategy itself decide whether it has enough fields — basic
@@ -326,6 +347,17 @@ def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.da
             "high": "最高", "low": "最低", "volume": "成交量",
         })
     ctx = StrategyContext(code=code, daily_df=daily_df)
+    # 行业相对强度（as-of）：不注入这两行，「行业动量轮动」在研究链路里
+    # 每个报告期都是 no_data，体检直接判 coverage。
+    try:
+        ind = _industry_of(code)
+        if ind:
+            ctx.industry = ind
+            got = sector_rank.rank_at(ind, as_of)
+            if got:
+                ctx.sector_rank, ctx.sector_rank_n = got
+    except Exception:
+        pass
     fund_full = panel_one.get("fund")
     fund_asof = _fund_asof(fund_full, as_of)
     if fund_asof is not None:

@@ -102,4 +102,5 @@ def main() -> None:
     print(f"SWEEP DONE items={len(items)} elapsed={time.time() - t0:.0f}s", flush=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

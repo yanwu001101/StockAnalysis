@@ -96,4 +96,5 @@ def main() -> None:
     print("BF COMPLETE", flush=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

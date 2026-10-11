@@ -76,66 +76,34 @@ def _display_name(code: str, row_name, ctx_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sector rank cache: industry -> (rank_pct, rank_n)
-# Refreshed every 5 minutes from the spot snapshot.
+# 行业相对强度：口径唯一，取自 core.sector_rank（申万二级行业指数 20 日动量）。
+# 这里不再维护第二套「当日涨跌幅快照排名」——同一字段两种定义会让盘面与体检
+# 对同一只股票给出互不相容的数字。
 # ---------------------------------------------------------------------------
 
-_SECTOR_RANK: dict[str, tuple[float, int]] = {}
-_SECTOR_TS: float = 0.0
-_SECTOR_LOCK = threading.Lock()
-
-
-def _refresh_sector_rank() -> None:
-    global _SECTOR_RANK, _SECTOR_TS
-    # pandas DataFrames don't support truthy/falsy `or`, so probe explicitly.
-    df = cache.get("spot")
-    if df is None or (hasattr(df, "empty") and df.empty):
-        df = cache.get("spot_v2")
-    if df is None or not hasattr(df, "columns") or (hasattr(df, "empty") and df.empty):
-        return
-    if "行业" not in df.columns and "industry" not in df.columns:
-        return
-    ind_col = "行业" if "行业" in df.columns else "industry"
-    chg_col = "涨跌幅" if "涨跌幅" in df.columns else "pct_change"
-    if chg_col not in df.columns:
-        return
-    try:
-        d = df[[ind_col, chg_col]].copy()
-        d = d[d[ind_col].astype(str).str.strip().replace("-", pd.NA).notna()]
-        d[chg_col] = pd.to_numeric(d[chg_col], errors="coerce")
-        d = d.dropna(subset=[chg_col])
-        if d.empty:
-            return
-        avg = d.groupby(ind_col)[chg_col].mean().sort_values(ascending=False)
-        total = len(avg)
-        mapping: dict[str, tuple[float, int]] = {}
-        for i, (name, _v) in enumerate(avg.items()):
-            mapping[str(name)] = (i / total if total else 0.5, total)
-        with _SECTOR_LOCK:
-            _SECTOR_RANK = mapping
-            _SECTOR_TS = time.time()
-    except Exception:
-        pass
+_SECTOR_WARNED = False
 
 
 def _sector_rank(industry: str) -> tuple[Optional[float], int]:
-    """行业相对强度排名。
+    """行业相对强度排名：20 日动量的截面分位，0.0 = 最强。
 
-    优先用行业指数日线算 20 日动量排名（与 sector_rotation 策略文档同口径，
-    也是 factorlab/回测用的同一个 core.sector_rank）；行业指数表还没回补时
-    （新库）才退回当日涨跌幅快照排名——那条路径会把横截面动量退化成日内情绪。
+    与 factorlab / 回测走同一份 core.sector_rank（同一口径、同一份数据）——
+    这里刻意**不留**「当日涨跌幅快照」回退：那条路径算的是日内情绪排名,
+    混进同一个字段会让盘面与体检对同一只股票给出两个不同定义的数字,
+    而调用方无法分辨。行业指数表为空（新库未回补）或对不上口径时返回 None,
+    策略按 no_data 处理（分数降级为中性），宁可缺也不给错口径的数字。
     """
     if not industry:
         return None, 0
     got = sector_rank.rank_at(str(industry))
     if got:
         return got
-    if time.time() - _SECTOR_TS > 300 or not _SECTOR_RANK:
-        _refresh_sector_rank()
-    rk = _SECTOR_RANK.get(str(industry))
-    if rk is None:
-        return None, 0
-    return rk
+    global _SECTOR_WARNED
+    if not _SECTOR_WARNED:
+        _SECTOR_WARNED = True
+        print("[strategies_v2] 行业强度不可用（industry_index_daily 为空或未对齐）——"
+              "sector_rotation 将按 no_data 计分，请先跑 pipelines/industry_index.run()")
+    return None, 0
 
 
 def _load_ctx(code: str) -> StrategyContext:

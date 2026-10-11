@@ -13,7 +13,11 @@ rebalance/layers/max_codes，只让候选池随日K覆盖变化，否则差异�
 import datetime as dt
 import json
 import os
+import sys
 import time
+
+# 同 backfill_fundamental：从任意 cwd 直接跑时要把服务根目录加进 sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import backtest.engine as eng
 

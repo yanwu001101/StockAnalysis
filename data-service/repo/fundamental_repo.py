@@ -19,13 +19,22 @@ COLS = [
 ]
 
 
-def upsert_fundamental(df: pd.DataFrame) -> int:
+def upsert_fundamental(df: pd.DataFrame, columns: list[str] | None = None) -> int:
+    """落库。
+
+    `columns` 默认取 df 里真实存在的那些列——不把 COLS 全量写进去，是为了避免
+    「一条只补了营收/净利的新链路」把别的链路写过的 total_assets/current_assets
+    等列覆写成 NULL（akshare 业绩报表本来就没有这些字段）。
+    """
     if df is None or df.empty:
         return 0
     if "period_type" not in df.columns:
         df = df.copy()
         df["period_type"] = "Q"
-    return upsert(TABLE, df, COLS, update_columns=COLS[3:])
+    cols = columns or [c for c in COLS if c in df.columns]
+    if "code" not in cols or "report_date" not in cols:
+        return 0
+    return upsert(TABLE, df, cols, update_columns=cols[2:])
 
 
 def get_fundamental(code: str, periods: int = 12) -> pd.DataFrame:

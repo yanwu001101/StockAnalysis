@@ -29,9 +29,6 @@ export function stratLevel(stats?: StrategyStats | null): Level {
   return 'low'
 }
 
-export function levelTagType(level: Level): 'success' | 'warning' | 'danger' {
-  return level === 'high' ? 'success' : level === 'mid' ? 'warning' : 'danger'
-}
 
 /** 股票代码统一补齐 6 位（后端偶尔返回数字型代码，前导 0 会丢）。 */
 export function padCode(code: string | number | null | undefined): string {

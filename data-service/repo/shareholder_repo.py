@@ -14,12 +14,11 @@ COLS = ["code", "report_date", "holder_count", "top10_ratio", "institution_ratio
 def upsert_shareholder(df: pd.DataFrame) -> int:
     if df is None or df.empty:
         return 0
-    return upsert(TABLE, df, COLS, update_columns=COLS[2:])
+    cols = [c for c in COLS if c in df.columns]
+    if not {"code", "report_date"}.issubset(cols):
+        return 0
+    df = df.dropna(subset=["code", "report_date"])
+    return upsert(TABLE, df, cols, update_columns=[c for c in cols if c not in ("code", "report_date")],
+                  preserve_non_null=True)
 
 
-def get_shareholder(code: str, periods: int = 12) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT * FROM {TABLE} WHERE code=:c "
-        f"ORDER BY report_date DESC LIMIT :n",
-        {"c": code, "n": periods},
-    )

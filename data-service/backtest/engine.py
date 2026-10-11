@@ -144,9 +144,21 @@ def _trading_days(start: dt.date, end: dt.date) -> list[dt.date]:
     return [r[0] for r in rows]
 
 
+_UNIVERSE_CACHE: dict = {}
+_UNIVERSE_TTL_S = 60.0
+
+
 def _universe_ohlcv(start: dt.date, end: dt.date) -> dict[str, pd.DataFrame]:
     """Pivot the whole universe once: {open,close,high,low,volume} matrices
-    indexed by trade_date, columns=code."""
+    indexed by trade_date, columns=code.
+
+    60s TTL 缓存：因子挖掘（样本内/外/WalkForward）与连续 factorlab 调用会
+    反复整表加载，只读查询短缓存安全且大幅提速。"""
+    key = (start.isoformat(), end.isoformat())
+    now = time.time()
+    hit = _UNIVERSE_CACHE.get(key)
+    if hit and now - hit[0] < _UNIVERSE_TTL_S:
+        return hit[1]
     eng = db.get_engine()
     if eng is None:
         return {}
@@ -165,69 +177,9 @@ def _universe_ohlcv(start: dt.date, end: dt.date) -> dict[str, pd.DataFrame]:
     out = {}
     for col in ("open", "close", "high", "low", "volume"):
         out[col] = df.pivot(index="trade_date", columns="code", values=col).sort_index()
-    return out
-
-
-def _score_universe(strategy_id: str, codes: list[str]) -> dict[str, float]:
-    """Compute strategy score for each code using latest data in MySQL.
-
-    Each context is built from the latest persisted data, so scores are static
-    over the backtest window. Good enough for relative ranking validation.
-    """
-    strat = by_id(strategy_id)
-    if strat is None:
-        return {}
-
-    eng = db.get_engine()
-    if eng is None:
-        return {}
-    out: dict[str, float] = {}
-    with eng.connect() as conn:
-        for code in codes:
-            try:
-                dk = pd.read_sql(
-                    text("SELECT trade_date, open, close, high, low, volume "
-                         "FROM stock_kline_daily WHERE code=:c "
-                         "ORDER BY trade_date DESC LIMIT 260"),
-                    conn, params={"c": code},
-                )
-                if dk.empty:
-                    continue
-                dk = dk.sort_values("trade_date").rename(columns={
-                    "trade_date": "日期", "open": "开盘", "close": "收盘",
-                    "high": "最高", "low": "最低", "volume": "成交量",
-                })
-                ctx = StrategyContext(code=code, daily_df=dk)
-                # Pull fundamental etc. only if strategy needs it
-                if strategy_id in ("piotroski_f", "magic_formula", "quality_factor", "pead"):
-                    f = pd.read_sql(
-                        text("SELECT * FROM stock_fundamental WHERE code=:c "
-                             "ORDER BY report_date DESC LIMIT 12"),
-                        conn, params={"c": code},
-                    )
-                    if not f.empty:
-                        ctx.fundamental_df = f
-                if strategy_id in ("northbound_smart_money", "technical_resonance"):
-                    n = pd.read_sql(
-                        text("SELECT * FROM stock_northbound WHERE code=:c "
-                             "ORDER BY trade_date DESC LIMIT 60"),
-                        conn, params={"c": code},
-                    )
-                    if not n.empty:
-                        ctx.northbound_df = n
-                if strategy_id == "lhb_followup":
-                    l = pd.read_sql(
-                        text("SELECT * FROM stock_lhb WHERE code=:c "
-                             "ORDER BY trade_date DESC LIMIT 60"),
-                        conn, params={"c": code},
-                    )
-                    if not l.empty:
-                        ctx.lhb_df = l
-                res = strat.score(ctx)
-                if res and res.score > 0:
-                    out[code] = res.score
-            except Exception as e:
-                logger.debug("backtest score code=%s err=%s", code, e)
+    if len(_UNIVERSE_CACHE) > 8:
+        _UNIVERSE_CACHE.clear()
+    _UNIVERSE_CACHE[key] = (now, out)
     return out
 
 
@@ -402,6 +354,10 @@ def _rebalance_dates(trading_days: list[dt.date], freq: str) -> list[dt.date]:
         return []
     if freq == "daily":
         return trading_days
+    # Nd 周期：每 N 个交易日一调（"3d"/"5d"/"10d"/"20d"，因子挖掘用）
+    if freq.endswith("d") and freq[:-1].isdigit():
+        n = max(int(freq[:-1]), 1)
+        return trading_days[::n]
     by_period: dict = {}
     for d in trading_days:
         key = (d.year, d.isocalendar()[1]) if freq == "weekly" else (d.year, d.month)

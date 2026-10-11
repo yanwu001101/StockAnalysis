@@ -13,13 +13,6 @@ export function formatNumber(v: number | null | undefined, decimals = 0): string
   })
 }
 
-/** Format as percent. Input is already in percent units (e.g. 12.5 → "12.50%"). */
-export function formatPercent(v: number | null | undefined, decimals = 2): string {
-  if (v == null || !Number.isFinite(v)) return '—'
-  const sign = v > 0 ? '+' : ''
-  return `${sign}${v.toFixed(decimals)}%`
-}
-
 /**
  * Format an absolute CNY amount according to the chosen unit.
  *  - 'yi'  → 亿元 (1e8 base)
@@ -53,20 +46,6 @@ export function formatAmountText(
 ): string {
   const { value, suffix } = formatAmount(v, unit, decimals)
   return suffix ? `${value} ${suffix}` : value
-}
-
-/** Standardized YYYY-MM-DD. Handles ISO strings, Date, dayjs, epoch ms. */
-export function formatDate(v: string | number | Date | null | undefined): string {
-  if (v == null) return '—'
-  const d = dayjs(v)
-  return d.isValid() ? d.format('YYYY-MM-DD') : '—'
-}
-
-/** YYYY-MM-DD HH:mm */
-export function formatDateTime(v: string | number | Date | null | undefined): string {
-  if (v == null) return '—'
-  const d = dayjs(v)
-  return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '—'
 }
 
 /** 人民币金额，如 ¥12,345.67。 */

@@ -2,7 +2,7 @@
   <div class="factor-lab" :class="{ mobile: isMobile }">
     <div class="config-col">
       <AppCard title="因子检验" sub="IC / 分层回测 / 衰减分析 · 检验策略得分是否真的能排序未来收益">
-        <el-form label-position="top" size="small" class="config-form">
+        <el-form label-position="top" size="small" class="config-form" :disabled="loading || sweep.running">
           <el-form-item>
             <SegmentTabs v-model="mode" :options="modeOptions" small style="width: 100%;" />
           </el-form-item>
@@ -34,19 +34,23 @@
               <el-input-number v-model="config.layers" :min="3" :max="10" :step="1" style="width: 100%;" />
             </el-form-item>
           </div>
+          <el-form-item label="信号平滑（过去 N 个交易日，1=不平滑）">
+            <el-input-number v-model="config.smoothingDays" :min="1" :max="20" />
+          </el-form-item>
+          <el-checkbox v-model="config.capDiagnostic">当前市值敏感性诊断（非历史可知，不参与评级）</el-checkbox>
           <el-button type="primary" :loading="loading" @click="run" style="width: 100%;">
-            <el-icon><DataAnalysis /></el-icon>开始检验
+            <el-icon><DataAnalysis /></el-icon>{{ loading ? `计算中 ${jobElapsed}s` : '开始检验' }}
           </el-button>
           <p class="method-note">
-            每个调仓日只用当日可见数据重新评分（无前视），截面做去极值+标准化后
-            按得分分层，检验排序能力。分层为等权纸面组合，不计成本。
+            t 日收盘信号，t+1 开盘至下个调仓日收盘计收益；按实际交易日年化。
+            分层是等权排序研究，毛收益不含成本；数据近似与缺口见结果说明。
           </p>
         </el-form>
       </AppCard>
 
-      <AppCard title="全策略体检" sub="顺序检验全部策略，按 |ICIR| 排序，约 10 分钟" compact>
+      <AppCard title="全策略体检" sub="共用单策略引擎，逐项检验；耗时取决于窗口与样本" compact>
         <div class="sweep-actions">
-          <el-button type="primary" size="small" :loading="sweep.running" @click="runSweep">开始体检</el-button>
+          <el-button type="primary" size="small" :loading="sweep.running" :disabled="loading" @click="runSweep">开始体检</el-button>
           <el-button v-if="sweep.running" size="small" @click="sweep.stopped = true">停止</el-button>
           <el-button v-if="!sweep.running && sweep.summaries.length" size="small" @click="clearSweep">清空</el-button>
         </div>
@@ -61,8 +65,16 @@
       </AppCard>
     </div>
 
-    <div class="result-area" v-if="result">
+    <div v-if="runError || result?.error" class="result-area" role="alert">
+      <AppCard :title="result?.error ? factorStatus(result).text : '计算失败'">
+        {{ runError || result?.error }}
+      </AppCard>
+    </div>
+    <div class="result-area" v-if="result && !result.error">
       <AppCard title="因子综合评价">
+        <div v-if="(sampleInfo.periods ?? 0) < 36" class="warn-line" role="status">
+          有效调仓期 {{ sampleInfo.periods }}，样本较少，当前结论稳定性有限。
+        </div>
         <!-- 标题行：状态 emoji + 方向 -->
         <div class="rating-head">
           <div class="score-block" :class="'grade-' + (rating?.grade || 'D')">
@@ -88,7 +100,7 @@
             </div>
             <div class="rating-line">
               <span class="rl-k">样本信息</span>
-              <span class="rl-v">有效调仓期 {{ sampleInfo.periods }} · 平均截面 {{ sampleInfo.avg_cross_section }} 只 · 观测 {{ sampleInfo.observations }}</span>
+              <span class="rl-v">有效调仓期 {{ sampleInfo.periods }} · 平均截面 {{ sampleInfo.avg_cross_section ?? '—' }} 只 · 观测 {{ sampleInfo.observations }}</span>
             </div>
           </div>
         </div>
@@ -99,7 +111,7 @@
             <div class="dim" v-for="d in dimRows" :key="d.key">
               <span class="dim-label">{{ d.label }}</span>
               <div class="dim-bar"><div class="dim-fill" :style="{ width: d.value + '%' }" /></div>
-              <span class="dim-val">{{ d.value }}</span>
+              <span class="dim-val">{{ d.value ?? '—' }}</span>
             </div>
           </div>
           <div class="dims-title" style="margin-top: 10px;">稳健性与交易可行性</div>
@@ -107,7 +119,7 @@
             <div class="dim" v-for="d in extraBars" :key="d.key">
               <span class="dim-label">{{ d.label }}</span>
               <div class="dim-bar"><div class="dim-fill" :style="{ width: d.value + '%', background: d.color }" /></div>
-              <span class="dim-val">{{ d.value }}</span>
+              <span class="dim-val">{{ d.value ?? '—' }}</span>
             </div>
           </div>
         </div>
@@ -130,13 +142,13 @@
         <div class="rating-meta">
           <!-- 净多空数学：毛(方向校正) − 摩擦成本 = 净。成本与方向无关，不能简单取负号 -->
           <span>
-            多空年化（方向校正后）<b>{{ fmtPct(adjGross) }}</b>
+            年化分层价差（方向校正后，非组合复利收益）<b>{{ fmtPct(adjGross) }}</b>
             − 摩擦 {{ fmtPct(costAnn) }}（{{ ((rating?.cost_per_turnover || 0) * 100).toFixed(2) }}%/次换手 × 年换手 {{ result.turnover_annualized ?? '—' }}x）
             → 净 <b>{{ fmtPct(adjNet) }}</b>
             <span class="rl-raw">（原始方向：毛 {{ fmtPct(result.top_minus_bottom_annualized) }} / 净 {{ fmtPct(rating?.net_spread_ann) }}）</span>
           </span>
-          <span v-if="result.ic_neutral_summary">行业中性 IC {{ fmtAdj(result.ic_neutral_summary.mean, 4) }}（原始 {{ result.ic_neutral_summary.mean.toFixed(4) }}）</span>
-          <span v-if="result.regime">牛市 IC {{ fmtAdj(result.regime.bull.ic_mean, 3) }} / 熊市 IC {{ fmtAdj(result.regime.bear.ic_mean, 3) }}（已按方向校正）</span>
+          <span v-if="result.ic_neutral_summary">行业中性 IC {{ fmtAdj(result.ic_neutral_summary.mean, 4) }}（原始 {{ metric(result.ic_neutral_summary.mean) }}）</span>
+          <span v-if="result.regime">牛市 IC {{ fmtAdj(result.regime.bull.ic_mean, 3) }} / 熊市 IC {{ fmtAdj(result.regime.bear.ic_mean, 3) }}（原始方向）</span>
         </div>
         <div class="verdict" :class="verdictCls">
           <el-icon :size="18"><component :is="verdictIcon" /></el-icon>
@@ -148,14 +160,38 @@
         <StatGrid :items="icItems" :cols="isMobile ? 2 : 4" />
       </AppCard>
 
-      <AppCard title="分层净值" sub="按得分分层的等权组合净值（L1 最低分 → L5 最高分）" compact>
+      <AppCard title="分层净值" :sub="`等权毛净值（L1 最低分 → L${result.layers} 最高分）`" compact>
         <BaseChart :option="layerOption" :height="isMobile ? 260 : 340" />
       </AppCard>
 
-      <AppCard title="RankIC 序列" sub="每期得分与前瞻收益的秩相关" compact>
+      <AppCard title="RankIC 序列" sub="原始方向：每期得分与 t+1 开始的持有期收益秩相关" compact>
         <BaseChart :option="icOption" :height="isMobile ? 200 : 260" />
       </AppCard>
 
+      <AppCard v-if="result.validation" title="样本外与滚动检验" :sub="result.validation.note" compact>
+        <div class="rating-meta">
+          <span>样本内 {{ result.validation.train.start }} ~ {{ result.validation.train.end }} · n={{ result.validation.train.n }} · RankIC {{ metric(result.validation.train.mean) }}</span>
+          <span>样本外 {{ result.validation.test.start }} ~ {{ result.validation.test.end }} · n={{ result.validation.test.n }} · 原始 RankIC {{ metric(result.validation.test.mean) }} · p={{ metric(result.validation.test.p_value) }}</span>
+          <span>方向由样本内锁定；样本外方向调整后 RankIC {{ metric(result.validation.normalized_test.mean) }}</span>
+          <span v-if="result.validation.status !== 'VALID'" class="warn-line">样本外期数不足，不能作为通过验证的依据。</span>
+        </div>
+        <BaseChart :option="rollingOption" :height="220" placeholder="不足60个有效期，暂无完整滚动窗口" />
+      </AppCard>
+      <AppCard v-if="result.market_cap_diagnostic?.enabled" title="市值敏感性（当前快照近似）" compact>
+        <p class="warn-line">{{ result.market_cap_diagnostic.note }}</p>
+        RankIC {{ metric(result.market_cap_diagnostic.summary?.mean) }} · n={{ result.market_cap_diagnostic.summary?.n ?? 0 }}
+      </AppCard>
+      <AppCard v-if="result.methodology" title="计算口径与数据限制" compact>
+        <div class="rating-meta">
+          <span>{{ result.methodology.signal }} → {{ result.methodology.execution }} → {{ result.methodology.exit }}</span>
+          <span>股票池：{{ result.methodology.universe }} · 截至 {{ result.methodology.universe_as_of }}</span>
+          <span>年化：{{ result.methodology.annualization }}</span>
+          <span>成本：{{ result.methodology.cost }}</span>
+          <span>{{ result.methodology.industry }}</span>
+          <span v-for="note in result.methodology.limitations" :key="note">{{ note }}</span>
+          <span>引擎 {{ result.engine_version }} · 仅做排序研究，不自动修改策略权重</span>
+        </div>
+      </AppCard>
       <AppCard title="衰减分析（探索性）" sub="得分对未来 +N 日收益的预测力衰减" compact>
         <div v-if="decaySampleWarn" class="warn-line">⚠ 当前有效期数 {{ decaySampleN }} 期，无法可靠判断最佳持有周期，以下结果仅供参考</div>
         <StockTable :rows="decayRows" :columns="decayColumns" :stock="false" :clickable="false" dense row-key="horizon" />
@@ -168,7 +204,7 @@
         <template #actions>
           <span class="sweep-meta">排序</span>
           <SegmentTabs v-model="sweepSortKey" :options="sweepSortOptions" small />
-          <span class="sweep-meta">体检窗口 {{ config.startDate }} ~ {{ config.endDate }}</span>
+          <span class="sweep-meta">体检窗口 {{ sweepConfig.startDate }} ~ {{ sweepConfig.endDate }} · {{ sweepConfig.rebalance }} · 平滑 {{ sweepConfig.smoothingDays }} 日</span>
         </template>
         <StockTable
           :rows="sweepRowsSorted"
@@ -182,7 +218,7 @@
             <span class="verdict-chip" :class="row.verdict.cls">{{ row.verdict.text }}</span>
           </template>
           <template #cell-view="{ row }">
-            <el-button link size="small" @click="viewStrategy(row.strategyId)">{{ row.error ? "重试" : "查看" }}</el-button>
+            <el-button link size="small" :disabled="sweep.running || loading" @click="viewStrategy(row.strategyId)">{{ row.error ? "重试" : "查看" }}</el-button>
           </template>
         </StockTable>
       </AppCard>
@@ -196,14 +232,16 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, CircleCheckFilled, WarningFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import type { EChartsOption } from 'echarts'
-import { runFactorLab, runAlphaFactorLab } from '@/api/strategy'
+import { useResearchJob } from '@/composables/useResearchJob'
 import { useStrategyStore } from '@/stores/strategy'
 import { useDevice } from '@/composables/useDevice'
 import { useChartTokens, baseTooltip } from '@/composables/useEcharts'
 import type { FactorLabResult } from '@/types'
+import { factorStatus, metric } from '@/utils/factorResult'
 import type { StatItem, SegmentOption, StockColumn } from '@/types/ui'
 import AppCard from '@/components/ui/AppCard.vue'
 import StatGrid from '@/components/ui/StatGrid.vue'
@@ -216,9 +254,11 @@ import AlphaExprInput from '@/components/screener/AlphaExprInput.vue'
 const strategyStore = useStrategyStore()
 const { isMobile } = useDevice()
 const tokens = useChartTokens()
+const { running: jobRunning, elapsed: jobElapsed, run: runJob } = useResearchJob()
 
 const loading = ref(false)
 const result = ref<FactorLabResult | null>(null)
+const runError = ref('')
 
 // 检验对象:内置策略 / 自定义因子(WorldQuant 式截面表达式)
 type LabMode = 'strategy' | 'factor'
@@ -235,6 +275,8 @@ const config = reactive({
   rebalance: 'monthly',
   layers: 5,
   expression: '',
+  smoothingDays: 1,
+  capDiagnostic: false,
 })
 
 function defaultStart(): string {
@@ -249,6 +291,8 @@ function defaultEnd(): string {
 const rebalanceOptions: SegmentOption<string>[] = [
   { label: '月度', value: 'monthly' },
   { label: '周度', value: 'weekly' },
+  { label: '10日', value: '10d' },
+  { label: '20日', value: '20d' },
 ]
 
 function fmtPct(v: number | undefined | null, d = 2): string {
@@ -269,16 +313,11 @@ const resultTitle = computed(() => {
 })
 const isReverse = computed(() => rating.value?.direction === 'reverse')
 const dirSign = computed(() => (isReverse.value ? -1 : 1))
-/** 方向校正后的多空毛收益（反向因子翻正） */
-const adjGross = computed(() => (result.value?.top_minus_bottom_annualized ?? 0) * dirSign.value)
-/** 摩擦成本与方向无关：净(反向) = 毛(反向) − 成本，而不是 −净 */
-const costAnn = computed(() => (result.value?.turnover_annualized ?? 0) * (rating.value?.cost_per_turnover ?? 0))
-const adjNet = computed(() => adjGross.value - costAnn.value)
-
-function fmtAdj(v: number | null | undefined, d = 4): string {
-  if (v == null) return '—'
-  return (v * dirSign.value >= 0 ? '+' : '') + (v * dirSign.value).toFixed(d)
-}
+// 金融计算由服务端完成，前端不重算成本或反向收益。
+const adjGross = computed(() => rating.value?.adjusted_gross_spread_ann)
+const costAnn = computed(() => rating.value?.cost_annualized)
+const adjNet = computed(() => rating.value?.adjusted_net_spread_ann)
+function fmtAdj(v: number | null | undefined, d = 4): string { return metric(v, d) }
 
 const DIM_LABELS: [string, string][] = [
   ['direction_ic', '方向IC强度'], ['stability', '稳定性'], ['significance', '显著性'],
@@ -286,7 +325,7 @@ const DIM_LABELS: [string, string][] = [
 ]
 const dimRows = computed(() => {
   const dims = rating.value?.dimensions || {}
-  return DIM_LABELS.map(([key, label]) => ({ key, label, value: Math.round(dims[key] || 0) }))
+  return DIM_LABELS.map(([key, label]) => ({ key, label, value: dims[key] == null ? null : Math.round(dims[key]!) }))
 })
 const gradeCls = computed(() => {
   const g = rating.value?.grade || 'D'
@@ -294,13 +333,13 @@ const gradeCls = computed(() => {
 })
 const directionMeta = computed(() => {
   const d = rating.value?.direction || 'neutral'
-  if (d === 'reverse') return { label: '反向因子', arrow: '↓', cls: 'dir-reverse' }
-  if (d === 'positive') return { label: '正向因子', arrow: '↑', cls: 'dir-positive' }
+  if (d === 'reverse') return { label: rating.value?.status_code === 'VALID' ? '反向因子' : '反向倾向', arrow: '↓', cls: 'dir-reverse' }
+  if (d === 'positive') return { label: rating.value?.status_code === 'VALID' ? '正向因子' : '正向倾向', arrow: '↑', cls: 'dir-positive' }
   return { label: '方向中性', arrow: '→', cls: 'dir-neutral' }
 })
 const confidenceMeta = computed(() => {
   const c = rating.value?.confidence ?? 0
-  if (c >= 70) return { text: '证据充分' }
+  if (rating.value?.status_code === 'VALID') return { text: '通过当前检验' }
   if (c >= 40) return { text: '尚不显著' }
   return { text: '证据不足' }
 })
@@ -319,15 +358,7 @@ const extraBars = computed(() => {
 })
 
 
-const statusMeta = computed(() => {
-  const r = result.value
-  if (r?.error_kind === 'coverage') return { emoji: '⚪', text: '覆盖不足', cls: 'st-coverage' }
-  if (r?.error_kind === 'compute') return { emoji: '🔴', text: '计算失败', cls: 'st-compute' }
-  const st = rating.value?.status || '不显著'
-  if (st === '有效') return { emoji: '🟢', text: '有效', cls: 'st-good' }
-  if (st === '候选') return { emoji: '🟡', text: '候选', cls: 'st-candidate' }
-  return { emoji: '🟠', text: '不显著', cls: 'st-insig' }
-})
+const statusMeta = computed(() => factorStatus(result.value))
 
 interface MetricRow {
   label: string
@@ -351,49 +382,16 @@ function strengthLabel(ratio: number): string {
 
 const metricRows = computed<MetricRow[]>(() => {
   const r = result.value
-  const s = r?.ic_summary
-  if (!s || !r) return []
-  const sign = dirSign.value
-  const rev = isReverse.value
-  const adj = (v: number, d = 4) => v * sign
-  const fmt = (v: number, d = 4) => adj(v, d).toFixed(d)
-  const mono = r.layer_monotonicity ?? 0
-  const spread = r.top_minus_bottom_annualized ?? 0
-  const posAdj = clamp01(rev ? 1 - s.positive_ratio : s.positive_ratio)
-  const absT = Math.abs(s.t_stat)
-  const rows: MetricRow[] = [
-    {
-      label: 'RankIC', value: fmt(s.mean), raw: s.mean.toFixed(4),
-      cls: s.mean * sign >= 0 ? 'price-up' : 'price-down',
-      bar: clamp01(Math.abs(s.mean) / 0.05) * 100, gradeText: strengthLabel(clamp01(Math.abs(s.mean) / 0.05)),
-    },
-    {
-      label: 'ICIR', value: fmt(s.icir, 3), raw: s.icir.toFixed(3),
-      bar: clamp01(Math.abs(s.icir) / 0.5) * 100, gradeText: strengthLabel(clamp01(Math.abs(s.icir) / 0.5)),
-    },
-    {
-      label: 'IC > 0', value: `${Math.round(posAdj * 100)}%`, raw: `${Math.round(s.positive_ratio * 100)}%`,
-      bar: posAdj * 100, gradeText: strengthLabel(posAdj),
-    },
-    {
-      label: 't 值', value: fmt(s.t_stat, 2), raw: s.t_stat.toFixed(2),
-      cls: absT >= 2 ? 'price-up' : undefined,
-      bar: clamp01(absT / 2.5) * 100,
-      gradeText: absT >= 2 ? '统计显著'
-        : absT >= 1.5 ? '⚠ 接近显著，未达常用 5% 阈值'
-        : '⚠ 尚不显著',
-    },
-    {
-      label: '分层单调性', value: fmt(mono, 2), raw: mono.toFixed(2),
-      bar: clamp01(Math.abs(mono)) * 100, gradeText: strengthLabel(clamp01(Math.abs(mono))),
-    },
-    {
-      label: '多空年化', value: fmtPct(spread * sign), raw: fmtPct(spread),
-      cls: spread * sign >= 0 ? 'price-up' : 'price-down',
-      bar: clamp01(Math.abs(spread) / 0.20) * 100, gradeText: strengthLabel(clamp01(Math.abs(spread) / 0.20)),
-    },
+  if (!r) return []
+  const s = r.ic_summary
+  const adjusted = r.ic_adjusted_summary
+  return [
+    { label: 'RankIC', value: metric(adjusted?.mean ?? s.mean), raw: metric(s.mean), bar: rating.value?.dimensions.direction_ic ?? 0, gradeText: '原始值保留' },
+    { label: 'ICIR', value: metric(adjusted?.icir ?? s.icir, 3), raw: metric(s.icir, 3), bar: rating.value?.dimensions.stability ?? 0, gradeText: '均值 / 样本标准差' },
+    { label: 't 值', value: metric(s.t_stat, 2), bar: rating.value?.dimensions.significance ?? 0, gradeText: '原始方向' },
+    { label: '双侧 p 值', value: metric(s.p_value), bar: 0, gradeText: s.p_value == null ? '不可计算' : s.p_value < .05 ? '未校正 p<0.05' : '尚不显著' },
+    { label: '多空价差', value: fmtPct(adjGross.value), raw: fmtPct(r.top_minus_bottom_annualized), bar: rating.value?.dimensions.spread ?? 0, gradeText: '非组合复利收益' },
   ]
-  return rows
 })
 
 const verdictCls = computed(() => statusMeta.value.cls)
@@ -404,29 +402,31 @@ const verdictText = computed(() => {
   const r = result.value
   if (!r) return ''
   if (r.error) return r.error
-  const st = rating.value?.status || '不显著'
-  const g = rating.value?.grade || 'D'
-  const net = fmtPct(adjNet.value)
-  if (isReverse.value) {
-    if (st === '有效') return `统计显著的反向因子 — 可作排除名单/反向信号使用，方向校正后净多空 ${net}`
-    if (st === '候选') return `反向因子候选 — 经济效果较强（${g} 级），方向稳定，但统计证据不足；不宜直接作为独立信号，建议扩大样本并做稳健性检验`
-    return '方向偏反向但不显著 — 暂不参与权重配置，保持观察'
-  }
-  if (st === '有效') return `统计显著 — 排序能力得到验证，方向校正后净多空 ${net}，可配置较高权重`
-  if (st === '候选') return `较强候选价值（实力 ${g} 级）— 但当前样本统计证据不足；建议扩大样本（拉长窗口或提高调仓频率）后再加权`
-  return '有数据但统计证据不足 — 暂不加权，拉长时间窗口后再判断'
+  if (r.status === 'INSUFFICIENT_DATA') return '样本不足，不能据此判定因子有效或无效'
+  if (r.status === 'VALID') return '达到当前统计与样本外门槛；仍需独立复现与成交约束验证，不自动加权'
+  if (r.status === 'CANDIDATE') return '候选因子：存在经济效果，但证据仍不足以独立使用'
+  return '统计证据不足，暂不据此增加权重'
 })
-
 const icItems = computed<StatItem[]>(() => {
-  const r = result.value
-  if (!r) return []
+  const s = result.value?.ic_summary
+  if (!s) return []
   return [
-    { label: 'RankIC 均值', value: (r.ic_summary.mean * dirSign.value).toFixed(4), cls: r.ic_summary.mean * dirSign.value >= 0 ? 'price-up' : 'price-down' },
-    { label: 'ICIR', value: (r.ic_summary.icir * dirSign.value).toFixed(3), cls: 'brand-text' },
-    { label: 'IC > 0 占比', value: `${Math.round((isReverse.value ? 1 - r.ic_summary.positive_ratio : r.ic_summary.positive_ratio) * 100)}%` },
-    { label: 't 统计量', value: (r.ic_summary.t_stat * dirSign.value).toFixed(2) },
+    { label: '原始 RankIC', value: metric(s.mean) },
+    { label: 'ICIR（未年化）', value: metric(s.icir, 3) },
+    { label: '原始 IC > 0', value: s.positive_ratio == null ? '—' : `${(s.positive_ratio * 100).toFixed(1)}%` },
+    { label: 't 统计量', value: metric(s.t_stat, 2) },
+    { label: '双侧 p 值', value: metric(s.p_value) },
+    { label: '有效期数', value: s.n },
+    { label: 'Pearson IC', value: metric(result.value?.ic_pearson_summary?.mean) },
   ]
 })
+const rollingOption = computed<EChartsOption>(() => ({
+  xAxis: { type: 'category', data: (result.value?.validation?.rolling ?? []).map(r => r.date) },
+  yAxis: { type: 'value' },
+  tooltip: { trigger: 'axis', ...baseTooltip(tokens.value) },
+  series: [{ name: '滚动60期 ICIR（原始方向）', type: 'line', showSymbol: false,
+    data: (result.value?.validation?.rolling ?? []).map(r => r.icir) }],
+}))
 
 const decayColumns: StockColumn[] = [
   { key: 'horizon', label: '前瞻窗口', format: (r: any) => `+${r.horizon} 日`, mobile: 'title' },
@@ -434,15 +434,8 @@ const decayColumns: StockColumn[] = [
   { key: 'icir', label: 'ICIR', type: 'num', digits: 3 },
   { key: 'n', label: '期数', type: 'num', digits: 0, mobile: 'secondary' },
 ]
-const decayRows = computed(() => {
-  const sign = dirSign.value
-  return (result.value?.decay ?? []).map(d => ({
-    horizon: d.horizon,
-    ic_mean: d.ic_mean * sign,
-    icir: d.icir * sign,
-    n: d.n,
-  }))
-})
+const decayRows = computed(() => result.value?.decay ?? [])
+
 const decaySampleN = computed(() => Math.max(0, ...(result.value?.decay ?? []).map(d => d.n)))
 const decaySampleWarn = computed(() => (result.value?.decay?.length ?? 0) > 0 && decaySampleN.value < 20)
 
@@ -452,32 +445,37 @@ async function run() {
     return
   }
   loading.value = true
+  runError.value = ''
+  result.value = null
   try {
     const r = mode.value === 'factor'
-      ? await runAlphaFactorLab({
+      ? await runJob<FactorLabResult>('alphalab-factorlab', {
           expression: config.expression.trim(),
           startDate: config.startDate,
           endDate: config.endDate,
           rebalance: config.rebalance,
           layers: config.layers,
           maxCodes: 400,
+          smoothingDays: config.smoothingDays, capDiagnostic: config.capDiagnostic,
         })
-      : await runFactorLab({
+      : await runJob<FactorLabResult>('factorlab', {
           strategyId: config.strategyId,
           startDate: config.startDate,
           endDate: config.endDate,
           rebalance: config.rebalance,
           layers: config.layers,
           maxCodes: 300,
+          smoothingDays: config.smoothingDays, capDiagnostic: config.capDiagnostic,
         })
+    result.value = r
     if (r.error) {
       ElMessage.warning(r.error)
       return
     }
     result.value = r
     ElMessage.success(mode.value === 'factor' ? '自定义因子检验完成' : '因子检验完成')
-  } catch {
-    ElMessage.error('因子检验失败')
+  } catch (e) {
+    runError.value = e instanceof Error ? e.message : '因子检验失败'
   } finally {
     loading.value = false
   }
@@ -492,6 +490,7 @@ interface SweepRow {
   icir: number | null
   positive_ratio: number | null
   t_stat: number | null
+  p_value?: number | null
   spread: number | null
   n: number | null
   verdict: { text: string; cls: string }
@@ -501,7 +500,8 @@ interface SweepRow {
   error?: string
 }
 
-const SWEEP_KEY = 'factorlab_sweep_v3'
+const SWEEP_KEY = 'factorlab_sweep_v4_engine_v3'
+const sweepConfig = reactive({ ...config })
 const fullResults = new Map<string, FactorLabResult>()
 const sweep = reactive({
   running: false,
@@ -523,11 +523,11 @@ const sweepSortOptions: SegmentOption<SweepSortKey>[] = [
 ]
 const sweepSortValue = (r: SweepRow): number => {
   switch (sweepSortKey.value) {
-    case "|RankIC|": return Math.abs(r.ic_mean ?? 0)
-    case "多空年化": return Math.abs(r.spread ?? 0)
-    case "经济效果": return r.composite ?? 0
-    case "统计可信度": return r.confidence ?? 0
-    default: return Math.abs(r.icir ?? 0)
+    case "|RankIC|": return r.ic_mean == null ? -Infinity : Math.abs(r.ic_mean)
+    case "多空年化": return r.spread == null ? -Infinity : Math.abs(r.spread)
+    case "经济效果": return r.composite ?? -Infinity
+    case "统计可信度": return r.confidence ?? -Infinity
+    default: return r.icir == null ? -Infinity : Math.abs(r.icir)
   }
 }
 const sweepRowsSorted = computed(() =>
@@ -535,8 +535,7 @@ const sweepRowsSorted = computed(() =>
 )
 
 function sweepVerdictChip(r: FactorLabResult): { text: string; cls: string } {
-  const emoji = r.rating?.status === '有效' ? '🟢' : r.rating?.status === '候选' ? '🟡' : '🟠'
-  return { text: `${emoji} ${r.rating?.status || '不显著'}`, cls: 'st-insig' }
+  return factorStatus(r)
 }
 
 const sweepColumns: StockColumn[] = [
@@ -547,6 +546,7 @@ const sweepColumns: StockColumn[] = [
     format: (r: any) => (r.positive_ratio == null ? '—' : `${Math.round(r.positive_ratio * 100)}%`) },
   { key: 'spread', label: '多空年化', type: 'num', digits: 4, mobile: 'secondary' },
   { key: 't_stat', label: 't 值', type: 'num', digits: 2, mobile: 'hidden' },
+  { key: 'p_value', label: 'p 值', type: 'num', digits: 4, mobile: 'secondary' },
   { key: 'grade', label: '经济效果', align: 'center', mobile: 'secondary',
     format: (r: any) => (r.grade == null ? '—' : `${r.grade} · ${r.composite}`) },
   { key: 'verdict', label: '状态', align: 'center', mobile: 'primary' },
@@ -556,7 +556,7 @@ const sweepColumns: StockColumn[] = [
 function saveSweep() {
   try {
     localStorage.setItem(SWEEP_KEY, JSON.stringify({
-      startDate: config.startDate, endDate: config.endDate, rows: sweep.summaries,
+      config: sweepConfig, rows: sweep.summaries, fullResults: [...fullResults.entries()],
     }))
   } catch { /* 存不下就算了 */ }
 }
@@ -570,8 +570,10 @@ function loadSweep() {
       sweep.summaries = parsed.rows
       sweep.total = parsed.rows.length
       sweep.done = parsed.rows.length
-      config.startDate = parsed.startDate || config.startDate
-      config.endDate = parsed.endDate || config.endDate
+      if (parsed.config) { Object.assign(sweepConfig, parsed.config); Object.assign(config, parsed.config) }
+      for (const [id, value] of (parsed.fullResults ?? [])) {
+        if (value.engine_version === 'factorlab-2026-10-11-v3') fullResults.set(id, value)
+      }
     }
   } catch { /* ignore */ }
 }
@@ -600,20 +602,25 @@ async function retryRow(id: string) {
   if (!row) return
   sweep.current = row.name
   try {
-    const r = await runFactorLab({
+    const r = await runJob<FactorLabResult>('factorlab', {
       strategyId: id,
-      startDate: config.startDate,
-      endDate: config.endDate,
-      rebalance: config.rebalance,
-      layers: config.layers,
+      startDate: sweepConfig.startDate,
+      endDate: sweepConfig.endDate,
+      rebalance: sweepConfig.rebalance,
+      layers: sweepConfig.layers,
       maxCodes: 300,
+      smoothingDays: sweepConfig.smoothingDays, capDiagnostic: sweepConfig.capDiagnostic,
     })
-    if (r.error) { row.error = r.error; return }
+    if (r.error) {
+      Object.assign(row, { error: r.error, ic_mean: null, icir: null, positive_ratio: null, t_stat: null, p_value: null, spread: null, n: null, grade: null, composite: null, confidence: null, verdict: factorStatus(r) })
+      fullResults.delete(id); result.value = r; saveSweep(); return
+    }
     fullResults.set(id, r)
     row.ic_mean = r.ic_summary.mean
     row.icir = r.ic_summary.icir
     row.positive_ratio = r.ic_summary.positive_ratio
     row.t_stat = r.ic_summary.t_stat
+    row.p_value = r.ic_summary.p_value
     row.spread = r.top_minus_bottom_annualized
     row.n = r.ic_summary.n
     row.verdict = sweepVerdictChip(r)
@@ -624,8 +631,15 @@ async function retryRow(id: string) {
     result.value = r
     saveSweep()
     window.scrollTo({ top: 0, behavior: 'smooth' })
-  } catch {
-    row.error = '重试失败'
+  } catch (err: any) {
+    const message = err?.message || '重试失败'
+    Object.assign(row, { error: message, ic_mean: null, icir: null, positive_ratio: null,
+      t_stat: null, p_value: null, spread: null, n: null, grade: null,
+      composite: null, confidence: null, verdict: { text: '计算失败', cls: 'fail' } })
+    fullResults.delete(id)
+    result.value = null
+    ElMessage.error(message)
+    saveSweep()
   } finally {
     sweep.current = ''
   }
@@ -634,6 +648,7 @@ async function retryRow(id: string) {
 async function runSweep() {
   const list = strategyStore.strategies
   if (!list.length) return
+  Object.assign(sweepConfig, config)
   sweep.running = true
   sweep.stopped = false
   sweep.done = 0
@@ -641,13 +656,14 @@ async function runSweep() {
   sweep.summaries = []
   fullResults.clear()
 
-  const callOnce = (id: string) => runFactorLab({
+  const callOnce = (id: string) => runJob<FactorLabResult>('factorlab', {
     strategyId: id,
-    startDate: config.startDate,
-    endDate: config.endDate,
-    rebalance: config.rebalance,
-    layers: config.layers,
+    startDate: sweepConfig.startDate,
+    endDate: sweepConfig.endDate,
+    rebalance: sweepConfig.rebalance,
+    layers: sweepConfig.layers,
     maxCodes: 300,
+      smoothingDays: sweepConfig.smoothingDays, capDiagnostic: sweepConfig.capDiagnostic,
   })
 
   for (const s of list) {
@@ -676,6 +692,7 @@ async function runSweep() {
         icir: r.ic_summary.icir,
         positive_ratio: r.ic_summary.positive_ratio,
         t_stat: r.ic_summary.t_stat,
+        p_value: r.ic_summary.p_value,
         spread: r.top_minus_bottom_annualized,
         n: r.ic_summary.n,
         verdict: sweepVerdictChip(r),
@@ -705,6 +722,16 @@ async function runSweep() {
 }
 
 onMounted(loadSweep)
+
+// 深链：因子挖掘页「去检验」带 ?expr= 直接载入自定义因子表达式
+const route = useRoute()
+onMounted(() => {
+  const expr = Array.isArray(route.query.expr) ? route.query.expr[0] : route.query.expr
+  if (expr) {
+    mode.value = 'factor'
+    config.expression = String(expr)
+  }
+})
 
 const layerOption = computed<EChartsOption | null>(() => {
   const rows = result.value?.layer_curves
@@ -752,8 +779,8 @@ const icOption = computed<EChartsOption | null>(() => {
     series: [{
       type: 'bar',
       data: rows.map(r => ({
-        value: r.ic * sign,
-        itemStyle: { color: r.ic * sign >= 0 ? t.up : t.down },
+        value: r.ic,
+        itemStyle: { color: r.ic >= 0 ? t.up : t.down },
       })),
     }],
     tooltip: { trigger: 'axis', ...baseTooltip(t) },

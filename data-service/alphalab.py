@@ -53,22 +53,31 @@ FUND_FIELDS = {
 
 OPERATORS = {
     # —— 时序（向后窗口）——
-    "ts_mean(x,n)": "n 日均值",
-    "ts_std(x,n)": "n 日标准差",
+    "ts_mean(x,n)": "n 日均值（别名 MEAN/ROLLING_MA/MA）",
+    "ts_std(x,n)": "n 日标准差（别名 STD/ROLLING_STD）",
     "ts_sum(x,n)": "n 日求和",
-    "ts_max(x,n)": "n 日最大",
-    "ts_min(x,n)": "n 日最小",
+    "ts_max(x,n)": "n 日最大（别名 MAX/ROLLING_MAX）",
+    "ts_min(x,n)": "n 日最小（别名 MIN/ROLLING_MIN）",
+    "ts_median(x,n)": "n 日中位数（别名 MEDIAN）",
     "ts_rank(x,n)": "当前值在最近 n 日中的分位（0~1）",
-    "delay(x,n)": "n 天前的值",
-    "delta(x,n)": "x - delay(x,n)",
-    "pct_chg(x,n)": "n 日累计涨跌幅",
+    "delay(x,n)": "n 天前的值（别名 SHIFT，n 必须 >= 1）",
+    "delta(x,n)": "x - delay(x,n)（别名 DIFF，n 必须 >= 1）",
+    "pct_chg(x,n)": "n 日累计涨跌幅（n 必须 >= 1）",
     "ts_corr(x,y,n)": "逐股 n 日滚动相关",
+    "ema(x,n)": "n 日指数均线（EMA）",
+    "slope(x,n)": "n 日相对斜率 x.pct_change(n)/n",
     # —— 截面（每个交易日横跨全部股票）——
-    "rank(x)": "截面百分位秩（0~1）",
-    "zscore(x)": "截面 z 分数",
+    "rank(x)": "截面百分位秩（0~1，别名 PERCENTILE）",
+    "zscore(x)": "截面 z 分数（别名 ZSCORE）",
     "sign(x)": "符号",
     "log(x)": "自然对数（自动防负）",
     "abs(x)": "绝对值",
+    "sqrt(x)": "平方根（负数为 NaN）",
+    "pow(x,a)": "幂（别名 ** 运算符）",
+    # —— 条件（入参可与 python 比较运算符混用，如 IF(close>MA20, x, 0)）——
+    "gt(a,b)": "a > b（另 LT/GTE/LTE）",
+    "and_(a,b)": "逻辑与（别名 AND；另有 OR）",
+    "if_(c,a,b)": "c 真取 a 否则 b（别名 IF；条件可用 python 比较符直接写）",
 }
 
 EXAMPLES = [
@@ -193,7 +202,12 @@ def build_panel(start: dt.date, end: dt.date) -> dict[str, pd.DataFrame]:
 
 
 def _make_namespace(panel: dict[str, pd.DataFrame]) -> dict:
-    """字段 + 算子的求值命名空间；算子同时注册 WorldQuant 小写与大写别名。"""
+    """字段 + 算子的求值命名空间；算子同时注册 WorldQuant 小写与大写别名。
+
+    返回 _LazyAtomNamespace：原子因子（atoms.ATOMS，如 CLOSE/MA20/RSI14/量比…）
+    按需计算并缓存——不引用的原子零开销。防未来函数：所有窗口参数 n<1 直接报错
+    （delay/delta/pct_chg 的负数窗口等价于使用未来数据，见 SKILL §22）。
+    """
 
     def _num(x) -> pd.DataFrame:
         if isinstance(x, pd.DataFrame):
@@ -205,18 +219,29 @@ def _make_namespace(panel: dict[str, pd.DataFrame]) -> dict:
                 index=panel["close"].index, columns=panel["close"].columns)
         return panel["close"] * float(x)
 
+    def _win(n, minv: int = 1) -> int:
+        try:
+            v = int(n)
+        except (TypeError, ValueError):
+            raise AlphaExprError(f"窗口参数必须是整数: {n!r}")
+        if v < minv:
+            raise AlphaExprError(f"窗口参数必须 >= {minv}（负窗口是未来函数）: {n!r}")
+        return v
+
     # —— 时序算子 ——
-    def ts_mean(x, n): return _num(x).rolling(int(n), min_periods=int(n)).mean()
-    def ts_std(x, n): return _num(x).rolling(int(n), min_periods=int(n)).std()
-    def ts_sum(x, n): return _num(x).rolling(int(n), min_periods=int(n)).sum()
-    def ts_max(x, n): return _num(x).rolling(int(n), min_periods=int(n)).max()
-    def ts_min(x, n): return _num(x).rolling(int(n), min_periods=int(n)).min()
+    def ts_mean(x, n): return _num(x).rolling(_win(n), min_periods=_win(n)).mean()
+    def ts_std(x, n): return _num(x).rolling(_win(n), min_periods=_win(n)).std()
+    def ts_sum(x, n): return _num(x).rolling(_win(n), min_periods=_win(n)).sum()
+    def ts_max(x, n): return _num(x).rolling(_win(n), min_periods=_win(n)).max()
+    def ts_min(x, n): return _num(x).rolling(_win(n), min_periods=_win(n)).min()
+
+    def ts_median(x, n): return _num(x).rolling(_win(n), min_periods=_win(n)).median()
 
     def ts_rank(x, n):
         # 向量化：当前值在最近 n 日窗口内的分位 = (严格小于当前值的前 n-1 个值计数)/(n-1)。
         # 全窗口非 NaN 才有效（与 rolling 语义一致）。n-1 次向量化比较，避免逐窗口 apply。
         m = _num(x)
-        n = int(n)
+        n = _win(n)
         cnt = None
         for j in range(1, n):
             cmp = (m > m.shift(j)).astype(float)
@@ -224,12 +249,19 @@ def _make_namespace(panel: dict[str, pd.DataFrame]) -> dict:
         full = m.notna() & (m.rolling(n).count() == n)
         return (cnt / max(n - 1, 1)).where(full)
 
-    def delay(x, n): return _num(x).shift(int(n))
-    def delta(x, n): return _num(x) - _num(x).shift(int(n))
-    def pct_chg(x, n): return _num(x).pct_change(int(n))
+    def delay(x, n): return _num(x).shift(_win(n))
+    def delta(x, n): return _num(x) - _num(x).shift(_win(n))
+    def pct_chg(x, n): return _num(x).pct_change(_win(n))
 
     def ts_corr(x, y, n):
-        return _num(x).rolling(int(n), min_periods=int(n)).corr(_num(y))
+        return _num(x).rolling(_win(n), min_periods=_win(n)).corr(_num(y))
+
+    def ema(x, n):
+        return _num(x).ewm(span=_win(n), adjust=False).mean()
+
+    def slope(x, n):
+        # 相对斜率：n 日涨跌幅均摊到每日，天然截面可比
+        return _num(x).pct_change(_win(n)) / _win(n)
 
     # —— 截面算子 ——
     def rank(x):
@@ -252,22 +284,108 @@ def _make_namespace(panel: dict[str, pd.DataFrame]) -> dict:
     def abs_(x):
         return _num(x).abs()
 
+    def sqrt(x):
+        m = _num(x)
+        return np.sqrt(m.where(m >= 0))
+
+    def pow_(x, a):
+        m = _num(x).where(_num(x) >= 0) if not isinstance(a, pd.DataFrame) else _num(x)
+        return np.power(m, a)
+
+    # —— 条件算子（条件可直接用 python 比较符得到 bool 矩阵）——
+    def _bool(c) -> pd.DataFrame:
+        m = c
+        if isinstance(m, pd.Series):
+            m = _num(m) if m.dtype.kind in "fc" else m
+            if not isinstance(m, pd.DataFrame):
+                m = pd.DataFrame(np.tile(m.to_numpy()[:, None], (1, len(panel["close"].columns))),
+                                 index=panel["close"].index, columns=panel["close"].columns)
+        if not isinstance(m, pd.DataFrame):
+            return panel["close"] * 0.0 + bool(m)
+        if m.values.dtype == bool:
+            return m
+        return m.notna() & (m != 0)
+
+    def gt(a, b): return _num(a) > _num(b)
+    def lt(a, b): return _num(a) < _num(b)
+    def gte(a, b): return _num(a) >= _num(b)
+    def lte(a, b): return _num(a) <= _num(b)
+
+    def and_(a, b): return _bool(a) & _bool(b)
+    def or_(a, b): return _bool(a) | _bool(b)
+
+    def if_(c, a, b):
+        cond = _bool(c)
+        ta = _num(a) if not isinstance(a, pd.DataFrame) else a.astype(float)
+        tb = _num(b) if not isinstance(b, pd.DataFrame) else b.astype(float)
+        return ta.where(cond, tb)
+
     ts_ops = {"ts_mean": ts_mean, "ts_std": ts_std, "ts_sum": ts_sum,
-              "ts_max": ts_max, "ts_min": ts_min, "ts_rank": ts_rank,
-              "delay": delay, "delta": delta, "pct_chg": pct_chg,
-              "ts_corr": ts_corr}
-    cross_ops = {"rank": rank, "zscore": zscore, "sign": sign, "log": log, "abs": abs_}
+              "ts_max": ts_max, "ts_min": ts_min, "ts_median": ts_median,
+              "ts_rank": ts_rank, "delay": delay, "delta": delta, "pct_chg": pct_chg,
+              "ts_corr": ts_corr, "ema": ema, "slope": slope}
+    cross_ops = {"rank": rank, "zscore": zscore, "sign": sign, "log": log, "abs": abs_,
+                 "sqrt": sqrt, "pow": pow_}
+    cond_ops = {"gt": gt, "lt": lt, "gte": gte, "lte": lte,
+                "and_": and_, "or_": or_, "if_": if_}
     ns: dict = {}
     for d in (*PRICE_FIELDS, *FUND_FIELDS):
         ns[d] = panel[d]
     ns.update(ts_ops)
     ns.update(cross_ops)
+    ns.update(cond_ops)
+    # 惯用别名（用户手册口径）：MA/STD/MAX/MIN/MEDIAN=滚动；RANK/PERCENTILE/ZSCORE=截面
+    aliases = {
+        "MA": ts_mean, "MEAN": ts_mean, "ROLLING_MEAN": ts_mean,
+        "STD": ts_std, "ROLLING_STD": ts_std,
+        "ROLLING_MAX": ts_max, "ROLLING_MIN": ts_min,
+        "MAX": ts_max, "MIN": ts_min, "MEDIAN": ts_median,
+        "ROLLING_MEDIAN": ts_median, "DIFF": delta, "SHIFT": delay,
+        "PERCENTILE": rank, "ZSCORE": zscore,
+        "GT": gt, "LT": lt, "GTE": gte, "LTE": lte,
+        "AND": and_, "OR": or_, "IF": if_,
+    }
     for base in (*ts_ops, *cross_ops):
         ns[base.upper()] = ns[base]
+    for name, fn in aliases.items():
+        ns[name] = fn
     ns["LOG"] = ns["log"]
     ns["ABS"] = ns["abs"]
     ns["SIGN"] = ns["sign"]
-    return ns
+    ns["SQRT"] = ns["sqrt"]
+    ns["POW"] = ns["pow"]
+    return _LazyAtomNamespace(ns, panel)
+
+
+class _LazyAtomNamespace(dict):
+    """命名空间 dict：原子因子（atoms.ATOMS）缺失时按需计算并缓存。
+
+    parse_alpha 的「名字必须在 namespace」校验走 __contains__（不触发计算）；
+    eval 的取值走 __getitem__/__missing__（只算被引用的原子）。
+    """
+
+    def __init__(self, base: dict, panel: dict):
+        super().__init__(base)
+        self._panel = panel
+        self._atoms = None
+
+    def _registry(self) -> dict:
+        if self._atoms is None:
+            from atoms import ATOMS
+            self._atoms = ATOMS
+        return self._atoms
+
+    def __contains__(self, key) -> bool:
+        return dict.__contains__(self, key) or key in self._registry()
+
+    def __missing__(self, key):
+        from atoms import compute_atom
+        try:
+            m = compute_atom(key, self._panel)
+        except KeyError:
+            raise KeyError(key)
+        self[key] = m
+        return m
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +418,16 @@ def eval_expression(expr: str, panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _liquidity_universe(close: pd.DataFrame, volume: pd.DataFrame,
-                        max_codes: int) -> list[str]:
-    """流动性宇宙：日均成交额（close×volume）降序前 max_codes。"""
-    liq = (close * volume).mean()
-    return liq.sort_values(ascending=False).head(max_codes).index.tolist()
+                        max_codes: int, as_of: dt.date | None = None) -> list[str]:
+    """研究起点可知的60日流动性，与内置策略共用股票池选择器。"""
+    from factorlab import _universe_codes
+    return _universe_codes(None, close, max_codes, volume, as_of=as_of)
 
 
 def analyze_expr(expr: str, start: dt.date, end: dt.date,
                  rebalance: str = "weekly", layers: int = 5,
-                 max_codes: int = 400, neutralize: bool = True) -> dict:
+                 max_codes: int = 400, neutralize: bool = True,
+                 smoothing_days: int = 1, cap_diagnostic: bool = False) -> dict:
     from factorlab import analyze_scores
     panel = build_panel(start, end)
     if not panel:
@@ -323,7 +442,7 @@ def analyze_expr(expr: str, start: dt.date, end: dt.date,
 
     close = panel["close"]
     # 流动性宇宙：与 analyze_scores 共用同一份（否则两个前 N 交集坍缩、覆盖失效）
-    codes = [c for c in _liquidity_universe(close, panel["volume"], max_codes)
+    codes = [c for c in _liquidity_universe(close, panel["volume"], max_codes, as_of=start)
              if c in factor.columns]
     factor = factor[codes]
 
@@ -336,7 +455,8 @@ def analyze_expr(expr: str, start: dt.date, end: dt.date,
 
     result = analyze_scores(provider, start=start, end=end, rebalance=rebalance,
                             layers=layers, codes=codes, neutralize=neutralize,
-                            factor_name="自定义因子")
+                            factor_name="自定义因子", smoothing_days=smoothing_days,
+                            cap_diagnostic=cap_diagnostic)
     if "error" not in result:
         result["expression"] = expr
     return result
@@ -559,7 +679,45 @@ def backtest_expr(expr: str, start: dt.date, end: dt.date,
     return out
 
 
+def scan_negative_window(expr: str) -> str | None:
+    """静态泄漏扫描：窗口类算子带负常量窗口 → 未来函数（SKILL §22）。
+
+    返回人话描述或 None。运行期另有 _win() 守卫兜底（双层防护）。
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return None   # 语法错误由 parse_alpha 负责
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id.upper() in _WINDOWED_OPS_UPPER:
+            for arg in node.args[1:]:
+                if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, (ast.USub, ast.UAdd)):
+                    try:
+                        shown = ast.unparse(arg)
+                    except Exception:
+                        shown = "-n"
+                    return f"窗口算子 {node.func.id} 使用了负窗口 {shown}（等价于使用未来数据）"
+    return None
+
+
+_WINDOWED_OPS_UPPER = {
+    "TS_MEAN", "TS_STD", "TS_SUM", "TS_MAX", "TS_MIN", "TS_MEDIAN", "TS_RANK",
+    "DELAY", "DELTA", "PCT_CHG", "TS_CORR", "EMA", "SLOPE",
+    "MA", "MEAN", "STD", "MAX", "MIN", "MEDIAN",
+    "ROLLING_MEAN", "ROLLING_STD", "ROLLING_MAX", "ROLLING_MIN", "ROLLING_MEDIAN",
+    "SHIFT", "DIFF",
+}
+
+
 def help_payload() -> dict:
+    from atoms import ATOM_CATEGORIES, ATOMS
+    atom_items: list[dict] = []
+    for cat in ATOM_CATEGORIES:
+        items = [{"name": s.name, "desc": s.desc}
+                 for s in ATOMS.values() if s.category == cat]
+        if items:
+            atom_items.append({"category": f"原子因子 · {cat}", "items": items})
     return {
         "fields": [
             {"category": "行情（时序面板）", "items": [
@@ -568,6 +726,7 @@ def help_payload() -> dict:
                 {"name": k, "desc": v} for k, v in FUND_FIELDS.items()]},
             {"category": "算子", "items": [
                 {"name": k, "desc": v} for k, v in OPERATORS.items()]},
+            *atom_items,
         ],
         "examples": EXAMPLES,
         "notes": [
@@ -575,5 +734,7 @@ def help_payload() -> dict:
             "组合回测按 t+1 日开盘价成交，开盘一字涨停买不进、开盘跌停卖不出。",
             "财务字段按公告日（缺失用法定披露截止日）进入，无未来数据。",
             "无历史市值数据，故不提供市值字段（避免用当前市值回填历史）。",
+            "窗口参数必须 >= 1：负窗口（如 delay(close,-1)）是未来函数，解析与求值双层拦截。",
+            "原子因子（MA20/RSI14/VOLUME_RATIO_5 等）由因子挖掘模块按需计算，可直接用于表达式。",
         ],
     }

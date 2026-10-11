@@ -37,10 +37,36 @@ public class SchemaMigration {
             addPortfolioT1Columns();
             createUserAiConfigTable();
             createAiAnalysisRunTable();
+            createAiChatTables();
             log.info("[migration] Phase4 admin schema applied");
         } catch (Exception e) {
             log.error("[migration] Phase4 admin schema failed: {}", e.getMessage(), e);
         }
+    }
+
+    /** AI 多轮对话：会话 + 消息（见 AiChatService）。 */
+    private void createAiChatTables() {
+        jdbc.execute(
+            "CREATE TABLE IF NOT EXISTS `ai_chat_session` (" +
+            "`id` BIGINT NOT NULL AUTO_INCREMENT," +
+            "`user_id` BIGINT NOT NULL," +
+            "`title` VARCHAR(100) NOT NULL DEFAULT '新对话'," +
+            "`created_at` DATETIME DEFAULT CURRENT_TIMESTAMP," +
+            "`updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP," +
+            "PRIMARY KEY (`id`)," +
+            "INDEX `idx_aichat_user` (`user_id`, `updated_at`)" +
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        jdbc.execute(
+            "CREATE TABLE IF NOT EXISTS `ai_chat_message` (" +
+            "`id` BIGINT NOT NULL AUTO_INCREMENT," +
+            "`session_id` BIGINT NOT NULL," +
+            "`user_id` BIGINT NOT NULL," +
+            "`role` VARCHAR(10) NOT NULL," +
+            "`content` TEXT NOT NULL," +
+            "`created_at` DATETIME DEFAULT CURRENT_TIMESTAMP," +
+            "PRIMARY KEY (`id`)," +
+            "INDEX `idx_aichat_msg` (`session_id`, `id`)" +
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     }
 
     private void addPortfolioT1Columns() {

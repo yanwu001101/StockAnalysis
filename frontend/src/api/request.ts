@@ -57,8 +57,12 @@ request.interceptors.response.use(
   (response) => {
     const res = response.data as ApiResponse<any>
     if (res.code !== 200) {
-      ElMessage.error(res.message || '请求失败')
-      return Promise.reject(new Error(res.message || '请求失败'))
+      const error = Object.assign(new Error(res.message || '请求失败'), {
+        code: res.code, response: { ...response, status: res.code }, config: response.config,
+      })
+      if (res.code === 401) expireMatchingSession(response.config)
+      else toastOnce(String(res.code), res.message || '请求失败')
+      return Promise.reject(error)
     }
     if (res.dataTime != null) {
       // 在拦截器内动态 import,避免和 store 初始化顺序产生循环依赖
@@ -75,11 +79,7 @@ request.interceptors.response.use(
       const url = String(error.config?.url || '')
       const needsAuth = /\/(user|portfolio|ai|admin)\b/i.test(url)
       if (needsAuth) {
-        try { localStorage.removeItem('token') } catch { /* ignore */ }
-        const path = window.location.pathname
-        if (path !== '/login' && !path.startsWith('/login')) {
-          window.location.href = '/login'
-        }
+        expireMatchingSession(error.config)
         return Promise.reject(error)
       }
       // 公开接口 401：只提示，不登出
@@ -91,6 +91,16 @@ request.interceptors.response.use(
     return Promise.reject(error)
   }
 )
+
+function expireMatchingSession(config: any) {
+  if (!/\/(user|portfolio|ai|admin)\b/i.test(String(config?.url || ''))) return
+  const sent = String(config?.headers?.Authorization || '')
+  const current = localStorage.getItem('token')
+  // A late 401 from account A must not invalidate account B.
+  if (!current || sent !== `Bearer ${current}`) return
+  localStorage.removeItem('token')
+  if (!window.location.pathname.startsWith('/login')) window.location.href = '/login'
+}
 
 // 同一条错误 30 秒内只弹一次：行情页自动刷新时，上游限流/断网会连环失败，
 // 逐条弹错会变成盖住导航的白色 toast 刷屏（SKILL §34 状态明确 ≠ 轰炸）。

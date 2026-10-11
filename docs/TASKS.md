@@ -1,7 +1,8 @@
 # 量化系统任务交接表
 
-> 供新会话接续：当前基线 = P0/P1/P3 + P2 性能面板化 + P4 里程碑1 + 回测引擎 T+1 修复 + AlphaLab 自定义因子 全部落地（2026-09-13）。
+> 供新会话接续：当前基线 = P0/P1/P3 + P2 性能面板化 + P4 里程碑1 + 回测引擎 T+1 修复 + AlphaLab 自定义因子 + 统计引擎 v2（quant_stats/ENGINE_VERSION/p 值/样本内外）+ 行业指数管线与 sector_rank 统一口径 + factormine 因子挖掘 + 云权重同步 全部落地（2026-10-11）。
 > 规范：所有量化相关改动必须遵循 `.claude/skills/quant-product-engineer/SKILL.md`。
+> 回归基线（2026-10-11 收尾会话实测）：Python 102 项全过（主机 Python 3.11，容器内无 pytest）、前端 vitest 11 项全过、`npm run build` 生产构建通过。
 
 ## 当前系统基线（已完成，勿重做）
 
@@ -42,13 +43,24 @@
 | **盘面请求风暴治理（重复订阅 + 策略分 N+1）**（根因不是「双 onMounted」而是 refresh store 的**单槽 reloader**：`registerReloader` 覆盖前一个组件的 loader，而每个 `useRefreshable` 组件挂载都调 `invokeReloader()`＝跑「当前」那个 → 同页 N 个组件＝同一批接口拉 N 次，且可能跑的是别人的 loader。改：①store 改多路注册（Map<label,{fn,autoRefresh,running}>）+ `invokeLabel`（组件挂载/keep-alive 切回只跑自己的，各自防重入）+ `invokeReloader`（全局刷新按钮/轮询才把所有各跑一次），`reloader` 保留真值语义以兼容 RefreshBar 显隐；②新增 `POST /api/v2/strategies/batch`（复用 `_bulk_load_panels` + `_score_all` + `_parse_weights`，与 /screen、/stock/<code>/score 同引擎同权重口径，上限 60 只），Java 加 `POST /api/stock/strategies/batch`；③Dashboard 用 1 次批量替掉 20 次逐股 GET。**顺带修好一个死 UI**：legacy `/api/stock/<code>/strategies` 根本不返回 `aggregate`，盘面「策略评分」列一直显示 `—`，现在 20 行全部渲染真实「看多/有效·触发」。实测一次盘面加载：8 个市场接口各 1 次（原 3 次）+ 1 次批量 POST（原 20 次）；个股页同样每接口只发一次） | ✅ 2026-10-11 | stores/refresh.ts、useRefreshable.ts、api/strategies_v2.py、backend StockController/DataService、Dashboard.vue |
 | **申万二级行业指数日线 + as-of 行业强度排名**（「行业动量轮动」长期 ⚪ coverage 的真因不是窗口，而是研究链路根本没注入 `sector_rank`——唯一注入点 api/strategies_v2 用的是**当日**涨跌幅均值排名，既不符合策略文档的 20 日相对强度，也无法按 as-of 回放，于是每期都 no_data。数据源选申万官网（`sw_index_second_info` + `index_hist_sw`）：实测 128 个行业名里 **127 个与 stock_info.industry 完全一致**（本就是同一口径），行业指数与个股行业可直接 JOIN、无需会漂移的人工映射表，且完全绕开已封锁的东财板块列表；首轮回补 131 指数 / 19.2 万行（2019 起）。新增 core/sector_rank 统一口径（只用 ≤as_of 的收盘算 20 日动量截面排名，0.0=最强，面板缓存 30min），实时与研究两条链路共用**同一份**实现；原先 api/strategies_v2 里那套「当日涨跌幅快照排名」已删除——同一字段留两种定义会让盘面与体检对同一只股票给出互不相容的数字，表为空/对不上口径时返回 None 走 no_data（银行股因此 effective 27 vs 其他 28，是可见的诚实降级而非错数）。银行类**不合并口径**：申万把银行拆成国有大行/股份行/城商行/农商行，我们只有「银行Ⅱ」，对不上就返回 None，宁可缺也不把两套 taxonomy 混进同一个截面。踩到两个坑：①`DataFrame / Series` 默认按**列**对齐，用日期索引的 n 去除排名会让列数从 131 炸到 2013 且全 NaN（必须 `.div(n, axis=0)`）；②工具脚本的 `main()` 写在模块顶层导致 import 即触发跑测。验证：sector_rotation n 0→135、IC -0.0073、t -0.41、grade D（无证据）；technical_resonance 数值与改动前完全一致（t -0.72），证明注入没有扰动其它策略口径。调度工作日 16:22 增量刷新（先于 16:30 全市场日K） | ✅ 2026-10-11 | core/sector_rank.py、pipelines/industry_index.py、repo/industry_index_repo.py、backtest/engine.py、api/strategies_v2.py、scheduler.py |
 | **基本面历史深度回补（2021Q4~2026Q1，18 个报告期）**（akshare 业绩报表+资产负债表按报告期整表拉。三个坑：①业绩表 11639 行里含**新三板同号重复**（同一公司 920296/874332 数值完全一致）→ 必须按 stock_info 宇宙过滤，否则污染财务表；②同比增速有 5e10 级极值，直接写会撞 decimal(10,4) 列宽导致整批 1264 回滚（第一次试跑就是 0 行入库）→ 超界一律置 None，不裁成边界值冒充真实数字；③upsert 原先固定 update_columns=COLS[3:]，会把别的链路写过的 current_assets/fixed_assets/ebit 覆写成 NULL → 改成只写 df 里真实存在的列。结果：avg_periods **4.27 → 17.72**，`total_assets` 从全表 0 变成每季 ~5200 行（应计利润质量/资产增长异象正靠它），并补上 **2025Q1 只有 308 行** 的历史漏洞（此前只有 2025Q2 起才完整）。**前视纪律**：实测 yjbb 的『最新公告日期』是「最近一次公告」而非原始披露日（FY2024 中位数落在 2026-04-24，99% 的行晚于报告期末+200 天），拿它当 ann_date 会让回测 as-of 门控把 2022~2024 整段看成不可知、比留空更糟 → 该列刻意不采信，留 NULL 由引擎按法定披露截止日兜底。影响：piotroski n 108→135（t 1.17→1.70，现为全表第二高）、应计利润 126→135、资产增长 74→135（t 由 -0.43 翻正 1.14）、PEAD 126→135、quality 126→135 → **v2 名单里基本面那一族的旧数字属样本受限，以重跑结果为准**） | ✅ 2026-10-11 | pipelines/fundamental.py、repo/fundamental_repo.py、tools/backfill_fundamental.py |
+| **统计引擎 v2（quant_stats + ENGINE_VERSION + 样本内外验证）**（缺失证据永不为 0：所有摘要统计统一走 quant_stats（finite-only），None/NaN/inf 不过阈值、显示「—」；IC 摘要含 p 值（双侧 Student t，df=n-1）；评级引擎版本化 ENGINE_VERSION 并入 factormine 缓存 hash（引擎升级自动失效旧缓存）；方向判定 direction_source=TRAIN_ONLY（只用训练段定方向，防验证段信息泄漏）；validation 块含 train/test 拆分 + 滚动窗口 ICIR；tradability 未实测显式 null + note，不得用净收益冒充交易可行性；分层净收益可复算＝毛−换手×成本） | ✅ 2026-10-11 | data-service/quant_stats.py、factorlab.py、tests/test_factor_statistics.py、tests/test_mining_nullable_stats.py |
+| **行业指数日线管线（申万二级 131 只，2019-01-02 起，19.2 万行）**（选申万是因 stock_info.industry 就是申万二级口径（128 个行业名 127 个与官方一致，「银行Ⅱ」去后缀匹配），同名直接 JOIN 无映射漂移；只取 close（动量算相对强度，OHLC 口径存疑）；首次全量后按 MAX(trade_date) 增量；串行+停顿防限流；每日调度 industry_index_refresh） | ✅ 2026-10-11 已回补 | pipelines/industry_index.py、repo/industry_index_repo.py、scheduler.py |
+| **sector_rank 口径统一**（「行业 20 日动量前 20%」原先唯一注入点（api/strategies_v2）用的是**当日**涨跌幅均值排名，与策略文档不符，且研究链路（factorlab/回测）完全拿不到 sector_rank → 行业动量轮动每期 no_data 判 coverage。改：core/sector_rank 一处口径（≤as_of 行业指数收盘 20 日动量截面排名，rank_pct 0.0=最强），api 与 engine._score_at_cached 同源注入。坑：DataFrame/Series 运算默认按列对齐，n 必须 axis=0 按日期对齐否则整片 NaN） | ✅ 2026-10-11 | core/sector_rank.py、api/strategies_v2.py、backtest/engine.py |
+| **行业动量轮动解锁：⚪ → 🟡 候选（反向）**（周度 135 期实测：n=135/截面 299/40406 观测，IC **-0.041**、t **-2.52**、p **0.013**，direction=reverse（TRAIN_ONLY），grade C；A股行业动量在个股层呈**反转**效应。但成本侵蚀：方向调整后毛收益 +4.0% 年化、净 **-9.4%**，多空两腿年化换手 44.7x → 判 CANDIDATE，**不得加权**） | ✅ 2026-10-11 | strategies/sector_rotation.py、冒烟实测（收尾会话） |
+| **因子挖掘管线 factormine**（漏斗：GENERATE 模板族×原子（MAX_DEPTH=4/算子≤6/变量≤5 硬上限+归一化去重）→ STATIC 负窗口泄漏扫描 → QUICK 快速 IC（\|RankIC\|≥门槛且 \|ICIR\|≥0.15）→ DEDUP Spearman 聚类（\|corr\|≥0.85 归簇含已入库因子）→ VALIDATE 走 factorlab.analyze_scores 完整检验（与内置策略同引擎）+ 样本内外/年度稳定/Walk Forward/成本敏感 → PASS/WATCH/REJECT；挖掘队列持久化） | ✅ 2026-10-11 代码+单测落地，**未跑全量挖掘** | data-service/factormine/*、api/factormine.py、FactorMinePanel/Detail.vue、FactorMineController.java |
+| **交互式长计算改后台 job**（回测/因子检验原为同步 HTTP 靠 RestTemplate 5 分钟超时硬撑；改提交即返 job_id 前端轮询，内存保留 1h/40 份，重启即失不持久化） | ✅ 2026-10-11 | research_jobs.py、api/research_jobs.py、useResearchJob.ts、ResearchJobController.java、Research.vue |
+| **预测诊断重构（评分/频率/风险三者分离）**（修复「预测评分被当成涨跌概率显示」的混淆：combine() 输出趋势评分（-100~100）、历史频率、风险分列，unmodeled 风险显式列出；MODEL_VERSION=prediction-2026-10-11-v2） | ✅ 2026-10-11 | prediction_research.py |
+| **权重云同步 + 单位统一**（待办 #9 关闭：用户自定义权重 localStorage → 服务端（StrategyConfigController/Service + strategyConfig.ts）。**单位坑**：云端/UI 是百分点（12）、注册表是比率（.12），合并新策略前必须 /100 统一；模拟盘权重改 PAPER_WEIGHT_USER_ID 显式绑定，共享账户不再「最后用户赢」，绑定缺失/非法即中止调仓，不静默回退默认） | ✅ 2026-10-11 | strategy_preferences.py、api/strategyConfig.ts、stores/strategy.ts、StrategyConfigController.java、tests/test_strategy_preferences.py |
+| **复权守卫 adjustment_guard**（复权失败造成的局部重定基被拒：重叠段价格有实质变动且新数据未完整覆盖旧区间 → 判整股需全量重刷，绝不用猜测因子缩放旧价制造接缝） | ✅ 2026-10-11 | core/adjustment_guard.py、tests/test_data_quality_repairs.py |
+| **AI 对话面板**（会话/消息落库（ai_chat_session/message），后端 AiChatService + 前端 AiChatPanel（My 页）） | ✅ 2026-10-11 | AiChatService.java、AiChat*Mapper/Entity、AiChatPanel.vue |
+| **Magic Formula 历史检验显式拒绝**（factorlab.analyze 对 magic_formula 直接返回失败：缺历史市值/企业价值，当前市值或市值=0 的近似**不得**用于历史检验——宁缺毋假） | ✅ 2026-10-11 | factorlab.py `analyze()` |
 
 ## 关键结论（新会话勿被旧数字误导）
 
 - **⚠ 宇宙口径已变更（2026-09-13 → 2026-10-11 两次迭代）**：factorlab 的截面宇宙从「按代码排序前 N」改为「日均成交额前 N」；2026-10-11 日K覆盖又从 1015 只扩到 5531 只（同一 N=300 但池子大 5 倍）。`docs/weekly_sweep_2026-09` 是「1015 只池 + 成交额序」的旧数字，与新池结果**不可直接混用**；当前有效名单是 `docs/weekly_sweep_2026-10.md`。
 - **⚠ 回测口径已变更（2026-09-13）**：engine.run() 从「信号日收盘成交」改为「t 收盘信号 → t+1 开盘成交」（修复轻度前视）。历史回测结果整体会略降（尤其高换手策略），这是挤掉水分，不是退化。
 - **周度终版名单（2026-10-11 v2，全市场日K池 5531 只 + 18 期基本面；本日第二次重跑为准）**：**仍无任何策略达 🟢**（最高 |t|=1.70，四个边缘项 grade 全 D 且 |ICIR| 0.12~0.15）。旧 🟡「日频动量反转T」t -1.78→-1.36 **撤销**；MAX、RSRS 降为无证据（RSRS 方向翻正）——窄池 + 薄样本会共同放大伪信号。补基本面深度后数值显著变动：Piotroski t 0.15→**1.70**（全表最高）、资产增长 -0.88→**+1.14（符号翻转）**、**Magic Formula 由 ⚪ 解锁**（coverage→n=135，t=-0.19 无证据）。当前 🟠 边缘观察＝Piotroski/北向/A股短期反转/低波动异象，全部不得加权。详见 docs/weekly_sweep_2026-10.md + .json。
-- **样本量现状（回补后，不得过度承诺）**：27/29 策略 n=135 满窗；北向 n=121、缩量企稳 n=134、**龙虎榜机构跟随 n=25**（其 +8.20% 净价差属"样本不足以判断"，不是"看起来能用"）。⚪ 仅剩**资金价量背离**（需更深资金流历史，新浪接口可按 `page1` 分页回溯）——行业动量轮动已由申万二级行业指数接入后解锁（n=135，t=-0.41 无证据）。
+- **样本量现状（回补后，不得过度承诺）**：27/29 策略 n=135 满窗；北向 n=121、缩量企稳 n=134、**龙虎榜机构跟随 n=25**（其 +8.20% 净价差属"样本不足以判断"，不是"看起来能用"）。⚪ 仅剩**资金价量背离**（需更深资金流历史，新浪接口可按 `page1` 分页回溯）——行业动量轮动已由申万二级行业指数接入后解锁：**周度** n=135，IC **-0.041**、t **-2.52**、p **0.013**、reverse、grade C（候选但成本侵蚀，不得加权）；月度 n=31，IC -0.057、t -1.53、p 0.137（期数不足不显著）。⚠ 上一会话台账误写「t=-0.41 无证据」——实为 IC 值 -0.041 错记为 t，已按 2026-10-11 收尾会话复算数字更正。
 - **AlphaLab 时间语义**：时序算子向后窗口；截面因子值 t 日收盘可知；组合回测 t+1 开盘成交；财务按公告日进入（无未来函数）。无历史市值数据，**不提供市值字段**（防止用当前市值回填历史）。
 - 预测概率已改为历史校准胜率（9,400 观测回放），未校准时明确标注"模型评分"。
 
@@ -61,23 +73,26 @@
 | 0 | 🟢 低 | **行业补齐残余 350 只左右**（新股/改名已完成） | 东财单股接口受本次突发封锁，`fill_missing_industry` 返回 0。已排在每日 08:40 的 30 只/1s 小配额任务，正常约两周排空；只需确认 `SELECT COUNT(*) FROM stock_info WHERE industry='' OR industry='-'` 逐日下降即可。若长期为 0，考虑换雪球/自建申万映射 | jobs/stock_list.py、api/admin.py freshness |
 | 0 | 🟢 低 | **`/api/user/info` 在浏览过程中被反复拉取** | 实测一次盘面+个股浏览约发 10+ 次 `user/info`（每次路由切换与多个组件各自触发）。不影响正确性但费流量：给 userStore 加短 TTL 缓存或单飞即可。 | frontend/src/stores/user.ts、router/index.ts |
 | 0 | 🟢 低 | **概念成分管线暂无消费方** | `stock_concept` 0 行且只有 admin 表清单引用它，前端无概念视图 → THS(playwright)/akshare-东财两条腿都被墙时不影响功能；等真需要概念数据时再选源 | pipelines/concept.py |
-| 0 | 🟢 低 | **只剩一个 ⚪：资金价量背离需要更深的资金流历史** | 主力净额已回补 5486 只但**每股只有 60 日**，20 日动量类检验勉强够、跨年会截断。新浪 `ssl_qsfx_lscjfb` 的 `page1` 参数可分页回溯数年，扩到 250+ 日即可让该策略进体检。行业动量轮动已于 2026-10-11 晚些时候靠申万行业指数解锁（n=135，t=-0.41 无证据）。Magic Formula 虽已可计算（n=135，t=-0.19），其 `_ev` 仍用**当前市值**近似，结论只能当近似口径引用。 | pipelines/moneyflow.py、sources/sina.py |
+| 0 | 🟢 低 | **只剩一个 ⚪：资金价量背离需要更深的资金流历史** | 主力净额已回补 5486 只但**每股只有 60~121 日**（最深 601288=121 日，分页试跑痕迹），20 日动量类检验勉强够、跨年会截断。新浪 `ssl_qsfx_lscjfb` 的 `page1` 分页回溯已实现（test_sina_paginates_history_and_keeps_missing_main_flow），**全量 250+ 日回补尚未跑**（5486 只串行长任务，需单独后台执行）。行业动量轮动已解锁（周度 t=-2.52 反向候选，见基线表）。Magic Formula 已被 factorlab.analyze 显式拒绝历史检验（当前市值近似不得入历史），不再引用其近似结论。 | pipelines/moneyflow.py、sources/sina.py |
 | 0 | 🟡 中 | **AlphaLab 帮助面板移动端适配** | 字段/算子 popover 宽 380px，小屏可能溢出；检查移动端并收窄 | AlphaExprInput.vue |
 | 1 | 🔴 高 | **P4 里程碑2 券商适配（需券商客户端环境，未开工）** | `BrokerAdapter` 抽象接口 + EasytraderAdapter（Windows 同花顺 GUI 自动化）与 QMT/PTrade(xtquant)，检测到已安装且显式开启才启用。**安全红线：默认绝不自动下单；状态流转 待执行→已执行→已回填（里程碑1 已有「已执行」localStorage 标记）** | 新 broker_adapter.py |
-| 2 | 🟡 中 | **coverage 类策略重测** | P2 面板化已落地，Magic Formula / 行业动量轮动 / 资金价量背离 三策略原 coverage 不足，用 UI 体检（周度、2024-03 起）重测并更新终版名单 | factorlab.py 体检入口 |
-| 3 | 🟡 中 | **🟡/🟠 组策略降频改造** | 日频动量反转T（反向）、MAX 反向、A股短期反转、RSRS：信号平滑/降持仓周期降换手 → 按方向复算成本后净收益 → 复检 t 与经济性，达 🟢 标准才可加权 | factorlab.py、策略注册表 |
-| 4 | 🟡 中 | **复权基准统一（防接缝复发）** | 现状：历史段=腾讯源、每日增量=东财源，每日东财 upsert 只刷前 250 根，约 1 年后接缝会重现。根治：改存 hfq 因子或每日对变动股全量重刷 | data-service/jobs/postmarket.py, pipelines/kline.py |
-| 5 | 🟡 中 | **市值中性化** | stock_info 有 market_cap（当前快照，无历史）；alphalab 已因无历史市值而排除该字段。做法：按市值十分位去均值后重算 IC，并注明"当前市值为近似" | data-service/factorlab.py |
-| 6 | 🟡 中 | **样本外 + 滚动窗口** | 因子检验加：滚动 60 期 ICIR 曲线、样本外段（前 70% 拟合/后 30% 验证）——补齐稳健性评分的"样本外"分量 | factorlab.py `_rate` |
-| 7 | 🟡 中 | **p 值展示** | 由 t 值算双侧 p（scipy.stats.t.sf），加入 ic_summary 与前端 | factorlab.py, 前端面板 |
-| 8 | 🟡 中 | **预测四层拆分**（Skill §5） | 个股预测页重组为 趋势/买点/风险/历史验证 四层 | frontend/.../PredictionPanel.vue, predictor.py |
-| 9 | 🟡 中 | **权重云同步** | 用户自定义策略权重存前端 localStorage → 上服务端 | frontend/src/stores/strategy.ts, backend, jobs/paper_trade.py |
+| 2 | ✅ 已闭环 | ~~coverage 类策略重测~~ | 2026-10-11 收尾：行业动量轮动周度重测已更新名单（反向候选）；Magic Formula 改为引擎级拒绝历史检验；资金价量背离待资金流深度（见 #0） | factorlab.py 体检入口 |
+| 3 | 🟡 中 | **🟡/🟠 组策略降频改造** | 日频动量反转T（反向）、MAX 反向、A股短期反转、RSRS：信号平滑/降持仓周期降换手 → 按方向复算成本后净收益 → 复检 t 与经济性，达 🟢 标准才可加权。行业动量轮动（反向候选）同属高换手成本侵蚀（44.7x 年化），可一并评估 | factorlab.py、策略注册表 |
+| 4 | 🟡 中 | **复权基准统一（防接缝复发）** | 现状：历史段=腾讯源、每日增量=东财源，每日东财 upsert 只刷前 250 根，约 1 年后接缝会重现。2026-10-11 已加 core/adjustment_guard（局部重定基拒绝→整股全量重刷）兜底，但根治仍需：改存 hfq 因子或每日对变动股全量重刷 | data-service/jobs/postmarket.py, pipelines/kline.py |
+| 5 | 🟡 中 | **市值中性化** | stock_info 有 market_cap（当前快照，无历史）；alphalab 已因无历史市值而排除该字段。factorlab 现有 market_cap_diagnostic（point_in_time=false 明确标注、不入评级）。做法：按市值十分位去均值后重算 IC，并注明"当前市值为近似" | data-service/factorlab.py |
+| 6 | ✅ 已闭环 | ~~样本外 + 滚动窗口~~ | 2026-10-11 统计引擎 v2 已落地：validation 块含 train/test 拆分（direction_source=TRAIN_ONLY）+ 滚动窗口 ICIR + robustness_components.out_of_sample | factorlab.py |
+| 7 | ✅ 已闭环 | ~~p 值展示~~ | 2026-10-11 已落地：ic_summary/decay 含 p_value（双侧 Student t，p_method 注明假设），前端类型已同步 | factorlab.py、types/index.ts |
+| 8 | 🟡 中 | **预测四层拆分**（Skill §5） | 个股预测页重组为 趋势/买点/风险/历史验证 四层。prediction_research.combine() 后端已按 趋势评分/历史频率/风险 分离（v2），前端 PredictionPanel 尚未跟进重组 | frontend/.../PredictionPanel.vue, prediction_research.py |
+| 9 | ✅ 已闭环 | ~~权重云同步~~ | 2026-10-11 已落地并修复云端百分点/注册表比率单位混用，模拟盘改 PAPER_WEIGHT_USER_ID 显式绑定（见基线表） | strategy_preferences.py、StrategyConfigController.java |
 | 10 | 🟢 低 | **指标相关性去重**（Skill §6） | 8 个预测维度相关性矩阵 → 高相关组内降权 | predictor.py |
 | 11 | 🟢 低 | **部署提醒** | `:80` 前端与 `data-service/backend` 每次改码后需 rebuild；生产推送需配置 `ALERT_WEBHOOK_URL` 环境变量 | docker-compose |
 
 ## 验证命令速查
 
 ```bash
+# 回归测试（主机 Python 3.11 装了 pytest；容器内无 pytest，勿在容器里跑）
+cd data-service && "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\python.exe" -m pytest tests/ -q
+cd frontend && npm test
 # 前端构建
 cd frontend && npm run build
 # Java 编译（本机无 mvn，用 docker）

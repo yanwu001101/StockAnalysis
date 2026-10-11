@@ -112,11 +112,3 @@ def upsert_equity(account_id: str, d: dt.date, cash: float,
                  "equity", "benchmark_close"])
 
 
-def latest_equity_date() -> dt.date | None:
-    df = base.fetch_df(
-        "SELECT MAX(trade_date) AS d FROM paper_equity WHERE account_id = :i",
-        {"i": ACCOUNT_ID},
-    )
-    if df.empty or df.iloc[0]["d"] is None:
-        return None
-    return pd.to_datetime(df.iloc[0]["d"]).date()

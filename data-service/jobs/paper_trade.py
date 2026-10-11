@@ -47,7 +47,8 @@ def _limit_price(prev_close: float, code: str, down: bool) -> float:
 
 
 def _strategy_weights() -> dict[str, float]:
-    return {cls.id: float(cls.default_weight) for cls in REGISTRY}
+    from strategy_preferences import paper_weights
+    return paper_weights({cls.id: float(cls.default_weight) for cls in REGISTRY})
 
 
 def _composite_scores(today: dt.date) -> dict[str, float]:

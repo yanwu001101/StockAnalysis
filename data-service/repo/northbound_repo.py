@@ -17,20 +17,3 @@ def upsert_northbound(df: pd.DataFrame) -> int:
     return upsert(TABLE, df, COLS, update_columns=COLS[2:])
 
 
-def get_northbound(code: str, days: int = 60) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT * FROM {TABLE} WHERE code=:c "
-        f"ORDER BY trade_date DESC LIMIT :n",
-        {"c": code, "n": days},
-    )
-
-
-def get_recent_inflows(days: int = 5) -> pd.DataFrame:
-    """For each code: net change in hold_shares over the trailing `days`."""
-    return fetch_df(
-        "SELECT code, SUM(net_buy) AS net_buy_sum "
-        "FROM stock_northbound "
-        "WHERE trade_date >= (CURDATE() - INTERVAL :n DAY) "
-        "GROUP BY code ORDER BY net_buy_sum DESC",
-        {"n": days},
-    )

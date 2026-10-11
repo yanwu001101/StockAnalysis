@@ -50,7 +50,7 @@
             </el-form-item>
           </div>
           <el-button type="primary" :loading="loading" @click="runTest" style="width: 100%;">
-            <el-icon><TrendCharts /></el-icon>{{ mode === 'factor' ? '回测自定义因子' : '开始回测' }}
+            <el-icon><TrendCharts /></el-icon>{{ loading ? `计算中 ${jobElapsed}s` : (mode === 'factor' ? '回测自定义因子' : '开始回测') }}
           </el-button>
         </el-form>
       </AppCard>
@@ -124,10 +124,12 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EChartsOption } from 'echarts'
 import * as echarts from 'echarts'
-import { runBacktest, runAlphaBacktest, saveBacktest, listSavedBacktests, getSavedBacktest, deleteSavedBacktest } from '@/api/strategy'
+import { saveBacktest, listSavedBacktests, getSavedBacktest, deleteSavedBacktest } from '@/api/strategy'
+import { useResearchJob } from '@/composables/useResearchJob'
 import AppCard from '@/components/ui/AppCard.vue'
 import StatGrid from '@/components/ui/StatGrid.vue'
 import SegmentTabs from '@/components/ui/SegmentTabs.vue'
@@ -149,7 +151,6 @@ const userStore = useUserStore()
 const { isMobile } = useDevice()
 const tokens = useChartTokens()
 
-const loading = ref(false)
 const result = ref<BacktestResult | null>(null)
 type Side = 'all' | 'buy' | 'sell'
 const tradeSideFilter = ref<Side>('all')
@@ -221,15 +222,16 @@ const modeOptions: SegmentOption<BtMode>[] = [
   { label: '因子回测', value: 'factor' },
 ]
 
+const { running: loading, elapsed: jobElapsed, run: runJob } = useResearchJob()
+
 async function runTest() {
   if (mode.value === 'factor' && !config.expression.trim()) {
     ElMessage.warning('请输入因子表达式')
     return
   }
-  loading.value = true
   try {
     if (mode.value === 'factor') {
-      result.value = await runAlphaBacktest({
+      result.value = await runJob('alphalab-backtest', {
         expression: config.expression.trim(),
         startDate: config.startDate,
         endDate: config.endDate,
@@ -262,13 +264,11 @@ async function runTest() {
       body.topN = config.topN
       body.strategyConfig = strategyStore.getConfigMap()
     }
-    result.value = await runBacktest(body)
+    result.value = await runJob<BacktestResult>('backtest', body)
     lastRequest.value = body
     ElMessage.success(config.stockCode ? `${config.stockCode} 择时回测完成` : '组合回测完成')
-  } catch {
-    ElMessage.error('回测失败')
-  } finally {
-    loading.value = false
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '回测失败')
   }
 }
 
@@ -392,6 +392,16 @@ function fmtDate(s: string): string {
 }
 
 onMounted(refreshSaved)
+
+// 深链：因子挖掘页「去回测」带 ?expr= 直接载入因子回测表达式
+const route = useRoute()
+onMounted(() => {
+  const expr = Array.isArray(route.query.expr) ? route.query.expr[0] : route.query.expr
+  if (expr) {
+    mode.value = 'factor'
+    config.expression = String(expr)
+  }
+})
 useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
 </script>
 

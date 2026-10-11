@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 
 DAILY_TABLE = "stock_kline_daily"
 WEEKLY_TABLE = "stock_kline_weekly"
+BASIS_REFRESH_REQUIRED: dict[tuple[str, str], int] = {}
 
 
 def _table(klt: int) -> str:
@@ -125,6 +126,20 @@ def _upsert(code: str, df: pd.DataFrame, table: str) -> int:
         })
     if not rows:
         return 0
+    # A short adjusted-price update must not leave an older prefix on another basis.
+    # Applies to every writer (legacy scheduler and v2 pipelines alike).
+    from core.adjustment_guard import needs_full_refresh
+    try:
+        with eng.connect() as conn:
+            existing = pd.read_sql(text(f"SELECT trade_date, close FROM {table} WHERE code=:c"),
+                                   conn, params={"c": code})
+        if needs_full_refresh(existing, pd.DataFrame(rows)):
+            BASIS_REFRESH_REQUIRED[(table, code)] = len(existing) + 300
+            log.warning("[kline:basis] %s partial rewrite rejected; full history required (%d bars)", code, len(existing))
+            return 0
+    except Exception as e:
+        log.warning("[kline:basis] %s validation failed; no data written: %s", code, e)
+        return 0
     sql = text(
         f"INSERT INTO {table} (code, trade_date, open, close, high, low, volume) "
         f"VALUES (:code, :trade_date, :open, :close, :high, :low, :volume) "
@@ -135,6 +150,7 @@ def _upsert(code: str, df: pd.DataFrame, table: str) -> int:
     try:
         with eng.begin() as conn:
             conn.execute(sql, rows)
+        BASIS_REFRESH_REQUIRED.pop((table, code), None)
         return len(rows)
     except Exception as e:
         log.debug("upsert %s failed: %s", code, e)

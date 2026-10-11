@@ -17,16 +17,3 @@ def upsert_concept(df: pd.DataFrame) -> int:
     return upsert(TABLE, df, COLS, update_columns=["concept_name", "weight"])
 
 
-def get_concepts_for(code: str) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT concept_code, concept_name, weight FROM {TABLE} "
-        f"WHERE code=:c",
-        {"c": code},
-    )
-
-
-def get_members_of(concept_code: str) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT code, weight FROM {TABLE} WHERE concept_code=:cc",
-        {"cc": concept_code},
-    )

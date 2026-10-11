@@ -22,7 +22,9 @@
         </template>
       </div>
       <div class="sh-right">
-        <ScoreGauge :score="score" :size="isMobile ? 64 : 84" />
+        <!-- 加载中显示骨架圈：0 分与「未加载」语义不同（SKILL §12），不得用假 0 占位 -->
+        <div v-if="loading" class="gauge-skeleton" :style="{ width: (isMobile ? 64 : 84) + 'px', height: (isMobile ? 64 : 84) + 'px' }" />
+        <ScoreGauge v-else :score="score" :size="isMobile ? 64 : 84" />
         <div class="sh-actions">
           <el-button type="success" size="small" @click="$emit('predict')">
             <el-icon><Aim /></el-icon><span v-if="!isMobile">专业预测</span>
@@ -49,6 +51,8 @@ const { isMobile } = useDevice()
 </script>
 
 <style scoped>
+.gauge-skeleton { border-radius: 50%; background: linear-gradient(100deg, var(--bg-2) 40%, var(--surface) 50%, var(--bg-2) 60%); background-size: 200% 100%; animation: sh-gauge 1.4s ease infinite; flex-shrink: 0; }
+@keyframes sh-gauge { to { background-position: -200% 0; } }
 .sh-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .sh-left { min-width: 0; }
 .sh-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

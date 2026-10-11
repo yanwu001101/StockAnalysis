@@ -18,9 +18,3 @@ def upsert_moneyflow(df: pd.DataFrame) -> int:
     return upsert(TABLE, df, COLS, update_columns=COLS[2:])
 
 
-def get_moneyflow(code: str, days: int = 60) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT * FROM {TABLE} WHERE code=:c "
-        f"ORDER BY trade_date DESC LIMIT :n",
-        {"c": code, "n": days},
-    )

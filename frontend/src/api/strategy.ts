@@ -1,18 +1,6 @@
 import request from './request'
 import type { ScreenerRequest, BacktestRequest, BacktestResult, FactorLabResult, StrategyConfig, SavedBacktestSummary } from '@/types'
 
-export function getStrategies(): Promise<StrategyConfig[]> {
-  return request.get('/strategies')
-}
-
-export function getStrategyTop(strategyName: string, limit: number = 20): Promise<any[]> {
-  return request.get(`/strategies/${strategyName}/top`, { params: { limit } })
-}
-
-export function compareStrategies(codes: string[]): Promise<any> {
-  return request.get('/strategies/compare', { params: { codes: codes.join(',') } })
-}
-
 export function runScreener(req: ScreenerRequest): Promise<any[]> {
   return request.post('/screen', req)
 }
@@ -113,23 +101,25 @@ export function deleteSavedBacktest(id: number): Promise<any> {
   return request.delete(`/user/backtests/${id}`)
 }
 
-export interface StrategyTopsRow {
-  code: string
-  name: string
-  industry: string
-  price: number
-  changePercent: number
-  score: number
-  signal: string
-  triggered: boolean
+
+
+// ---- 异步研究任务（回测/因子检验后台化：提交 + 轮询，不再吊死 HTTP 请求） ----
+
+export type ResearchJobKind = 'backtest' | 'alphalab-backtest' | 'factorlab' | 'alphalab-factorlab'
+
+export interface ResearchJobState {
+  id: string
+  kind: ResearchJobKind
+  status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
+  result: unknown
+  error: string | null
+  elapsed_s: number
 }
 
-export interface StrategyTops {
-  strategies: Array<{ id: string; name: string; rows: StrategyTopsRow[] }>
-  computed_at: string | null
-  row_count: number
+export function submitResearchJob(kind: ResearchJobKind, body: unknown): Promise<{ job_id: string; status: string }> {
+  return request.post(`/async/${kind}`, body)
 }
 
-export function getStrategyTops(limit: number = 10): Promise<StrategyTops> {
-  return request.get('/strategy-tops', { params: { limit } })
+export function getResearchJob(jobId: string): Promise<ResearchJobState> {
+  return request.get(`/async/jobs/${jobId}`)
 }

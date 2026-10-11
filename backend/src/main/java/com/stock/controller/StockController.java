@@ -43,6 +43,18 @@ public class StockController {
         return ApiResponse.ok(data);
     }
 
+    @GetMapping("/{code}/financials")
+    public ApiResponse<?> financials(@PathVariable String code) {
+        JSONObject data = dataService.getStockFinancials(code);
+        return ApiResponse.ok(data);
+    }
+
+    /** 批量策略分:盘面高分表一次拿完,替掉逐只 /{code}/strategies 的 N+1。 */
+    @PostMapping("/strategies/batch")
+    public ApiResponse<?> strategiesBatch(@RequestBody JSONObject body) {
+        return ApiResponse.ok(dataService.strategiesBatch(body));
+    }
+
     @GetMapping("/{code}/prediction")
     public ApiResponse<?> prediction(@PathVariable String code) {
         JSONObject data = dataService.getStockPrediction(code);

@@ -58,12 +58,6 @@ public class JwtConfig {
                 .compact();
     }
 
-    /** @deprecated use the 3-arg overload that includes role. */
-    @Deprecated
-    public String generateToken(Long userId, String username) {
-        return generateToken(userId, username, "USER");
-    }
-
     public Claims parseToken(String token) {
         return Jwts.parser()
                 .verifyWith(getKey())

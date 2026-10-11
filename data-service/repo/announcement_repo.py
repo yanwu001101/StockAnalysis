@@ -36,22 +36,3 @@ def upsert_announcement(df: pd.DataFrame) -> int:
         return 0
 
 
-def get_recent_announcements(code: str, days: int = 30) -> pd.DataFrame:
-    return fetch_df(
-        "SELECT * FROM stock_announcement WHERE code=:c "
-        "AND ann_date >= (CURDATE() - INTERVAL :d DAY) "
-        "ORDER BY ann_date DESC",
-        {"c": code, "d": days},
-    )
-
-
-def get_earnings_announcements(days: int = 14) -> pd.DataFrame:
-    """Filter type containing 业绩/年报/季报 — for PEAD strategy event timing."""
-    return fetch_df(
-        "SELECT * FROM stock_announcement "
-        "WHERE ann_date >= (CURDATE() - INTERVAL :d DAY) "
-        "AND (title LIKE '%业绩%' OR title LIKE '%年报%' OR title LIKE '%季报%' "
-        "  OR title LIKE '%快报%' OR title LIKE '%预告%') "
-        "ORDER BY ann_date DESC",
-        {"d": days},
-    )

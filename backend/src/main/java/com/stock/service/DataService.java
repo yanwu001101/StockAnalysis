@@ -79,6 +79,9 @@ public class DataService {
 
     public JSONObject getStockDetail(String code)       { return cached("stock:" + code, "/api/stock/" + code, 60); }
     public JSONObject getStockF10(String code)          { return cached("f10:" + code, "/api/stock/" + code + "/f10", 1800); }
+    public JSONObject getStockFinancials(String code)   { return cached("financials:" + code, "/api/stock/" + code + "/financials", 600); }
+    /** 盘面高分表的策略分批量入口:一次 POST 替掉每只股一次 GET(N+1 治理)。 */
+    public JSONObject strategiesBatch(JSONObject body)  { return postObj("/api/v2/strategies/batch", body); }
     public JSONObject getStockPrediction(String code)   { return cached("prediction:" + code, "/api/v2/stock/" + code + "/prediction", 120); }
     public JSONObject getStockProSignal(String code)    { return cached("prosignal:" + code, "/api/v2/stock/" + code + "/pro-signal", 60); }
 
@@ -113,10 +116,6 @@ public class DataService {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("positions", positions);
         return postArr("/api/t/batch", body);
-    }
-
-    public JSONArray getStockKLine(String code, String period, int days) {
-        return getStockKLine(code, period, days, "qfq");
     }
 
     public JSONArray getStockKLine(String code, String period, int days, String adjust) {
@@ -167,12 +166,6 @@ public class DataService {
     public JSONArray  getStrategiesMeta()       { return cachedArr("strategies:meta", "/api/v2/strategies", 600); }
     public JSONArray  getConditionFields()      { return cachedArr("conditions:fields", "/api/v2/condition-fields", 3600); }
     public JSONObject getExpressionHelp()       { return cached("expression:help", "/api/v2/expression/help", 3600); }
-    public JSONObject getStrategyTops(int limit) {
-        // Pre-computed (code, strategy) scores read from MySQL. Refreshed by
-        // the post-market scheduler — caching 5 min on top keeps response
-        // sub-millisecond for the dashboard's repeated polls.
-        return cached("strategy-tops:" + limit, "/api/v2/strategy-tops?limit=" + limit, 120);
-    }
     public JSONArray  runConditionScreener(JSONObject body) { return postArr("/api/v2/screen/conditions", body); }
 
     public Object runExpressionScreener(JSONObject body) {
@@ -230,6 +223,35 @@ public class DataService {
 
     public JSONObject getAlphaHelp() { return getObjNoCache("/api/alphalab/help"); }
 
+    // =====================================================================
+    // Factor Mining（因子挖掘：任务队列 + 候选因子 + 因子库）
+    // =====================================================================
+
+    // =====================================================================
+    // Research jobs（回测/因子检验后台任务：提交 + 轮询）
+    // =====================================================================
+
+    public JSONObject submitResearchJob(String kindPath, JSONObject request) { return postObj(kindPath, request); }
+    public JSONObject getResearchJob(String jobId)           { return getObjNoCache("/api/async/jobs/" + jobId); }
+
+    public JSONObject fmCreateJob(JSONObject request)      { return postObj("/api/factormine/mine", request); }
+    public JSONObject fmJobStatus(String jobId)            { return getObjNoCache("/api/factormine/job/" + jobId); }
+    public JSONObject fmJobAction(String jobId, String action) { return postObj("/api/factormine/job/" + jobId + "/" + action, new JSONObject()); }
+    public JSONObject fmFactorAction(String factorId, String action, JSONObject body) {
+        return postObj("/api/factormine/factor/" + factorId + "/" + action,
+                body == null ? new JSONObject() : body);
+    }
+    public JSONObject fmRevalidate(String factorId)        { return postObj("/api/factormine/factor/" + factorId + "/revalidate", new JSONObject()); }
+    public JSONObject fmFactorScreen(String factorId, JSONObject body) {
+        return postObj("/api/factormine/factor/" + factorId + "/screen",
+                body == null ? new JSONObject() : body);
+    }
+    public JSONObject fmFactorDetail(String factorId)      { return getObjNoCache("/api/factormine/factor/" + factorId); }
+    public JSONArray fmFactors(String query)               { return getArrNoCache("/api/factormine/factors" + (query == null || query.isEmpty() ? "" : "?" + query)); }
+    public JSONObject fmLibrary()                          { return getObjNoCache("/api/factormine/library"); }
+    public JSONObject fmAtoms()                            { return getObjNoCache("/api/factormine/atoms"); }
+    public JSONObject fmOperators()                        { return getObjNoCache("/api/factormine/operators"); }
+
     public JSONObject getPaper() { return getObjNoCache("/api/paper"); }
 
     /** 实盘半自动·里程碑1：委托单生成器（只读清单，不自动下单）。 */
@@ -263,7 +285,6 @@ public class DataService {
                 "/api/moneyflow/northbound-rank?days=" + days + "&limit=" + limit, 120);
     }
     public JSONArray getMoneyFlowSector()                     { return cachedArr("mf:sector", "/api/moneyflow/sector", 60); }
-    public JSONArray getMoneyFlowStock(String code, int days) { return cachedArr("mf:stock:" + code + ":" + days, "/api/moneyflow/stock/" + code + "?days=" + days, 120); }
 
     // =====================================================================
     // Admin (never cached — callers want real-time state)
@@ -284,14 +305,6 @@ public class DataService {
 
     public JSONObject getDecisionSnapshots(String date) {
         return getObjNoCache("/api/decision/snapshots" + qs("date", date));
-    }
-
-    public JSONObject getDecisionSnapshot(String id, Integer limit) {
-        return getObjNoCache("/api/decision/snapshot/" + id + (limit == null ? "" : "?limit=" + limit));
-    }
-
-    public JSONObject getDecisionStockHistory(String code, Integer n) {
-        return getObjNoCache("/api/decision/stock/" + code + "/history" + (n == null ? "" : "?n=" + n));
     }
 
     public JSONObject runDecisionSnapshot(JSONObject body) { return postObj("/api/decision/snapshot/run", body); }

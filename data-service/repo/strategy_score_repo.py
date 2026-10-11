@@ -23,16 +23,6 @@ def upsert_scores(df: pd.DataFrame) -> int:
     return upsert(TABLE, df, COLS, update_columns=["score", "signal_type", "triggered"])
 
 
-def top_n(strategy_id: str, n: int = 10) -> pd.DataFrame:
-    """Return top-N codes for one strategy, score desc."""
-    return fetch_df(
-        f"SELECT code, score, signal_type, triggered "
-        f"FROM {TABLE} WHERE strategy_id=:sid AND score > 0 "
-        f"ORDER BY score DESC LIMIT :n",
-        {"sid": strategy_id, "n": int(n)},
-    )
-
-
 def top_n_all(n: int = 10) -> pd.DataFrame:
     """All strategies' top-N in one trip, using a window function.
 

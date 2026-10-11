@@ -1,5 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch, onScopeDispose } from 'vue'
+import { useUserStore } from '@/stores/user'
+import { getStrategyConfig, putStrategyConfig } from '@/api/strategyConfig'
+import type { CloudStrategyConfig, WeightMap } from '@/api/strategyConfig'
 import type { StrategyConfig } from '@/types'
 
 const DEFAULT_STRATEGIES: StrategyConfig[] = [
@@ -35,73 +38,175 @@ const DEFAULT_STRATEGIES: StrategyConfig[] = [
 ]
 
 export const useStrategyStore = defineStore('strategy', () => {
-  const strategies = ref<StrategyConfig[]>([...DEFAULT_STRATEGIES])
+  const user = useUserStore()
+  const strategies = ref<StrategyConfig[]>(DEFAULT_STRATEGIES.map(s => ({ ...s })))
   const savedConfigs = ref<{ name: string; config: StrategyConfig[] }[]>([])
+  const syncStatus = ref<'local' | 'loading' | 'synced' | 'saving' | 'error' | 'conflict'>('local')
+  const syncMessage = ref('仅保存在本机')
+  const hasLegacy = ref(!!localStorage.getItem('savedStrategies'))
+  let owner: number | null = null
+  let generation = 0
+  let version = 0
+  let revision = 0
+  let dirty = false
+  let ready = false
+  let applying = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let saveFlight: Promise<void> | null = null
+  const key = () => `strategy-config-v1:${owner ?? 'guest'}`
 
-  // 已保存方案常驻 localStorage，store 创建时即刻恢复，否则「保存方案」成为死胡同
-  loadFromStorage()
+  function withWeights(map: WeightMap | null | undefined): StrategyConfig[] {
+    return DEFAULT_STRATEGIES.map(s => {
+      const item = map?.[s.id]
+      return { ...s, ...(item && typeof item.enabled === 'boolean' && Number.isFinite(item.weight)
+        && item.weight >= 0 && item.weight <= 1000 ? item : {}) }
+    })
+  }
+  function toMap(items: StrategyConfig[]): WeightMap {
+    return Object.fromEntries(items.map(s => [s.id, { enabled: s.enabled, weight: s.weight }]))
+  }
+  function snapshot(): CloudStrategyConfig {
+    return { version, config: toMap(strategies.value),
+      presets: savedConfigs.value.map(s => ({ name: s.name, config: toMap(s.config) })) }
+  }
+  function persist() {
+    try { localStorage.setItem(key(), JSON.stringify({ ...snapshot(), dirty })) }
+    catch { syncMessage.value = '本地空间不足，配置未保存；请导出或释放存储空间' }
+  }
+  function apply(data: CloudStrategyConfig) {
+    applying = true
+    try {
+      strategies.value = withWeights(data.config)
+      savedConfigs.value = (Array.isArray(data.presets) ? data.presets : []).slice(0, 20)
+        .filter(p => typeof p.name === 'string' && p.name.trim())
+        .map(p => ({ name: p.name, config: withWeights(p.config) }))
+      version = Number.isSafeInteger(data.version) && data.version >= 0 ? data.version : 0
+    } finally { applying = false }
+  }
+  function loadFromStorage() {
+    try {
+      const data = JSON.parse(localStorage.getItem(key()) || 'null')
+      if (data) { apply(data); dirty = data.dirty === true; return }
+    } catch { /* Malformed storage is kept for recovery; use defaults in memory. */ }
+    apply({ version: 0, config: null, presets: [] }); dirty = false
+  }
+  function schedule() {
+    clearTimeout(timer)
+    if (owner != null && ready) timer = setTimeout(() => { void saveToCloud() }, 500)
+  }
+  watch([strategies, savedConfigs], () => {
+    if (applying) return
+    revision++; dirty = true; persist(); schedule()
+    if (owner == null) { syncStatus.value = 'local'; syncMessage.value = '仅保存在本机' }
+  }, { deep: true, flush: 'sync' })
+
+  async function hydrateCloud(replaceLocal = false) {
+    if (owner == null) return
+    const ticket = generation
+    const localRevision = revision
+    ready = false
+    syncStatus.value = 'loading'; syncMessage.value = '正在读取云端配置'
+    try {
+      const cloud = await getStrategyConfig()
+      if (ticket !== generation) return
+      // Editing during a GET is not permission to overwrite those new local edits.
+      if ((dirty || revision !== localRevision) && cloud.version !== version && !replaceLocal) {
+        syncStatus.value = 'conflict'; syncMessage.value = '云端版本已变化，本地改动已保留；可加载云端后重新调整'
+        return
+      }
+      if (replaceLocal && revision !== localRevision) {
+        syncStatus.value = 'conflict'; syncMessage.value = '加载期间有新修改，本地改动已保留'; return
+      }
+      if (!dirty || replaceLocal) {
+        if (cloud.config != null || replaceLocal) apply(cloud)
+        dirty = false
+      }
+      version = cloud.version
+      ready = true; persist()
+      syncStatus.value = cloud.config ? 'synced' : 'local'
+      syncMessage.value = cloud.config ? `已同步云端 v${version}` : '本地默认配置，修改后自动同步'
+      if (dirty) schedule()
+    } catch (error: any) {
+      if (ticket !== generation) return
+      syncStatus.value = 'error'; syncMessage.value = error?.message || '云端不可用，本地配置仍可使用'
+    }
+  }
+
+  async function saveToCloud(): Promise<void> {
+    clearTimeout(timer)
+    if (saveFlight) return saveFlight
+    if (owner == null || !dirty) return
+    if (!ready) { await hydrateCloud(); return }
+    const ticket = generation, editing = revision, payload = snapshot()
+    syncStatus.value = 'saving'; syncMessage.value = '正在保存云端配置'
+    const promise = (async () => {
+      try {
+        const cloud = await putStrategyConfig(payload)
+        if (ticket !== generation) return
+        version = cloud.version
+        dirty = revision !== editing
+        persist()
+        syncStatus.value = 'synced'; syncMessage.value = `已同步云端 v${version}`
+        if (dirty) schedule()
+      } catch (error: any) {
+        if (ticket !== generation) return
+        const conflict = error?.response?.status === 409 || error?.response?.data?.code === 409 || error?.code === 409
+        syncStatus.value = conflict ? 'conflict' : 'error'
+        syncMessage.value = conflict ? '云端版本已变化，本地改动已保留；请加载云端后重新调整' : '同步失败，本地改动已保留'
+        if (conflict) ready = false
+        persist()
+      }
+    })()
+    saveFlight = promise
+    try { await promise } finally { if (saveFlight === promise) saveFlight = null }
+  }
+
+  watch(() => [user.token, user.userInfo?.id] as const, ([token, id]) => {
+    clearTimeout(timer)
+    generation++; saveFlight = null; ready = false
+    owner = token && id != null ? id : null
+    version = 0; revision = 0
+    loadFromStorage()
+    syncStatus.value = 'local'; syncMessage.value = '仅保存在本机'
+    if (owner != null) void hydrateCloud()
+  }, { immediate: true })
+  onScopeDispose(() => clearTimeout(timer))
 
   function updateWeight(id: string, weight: number) {
-    const s = strategies.value.find(s => s.id === id)
-    if (s) s.weight = weight
+    const item = strategies.value.find(s => s.id === id)
+    if (item && Number.isFinite(weight)) item.weight = Math.max(0, Math.min(1000, weight))
   }
-
-  function toggleStrategy(id: string) {
-    const s = strategies.value.find(s => s.id === id)
-    if (s) s.enabled = !s.enabled
-  }
-
-  function setAllStrategiesEnabled(enabled: boolean) {
-    strategies.value.forEach(s => {
-      s.enabled = enabled
-    })
-  }
-
-  function resetToDefault() {
-    strategies.value = DEFAULT_STRATEGIES.map(s => ({ ...s }))
-  }
-
+  function setAllStrategiesEnabled(enabled: boolean) { strategies.value.forEach(s => { s.enabled = enabled }) }
+  function resetToDefault() { strategies.value = DEFAULT_STRATEGIES.map(s => ({ ...s })) }
   function saveConfig(name: string) {
-    savedConfigs.value.push({
-      name,
-      config: strategies.value.map(s => ({ ...s })),
-    })
-    localStorage.setItem('savedStrategies', JSON.stringify(savedConfigs.value))
+    name = name.trim().slice(0, 80)
+    if (!name) return
+    const preset = { name, config: strategies.value.map(s => ({ ...s })) }
+    const index = savedConfigs.value.findIndex(s => s.name === name)
+    if (index >= 0) savedConfigs.value[index] = preset
+    else if (savedConfigs.value.length < 20) savedConfigs.value.push(preset)
+    else { syncMessage.value = '最多保存20个方案，请先删除旧方案'; return }
   }
-
-  function deleteConfig(name: string) {
-    savedConfigs.value = savedConfigs.value.filter(c => c.name !== name)
-    localStorage.setItem('savedStrategies', JSON.stringify(savedConfigs.value))
-  }
-
+  function deleteConfig(name: string) { savedConfigs.value = savedConfigs.value.filter(c => c.name !== name) }
   function loadConfig(name: string) {
     const cfg = savedConfigs.value.find(c => c.name === name)
     if (cfg) strategies.value = cfg.config.map(s => ({ ...s }))
   }
-
-  function loadFromStorage() {
-    const stored = localStorage.getItem('savedStrategies')
-    if (stored) {
-      try { savedConfigs.value = JSON.parse(stored) } catch {}
-    }
+  function importLegacyConfigs() {
+    // Explicit opt-in migration: never upload a shared browser's legacy data into another account silently.
+    try {
+      const old = JSON.parse(localStorage.getItem('savedStrategies') || '[]')
+      if (!Array.isArray(old)) return
+      for (const item of old.slice(0, 20)) {
+        if (typeof item.name !== 'string' || !Array.isArray(item.config)) continue
+        const map = toMap(item.config.filter((s: StrategyConfig) => typeof s?.id === 'string'))
+        if (!savedConfigs.value.some(p => p.name === item.name) && savedConfigs.value.length < 20)
+          savedConfigs.value.push({ name: item.name.trim().slice(0, 80), config: withWeights(map) })
+      }
+    } catch { syncMessage.value = '旧方案格式异常，原始备份已保留' }
   }
-
-  function getEnabledStrategies() {
-    return strategies.value.filter(s => s.enabled)
-  }
-
-  function getConfigMap(): Record<string, { enabled: boolean; weight: number }> {
-    const map: Record<string, { enabled: boolean; weight: number }> = {}
-    strategies.value.forEach(s => {
-      map[s.id] = { enabled: s.enabled, weight: s.weight }
-    })
-    return map
-  }
-
-  return {
-    strategies, savedConfigs,
-    updateWeight, toggleStrategy, setAllStrategiesEnabled, resetToDefault,
-    saveConfig, deleteConfig, loadConfig, loadFromStorage,
-    getEnabledStrategies, getConfigMap,
-  }
+  function getConfigMap(): WeightMap { return toMap(strategies.value) }
+  return { strategies, savedConfigs, syncStatus, syncMessage, hasLegacy,
+    updateWeight, setAllStrategiesEnabled, resetToDefault, saveConfig, deleteConfig, loadConfig,
+    loadFromStorage, getConfigMap, hydrateCloud, saveToCloud, importLegacyConfigs }
 })

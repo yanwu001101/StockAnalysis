@@ -56,18 +56,12 @@ class CircuitSettings(BaseSettings):
     open_seconds: float = 60.0           # cool-down before half-open probe
 
 
-class DbSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
-
     db_host: str = Field(default="mysql", alias="DB_HOST")
     db_port: int = Field(default=3306, alias="DB_PORT")
     db_user: str = Field(default="root", alias="DB_USER")
     db_password: str = Field(default="Stock@2024", alias="DB_PASSWORD")
     db_name: str = Field(default="stock_screener", alias="DB_NAME")
 
-
-class RedisSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
 
     redis_host: str = Field(default="localhost", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
@@ -87,10 +81,7 @@ class SourceSettings(BaseSettings):
 class SchedulerSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    warmup_on_start: bool = Field(default=False, alias="WARMUP_ON_START")
-    warmup_delay_sec: int = Field(default=60, alias="WARMUP_DELAY_SEC")
     warmup_top_n: int = Field(default=300, alias="WARMUP_TOP_N")
-    warmup_batch_size: int = Field(default=50, alias="WARMUP_BATCH_SIZE")
 
 
 class AlertSettings(BaseSettings):
@@ -102,15 +93,10 @@ class AlertSettings(BaseSettings):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    env: str = Field(default="dev", alias="APP_ENV")
-    tz: str = Field(default="Asia/Shanghai", alias="TZ")
-
     http: HttpSettings = HttpSettings()
     rl: RateLimitSettings = RateLimitSettings()
     retry: RetrySettings = RetrySettings()
     cb: CircuitSettings = CircuitSettings()
-    db: DbSettings = DbSettings()
-    redis: RedisSettings = RedisSettings()
     sources: SourceSettings = SourceSettings()
     sched: SchedulerSettings = SchedulerSettings()
     alert: AlertSettings = AlertSettings()

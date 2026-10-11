@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from backtest.metrics import compute
 from jobs import paper_trade
-from repo import paper_repo, index_kline_repo
+from repo import paper_repo
 
 bp = Blueprint("paper", __name__, url_prefix="/api/paper")
 
@@ -116,15 +116,6 @@ def reset():
     top_n = int(body.get("top_n") or body.get("topN") or 10)
     paper_repo.reset_account(capital, top_n)
     return jsonify({"status": "reset", "initial_capital": capital, "top_n": top_n})
-
-
-@bp.route("/run", methods=["POST"])
-def run_now():
-    body = request.get_json(force=True, silent=True) or {}
-    d = body.get("date")
-    result = paper_trade.run(dt.date.fromisoformat(d) if d else dt.date.today())
-    status = 500 if "error" in result else 200
-    return jsonify(result), status
 
 
 # ---------------------------------------------------------------------------

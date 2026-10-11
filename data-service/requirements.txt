@@ -19,6 +19,7 @@ structlog>=24.1.0              # structured logging
 # --- Data / validation ---
 pandas>=2.0.0
 numpy>=1.24.0
+scipy>=1.11.0                  # Student-t p values; shared quant statistics
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 orjson>=3.9.0

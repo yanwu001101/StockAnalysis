@@ -196,12 +196,24 @@ export interface PaperOrders {
   note?: string
 }
 
+export type FactorStatus = 'VALID' | 'CANDIDATE' | 'INSIGNIFICANT' | 'INSUFFICIENT_DATA' | 'FAILED'
+export interface ICSummary {
+  mean: number | null
+  std: number | null
+  icir: number | null
+  positive_ratio: number | null
+  negative_ratio?: number | null
+  t_stat: number | null
+  p_value?: number | null
+  n: number
+}
 export interface FactorLabResult {
+  engine_version?: string
+  status?: FactorStatus
   error?: string
-  error_kind?: "coverage" | "compute" | "expression"
-  sample_info?: { periods: number; avg_cross_section: number; observations: number }
-  strategy_id: string
-  /** alphalab 自定义因子返回:因子名与原始表达式 */
+  error_kind?: 'coverage' | 'compute' | 'expression'
+  sample_info?: { periods: number; avg_cross_section: number | null; observations: number; skipped_periods?: number; holding_trading_days?: number }
+  strategy_id: string | null
   factor_name?: string
   expression?: string
   start: string
@@ -210,21 +222,33 @@ export interface FactorLabResult {
   layers: number
   codes_analyzed: number
   periods: number
-  ic_summary: { mean: number; std: number; icir: number; positive_ratio: number; t_stat: number; n: number }
-  ic_series: { date: string; ic: number }[]
-  ic_neutral_summary?: { mean: number; std: number; icir: number; positive_ratio: number; t_stat: number; n: number }
+  smoothing_days?: number
+  ic_summary: ICSummary
+  ic_adjusted_summary?: ICSummary
+  ic_series: { date: string; ic: number; n?: number; execution_date?: string; return_end?: string }[]
+  ic_neutral_summary?: ICSummary | null
+  ic_pearson_summary?: ICSummary | null
   rating?: { grade: string; strength: number; confidence: number;
-             direction: "positive" | "reverse" | "neutral"; status: string;
-             dimensions: Record<string, number>; net_spread_ann: number;
-             cost_per_turnover: number; cost_annualized?: number;
-             robustness?: number; tradability?: number; flags: string[] }
-  layer_monotonicity?: number
-  turnover_annualized?: number
+             direction: 'positive' | 'reverse' | 'neutral'; status: string; status_code?: FactorStatus;
+             dimensions: Record<string, number | null>; net_spread_ann: number;
+             adjusted_gross_spread_ann?: number | null; adjusted_net_spread_ann?: number | null;
+             cost_per_turnover: number; cost_annualized?: number | null;
+             robustness?: number | null; tradability?: number | null; flags: string[];
+             robustness_components?: Record<string, number>; tradability_note?: string } | null
+  validation?: { split_ratio: number; direction_sign: number; status: string; note: string;
+                 train: ICSummary & { start?: string; end?: string }; test: ICSummary & { start?: string; end?: string };
+                 normalized_test: ICSummary; direction_consistent: boolean | null;
+                 rolling_window: number; rolling: (ICSummary & { date: string })[] }
+  market_cap_diagnostic?: { enabled: boolean; summary?: ICSummary | null; point_in_time: false; used_in_rating: false; note: string }
+  methodology?: { signal: string; execution: string; exit: string; annualization: string; universe: string;
+                  universe_as_of: string; cost: string; industry: string; limitations: string[] }
+  layer_monotonicity?: number | null
+  turnover_annualized?: number | null
   regime?: { bull: { ic_mean: number; n: number; spread_ann: number }; bear: { ic_mean: number; n: number; spread_ann: number } } | null
   layer_curves: Record<string, number | string>[]
   layer_stats: { layer: number; total: number; annualized: number }[]
-  top_minus_bottom_annualized: number
-  decay: { horizon: number; ic_mean: number; icir: number; n: number }[]
+  top_minus_bottom_annualized: number | null
+  decay: { horizon: number; ic_mean: number | null; icir: number | null; p_value?: number | null; n: number }[]
 }
 
 export interface TradeRecord {

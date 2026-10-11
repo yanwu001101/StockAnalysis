@@ -38,9 +38,12 @@ import db
 from backtest import engine
 from core.trace import logger
 from strategies import by_id
+from quant_stats import (finite_pairs, ic_summary, chronological_validation,
+                         equal_weight_turnover, cap_bucket_demean)
 
 BENCHMARK_CODE = "000300"
 DEFAULT_HORIZONS = (1, 5, 10, 20)
+ENGINE_VERSION = "factorlab-2026-10-11-v3"
 
 # 交易成本假设：一个完整换手（买+卖）的摩擦，口径与回测引擎一致
 COST_PER_TURNOVER = 2 * (0.00025 + 0.001) + 0.0005   # ≈ 0.35% / 100% 换手
@@ -91,7 +94,9 @@ def _industry_map() -> dict[str, str]:
 
 def _winsorize_zscore(scores: pd.Series) -> pd.Series:
     """MAD 去极值(3 倍) + z-score 标准化。截面至少要有几分散度，否则返回全 0。"""
-    s = scores.astype(float).dropna()
+    s = scores.astype(float).replace([np.inf, -np.inf], np.nan).dropna()
+    if s.empty:
+        return s
     med = float(s.median())
     mad = float((s - med).abs().median())
     if mad > 0:
@@ -105,20 +110,41 @@ def _winsorize_zscore(scores: pd.Series) -> pd.Series:
 
 def _rank_ic(a: pd.Series, b: pd.Series) -> float | None:
     """Spearman RankIC：秩相关；样本不足或零方差返回 None。"""
-    common = a.index.intersection(b.index)
-    if len(common) < 10:
+    pairs = finite_pairs(a, b)
+    if len(pairs) < 10:
         return None
-    ra, rb = a.loc[common].rank(), b.loc[common].rank()
+    ra, rb = pairs["factor"].rank(), pairs["return"].rank()
     if ra.std(ddof=0) <= 0 or rb.std(ddof=0) <= 0:
         return None
     return float(ra.corr(rb))
 
 
+def _pearson_ic(a: pd.Series, b: pd.Series) -> float | None:
+    """Pearson IC：因子值与前瞻收益的线性相关；样本不足或零方差返回 None。"""
+    pairs = finite_pairs(a, b)
+    if len(pairs) < 10:
+        return None
+    xa, xb = pairs["factor"], pairs["return"]
+    if xa.std(ddof=0) <= 0 or xb.std(ddof=0) <= 0:
+        return None
+    return float(xa.corr(xb))
+
+
 def _universe_codes(amount: pd.DataFrame | None, close: pd.DataFrame,
-                    max_codes: int, volume: pd.DataFrame | None = None) -> list[str]:
+                    max_codes: int, volume: pd.DataFrame | None = None,
+                    as_of: dt.date | None = None) -> list[str]:
     """宇宙选择：优先 amount（日均成交额），缺失用 close×volume 代理；
     都没有则按原始列序。流动性排序的宇宙比代码序更有代表性。"""
+    if as_of is not None:
+        close = close.loc[pd.to_datetime(close.index) <= pd.Timestamp(as_of)].tail(60)
+        if amount is not None:
+            amount = amount.reindex(close.index)
+        if volume is not None:
+            volume = volume.reindex(close.index)
     codes = list(close.columns)
+    if as_of is not None:
+        codes = [c for c in codes if close[c].notna().any()]
+        close = close[codes]
     if max_codes and len(codes) > max_codes:
         if amount is not None and not amount.empty:
             score = amount.mean()
@@ -126,7 +152,8 @@ def _universe_codes(amount: pd.DataFrame | None, close: pd.DataFrame,
             score = (close * volume).mean()
         else:
             return codes[:max_codes]
-        return score.sort_values(ascending=False).head(max_codes).index.tolist()
+        score = score.replace([np.inf, -np.inf], np.nan).dropna()
+        return score[score > 0].sort_values(ascending=False, kind="stable").head(max_codes).index.tolist()
     return codes[:max_codes] if max_codes else codes
 
 
@@ -137,165 +164,155 @@ def _max_drawdown(curve: list[float]) -> float:
     return float((s / s.cummax() - 1.0).min())
 
 
+def _rebalance_per_year(rebalance: str) -> float:
+    """调仓频率 → 年化调仓次数（Nd 周期按 252/N 折算）。"""
+    if rebalance == "monthly":
+        return 12.0
+    if rebalance.endswith("d") and rebalance[:-1].isdigit():
+        return 252.0 / max(int(rebalance[:-1]), 1)
+    return 52.0
+
+
 def _ic_summary_block(ics: np.ndarray) -> dict:
-    n = len(ics)
-    if n == 0:
-        return {"mean": 0.0, "std": 0.0, "icir": 0.0, "positive_ratio": 0.0, "t_stat": 0.0, "n": 0}
-    mean = float(ics.mean())
-    std = float(ics.std(ddof=1)) if n > 1 else 0.0
-    return {
-        "mean": round(mean, 4),
-        "std": round(std, 4),
-        "icir": round(mean / std, 3) if std > 0 else 0.0,
-        "positive_ratio": round(float((ics > 0).sum()) / n, 3),
-        "t_stat": round(float(mean / std * np.sqrt(n)), 2) if std > 0 else 0.0,
-        "n": n,
-    }
+    return ic_summary(ics)
 
 
 def _rate(ic_summary: dict, spread_ann: float, monotonicity: float,
           turnover_ann: float, top_dd: float, n: int,
-          regime_consistent: bool | None,
-          icn_summary: dict | None = None) -> dict:
-    """因子评级：实力与统计可信度分离。
-
-    因子实力  — 经济量级：|RankIC| / |ICIR| / 分层多空价差（不含样本量）
-    统计可信度 — 证据强度：|t| 与期数（样本越多越可信）
-    方向      — 正向 / 反向 / 中性（反向因子按绝对值评级，UI 明示 ↓）
-    状态      — 有效 / 候选 / 不显著（覆盖不足与计算失败在上游单独标注）
-    """
-
-    def clamp01(x: float) -> float:
-        return max(0.0, min(1.0, x))
-
-    abs_ic = abs(ic_summary["mean"])
-    abs_icir = abs(ic_summary["icir"])
-    abs_t = abs(ic_summary["t_stat"])
-
-    # 方向：ICIR 与 IC 都接近零才是中性，否则按 IC 符号定方向
-    if abs_icir < 0.1 and abs_ic < 0.015:
-        direction = "neutral"
+          regime_consistent: bool | None, icn_summary: dict | None = None,
+          validation: dict | None = None) -> dict:
+    """Transparent evidence grading. Missing checks earn no invented points."""
+    def clamp(x):
+        return max(0.0, min(1.0, float(x)))
+    abs_ic = abs(ic_summary.get("mean") or 0)
+    abs_icir = abs(ic_summary.get("icir") or 0)
+    abs_t = abs(ic_summary.get("t_stat") or 0)
+    sign = (validation or {}).get("direction_sign", -1 if (ic_summary.get("mean") or 0) < 0 else 1)
+    direction = "reverse" if sign < 0 else "positive"
+    mono = max(0.0, monotonicity * sign)
+    strength = round(30 * clamp(abs_ic / .05) + 25 * clamp(abs_icir / .5)
+                     + 25 * clamp(max(spread_ann * sign, 0) / .20) + 20 * clamp(mono), 1)
+    confidence = round(60 * clamp(abs_t / 2.5) + 40 * clamp(n / 36), 1)
+    cost = turnover_ann * COST_PER_TURNOVER
+    net = spread_ann * sign - cost
+    components = {}
+    if regime_consistent is not None:
+        components["regime"] = 100.0 if regime_consistent else 0.0
+    if icn_summary and icn_summary.get("mean") is not None and abs_ic > 1e-12:
+        components["industry_retention"] = 100 * clamp(icn_summary["mean"] * sign / abs_ic)
+    if validation and validation.get("status") == "VALID":
+        oos = validation["normalized_test"]
+        components["out_of_sample"] = 100 * clamp(max(oos.get("mean") or 0, 0) / max(abs_ic, 1e-12))
+    rolling = (validation or {}).get("rolling", [])
+    valid_rolling = [r["icir"] for r in rolling if r.get("icir") is not None]
+    if valid_rolling:
+        components["rolling_consistency"] = 100 * float(np.mean(np.array(valid_rolling) * sign > 0))
+    robustness = round(float(np.mean(list(components.values()))), 1) if components else None
+    p = ic_summary.get("p_value")
+    oos = (validation or {}).get("normalized_test", {})
+    if n < 12 or ic_summary.get("icir") is None:
+        code, status = "INSUFFICIENT_DATA", "样本不足"
+    elif (n >= 36 and p is not None and p < .05 and abs_icir >= .3 and strength >= 55
+          and net > 0 and (validation or {}).get("status") == "VALID"
+          and oos.get("p_value") is not None and oos["p_value"] < .05
+          and (oos.get("mean") or 0) > 0 and robustness is not None and robustness >= 60):
+        code, status = "VALID", "有效"
+    elif abs_icir >= .3 or abs_ic >= .03:
+        code, status = "CANDIDATE", "候选"
     else:
-        direction = "positive" if ic_summary["mean"] > 0 else "reverse"
-    dir_sign = 1.0 if direction == "positive" else (-1.0 if direction == "reverse" else 1.0)
-
-    # 方向校正后的单调性：反向因子 |负相关| 同样是强分层结构
-    mono_eff = max(0.0, monotonicity * dir_sign)
-
-    # 因子实力（经济量级，含方向校正后的分层单调性）
-    strength = round(0.30 * clamp01(abs_ic / 0.05) * 100
-                     + 0.25 * clamp01(abs_icir / 0.5) * 100
-                     + 0.25 * clamp01(abs(spread_ann) / 0.20) * 100
-                     + 0.20 * clamp01(mono_eff) * 100, 1)
-    grade = "A" if strength >= 70 else "B" if strength >= 55 else "C" if strength >= 40 else "D"
-
-    # 统计可信度（证据强度）
-    confidence = round(0.6 * clamp01(abs_t / 2.5) * 100 + 0.4 * clamp01(n / 36) * 100, 1)
-
-    # 状态：有效（经济≥B 且统计显著）/ 候选（经济较强但证据不足）/ 不显著
-    if abs_t >= 2 and abs_icir >= 0.3 and n >= 12 and strength >= 55:
-        status = "有效"
-    elif abs_icir >= 0.3 or (abs_ic >= 0.03 and ic_summary["positive_ratio"] >= 0.6):
-        status = "候选"
-    else:
-        status = "不显著"
-
-    # 稳健性：牛熊一致性(0-60) + 行业中性信号保留度(0-40)
-    # （样本外/滚动窗口待历史数据回补后接入）
-    if regime_consistent is True:
-        regime_part = 60.0
-    elif regime_consistent is False:
-        regime_part = 0.0
-    else:
-        regime_part = 30.0   # 牛熊数据未知
-    if icn_summary is not None and abs_ic > 0:
-        neutral_retention = clamp01(abs(icn_summary["mean"]) / abs_ic)
-    else:
-        neutral_retention = 0.5   # 未做中性化检验时给中性分
-    robustness = round(regime_part * 0.6 + neutral_retention * 40.0, 1)
-
-    # 交易可行性：方向校正后的净多空价差（成本后还赚钱才可交易）
-    dir_mult = 1.0 if direction == "positive" else (-1.0 if direction == "reverse" else 1.0)
-    net_dir = spread_ann * dir_mult - turnover_ann * COST_PER_TURNOVER
-    tradability = clamp01(max(net_dir, 0.0) / 0.15) * 100
-
-    # 分层质量细项（仅供展示）
-    dimensions = {
-        "direction_ic": round(min(abs_ic / 0.05, 1.0) * 100),
-        "stability": round(clamp01(abs_icir / 0.5) * 100),
-        "significance": round(clamp01(abs_t / 2.5) * 100),
-        "monotonicity": round(clamp01(mono_eff) * 100),
-        "spread": round(clamp01(abs(spread_ann) / 0.20) * 100),
-        "sample": round(clamp01(n / 36) * 100),
-    }
-
-    flags: list[str] = []
-    net_spread = spread_ann - turnover_ann * COST_PER_TURNOVER
+        code, status = "INSIGNIFICANT", "不显著"
+    flags = ["分层为排序研究，不代表可成交组合；未模拟融券、冲击成本、涨跌停成交或容量"]
+    if n < 36:
+        flags.append(f"有效调仓期仅 {n}，统计稳定性有限")
+    if not validation or validation.get("status") != "VALID":
+        flags.append("样本外期数不足；不得据此认定因子有效")
     if turnover_ann >= 8:
-        flags.append(f"年化换手 {turnover_ann:.1f}x，交易成本影响明显")
-    gross_dir = spread_ann * dir_mult
-    net_dir_signed = net_spread * dir_mult
-    if gross_dir > 0 and net_dir_signed < 0:
-        flags.append("成本侵蚀：毛多空为正但扣摩擦后净多空已转负")
-    if top_dd <= -0.25:
-        flags.append(f"回撤过大：最高分层最大回撤 {top_dd:.0%}")
+        flags.append(f"多空两腿年化换手 {turnover_ann:.1f}x，成本不可忽略")
+    if spread_ann * sign > 0 and net <= 0:
+        flags.append("成本侵蚀：方向调整后毛收益为正、净收益非正")
+    if top_dd <= -.25:
+        flags.append(f"多头分层最大回撤 {top_dd:.1%}")
     if regime_consistent is False:
-        flags.append("牛熊不一致：两段市场方向相反")
-    if n < 12:
-        flags.append(f"样本不足：仅 {n} 期，结论置信度低")
-
+        flags.append("牛熊方向不一致")
     return {
-        "grade": grade,
-        "strength": strength,
-        "confidence": confidence,
-        "direction": direction,
-        "status": status,
-        "dimensions": dimensions,
-        "net_spread_ann": round(net_spread, 4),
-        "cost_annualized": round(turnover_ann * COST_PER_TURNOVER, 4),
-        "robustness": round(robustness),
-        "tradability": round(tradability),
-        "cost_per_turnover": COST_PER_TURNOVER,
-        "direction_sign": dir_sign,
+        "grade": "A" if strength >= 70 else "B" if strength >= 55 else "C" if strength >= 40 else "D",
+        "strength": strength, "confidence": confidence, "direction": direction,
+        "direction_sign": sign, "direction_source": "TRAIN_ONLY" if validation else "FULL_SAMPLE_EXPLORATORY",
+        "status": status, "status_code": code,
+        "dimensions": {"direction_ic": round(100 * clamp(abs_ic / .05)),
+                       "stability": round(100 * clamp(abs_icir / .5)) if ic_summary.get("icir") is not None else None,
+                       "significance": round(100 * clamp(abs_t / 2.5)) if p is not None else None,
+                       "monotonicity": round(100 * clamp(mono)),
+                       "spread": round(100 * clamp(max(spread_ann * sign, 0) / .20)),
+                       "sample": round(100 * clamp(n / 36))},
+        "net_spread_ann": round(spread_ann - cost, 8),
+        "adjusted_gross_spread_ann": round(spread_ann * sign, 8),
+        "adjusted_net_spread_ann": round(net, 8),
+        "cost_annualized": round(cost, 8), "cost_per_turnover": COST_PER_TURNOVER,
+        "robustness": robustness, "robustness_components": components,
+        "tradability": None,
+        "tradability_note": "未测容量/冲击/融券约束，不能用净收益冒充交易可行性评分",
         "flags": flags,
     }
+
+
+def _failure(message: str, kind: str = "coverage") -> dict:
+    return {"error": message, "error_kind": kind, "engine_version": ENGINE_VERSION,
+            "status": "INSUFFICIENT_DATA" if kind == "coverage" else "FAILED",
+            "ic_summary": _ic_summary_block([]), "ic_series": [], "layer_curves": [],
+            "layer_stats": [], "decay": [], "rating": None, "periods": 0,
+            "turnover_annualized": None, "top_minus_bottom_annualized": None,
+            "sample_info": {"periods": 0, "avg_cross_section": None, "observations": 0}}
+
+
+def _current_caps() -> pd.Series:
+    eng = db.get_engine()
+    if eng is None:
+        return pd.Series(dtype=float)
+    with eng.connect() as conn:
+        rows = conn.execute(text("SELECT code, market_cap FROM stock_info WHERE market_cap > 0")).fetchall()
+    return pd.Series({str(code).zfill(6): float(cap) for code, cap in rows})
 
 
 def analyze(strategy_id: str, start: dt.date, end: dt.date,
             rebalance: str = "monthly", layers: int = 5,
             max_codes: int = 300, horizons=DEFAULT_HORIZONS,
-            neutralize: bool = True) -> dict:
+            neutralize: bool = True, smoothing_days: int = 1,
+            cap_diagnostic: bool = False) -> dict:
     """内置策略检验入口：把策略的 as-of 评分打包成 score_provider，
     统一走 analyze_scores 统计管线（与自定义因子共用同一引擎，Skill §20）。"""
     strat = by_id(strategy_id)
     if strat is None:
-        return {"error": f"unknown strategy_id: {strategy_id}"}
+        return _failure(f"unknown strategy_id: {strategy_id}", "compute")
+    if strategy_id == "magic_formula":
+        return _failure("Magic Formula 缺少历史市值/企业价值，当前市值或市值=0的近似不能用于历史检验")
 
     trading_days = engine._trading_days(start, end)
     if len(trading_days) < 30:
-        return {"error": "not enough trading days in range"}
-    ohlcv = engine._universe_ohlcv(start, end)
+        return _failure("not enough trading days in range")
+    ohlcv = engine._universe_ohlcv(start - dt.timedelta(days=120), end)
     if not ohlcv:
-        return {"error": "no price matrix; run postmarket job first"}
+        return _failure("no price matrix; run postmarket job first")
     codes = _universe_codes(ohlcv.get("amount"), ohlcv["close"], max_codes,
-                            volume=ohlcv.get("volume"))
+                            volume=ohlcv.get("volume"), as_of=start)
 
     panel = _get_panel(codes, end, start)
     if not panel:
-        return {"error": "panel load failed"}
+        return _failure("panel load failed", "compute")
 
     def provider(d: dt.date, codes_list: list[str]) -> pd.Series:
         out: dict[str, float] = {}
         for c in codes_list:
-            s = engine._score_at_cached(strat, panel[c], c, d)
-            if s > 0:
+            s = engine._score_at_cached(strat, panel.get(c, {}), c, d)
+            if s is not None and np.isfinite(s):
                 out[c] = s
         return pd.Series(out)
 
     result = analyze_scores(provider, start=start, end=end, rebalance=rebalance,
                             layers=layers, max_codes=max_codes,
                             horizons=horizons, neutralize=neutralize,
-                            factor_name=strat.name)
+                            factor_name=strat.name, codes=codes, smoothing_days=smoothing_days,
+                            cap_diagnostic=cap_diagnostic)
     if "error" not in result:
         result["strategy_id"] = strategy_id
     return result
@@ -305,247 +322,187 @@ def analyze_scores(score_provider, start: dt.date, end: dt.date,
                    rebalance: str = "monthly", layers: int = 5,
                    max_codes: int = 300, horizons=DEFAULT_HORIZONS,
                    neutralize: bool = True, factor_name: str = "因子",
-                   codes: list[str] | None = None) -> dict:
-    """统计检验管线：score_provider(d, codes) 返回该调仓日截面评分（Series）。
+                   codes: list[str] | None = None, include_pearson: bool = True,
+                   smoothing_days: int = 1, cap_diagnostic: bool = False) -> dict:
+    """One statistical engine for batch, detail, custom expressions and mining.
 
-    内置策略（as-of 重评分）与自定义因子（表达式面板查表）共用本管线——
-    IC/分层/衰减/牛熊/行业中性/评级的口径全产品唯一。
-    `codes` 由调用方传入时（如 alphalab 的流动性宇宙）必须与 provider 的
-    因子列一致——两个前 N 集合若不相交，覆盖门槛会把所有期数清零。
+    Signal t close -> entry t+1 open -> exit next signal close. These are
+    equal-weight ranking-study labels, not an executable trading backtest.
     """
+    if start >= end:
+        return _failure("开始日期必须早于结束日期", "compute")
+    if rebalance not in ("daily", "weekly", "monthly") and not (
+            rebalance.endswith("d") and rebalance[:-1].isdigit() and 1 <= int(rebalance[:-1]) <= 60):
+        return _failure("不支持的调仓频率", "compute")
     layers = max(2, min(int(layers), 10))
-    all_layers = list(range(1, layers + 1))
+    smoothing_days = max(1, min(int(smoothing_days), 60))
     horizons = tuple(sorted({int(h) for h in horizons if 1 <= int(h) <= 60}))
-
-    trading_days = engine._trading_days(start, end)
-    if len(trading_days) < 30:
-        return {"error": "not enough trading days in range"}
-
-    ohlcv = engine._universe_ohlcv(start, end)
-    if not ohlcv:
-        return {"error": "no price matrix; run postmarket job first"}
-    close = ohlcv["close"]
+    days = engine._trading_days(start, end)
+    if len(days) < 30:
+        return _failure("区间内交易日不足30天")
+    ohlcv = engine._universe_ohlcv(start - dt.timedelta(days=120), end)
+    if not ohlcv or "open" not in ohlcv:
+        return _failure("缺少开盘价面板，无法计算 t+1 执行收益")
+    frames = {}
+    for k, frame in ohlcv.items():
+        f = frame.copy(deep=False)
+        f.index = pd.to_datetime(f.index).date
+        frames[k] = f.sort_index()
+    close, opens = frames["close"], frames["open"]
     if codes is None:
-        codes = _universe_codes(ohlcv.get("amount"), close, max_codes,
-                                volume=ohlcv.get("volume"))
-    codes = [c for c in codes if c in close.columns]
-    val_close = close[codes].ffill()
-
-    day_pos = {d: i for i, d in enumerate(trading_days)}
-
-    rebal_dates = engine._rebalance_dates(trading_days, rebalance)
-    if len(rebal_dates) < 3:
-        return {"error": f"only {len(rebal_dates)} rebalance dates — widen the window"}
-
-    industry_map = _industry_map()
-    # 预热 120 天，让基准 MA60 在回测窗口起点就有效
+        codes = _universe_codes(frames.get("amount"), close, max_codes,
+                                frames.get("volume"), as_of=start)
+    codes = [c for c in codes if c in close.columns and c in opens.columns]
+    if len(codes) < layers * 5:
+        return _failure("起点可知股票池不足，请扩大股票池或补齐历史数据")
+    close, opens = close[codes], opens[codes]
+    day_pos = {d: i for i, d in enumerate(days)}
+    signal_days = engine._rebalance_dates(days, rebalance)
+    industry = _industry_map() if neutralize else {}
+    caps = _current_caps() if cap_diagnostic else pd.Series(dtype=float)
     bench = engine._benchmark_close(start - dt.timedelta(days=120), end)
-    bench_ma = bench.rolling(60).mean() if bench is not None and len(bench) >= 60 else None
-
-    ic_series: list[dict] = []
-    icn_series: list[dict] = []          # 行业中性化后的 IC
-    decay_scores: dict[int, list[float]] = {h: [] for h in horizons}
-    layer_period_rets: list[dict[int, float]] = []
-    layer_turnovers: dict[int, list[float]] = {lv: [] for lv in all_layers}
-    prev_members: dict[int, set] = {}
-    layer_dates: list[dt.date] = []
-    regime_rows: list[dict] = []
-    cross_sizes: list[int] = []         # {date, ic, spread, bull}
-
-    for i, d in enumerate(rebal_dates[:-1]):
-        d_next = rebal_dates[i + 1]
-        if d not in val_close.index or d_next not in val_close.index:
-            continue
-
-        scores = score_provider(d, codes)
-        if len(scores) < layers * 5:
-            logger.info("[factorlab] %s: only %d scores, skipped", d, len(scores))
-            continue
-        cross_sizes.append(len(scores))
-        s_norm = _winsorize_zscore(pd.Series(scores))
-
-        fwd_period = val_close.loc[d_next] / val_close.loc[d] - 1.0
-
-        ic = _rank_ic(s_norm, fwd_period)
-        if ic is not None:
-            ic_series.append({"date": d.isoformat(), "ic": round(ic, 4)})
-
-        # 行业中性化 IC：行业内去均值后再算秩相关（行业覆盖不足则跳过）
-        if neutralize:
-            ind = pd.Series([industry_map.get(c, "未知") for c in s_norm.index],
-                            index=s_norm.index)
-            if (ind != "未知").mean() >= 0.5:
-                s_neutral = s_norm.groupby(ind).transform(lambda x: x - x.mean())
-                icn = _rank_ic(s_neutral, fwd_period)
-                if icn is not None:
-                    icn_series.append({"date": d.isoformat(), "ic": round(icn, 4)})
-
-        pos = day_pos[d]
-        for h in horizons:
-            if pos + h >= len(trading_days):
-                continue
-            d_h = trading_days[pos + h]
-            if d_h not in val_close.index:
-                continue
-            fwd_h = val_close.loc[d_h] / val_close.loc[d] - 1.0
-            ic_h = _rank_ic(s_norm, fwd_h)
-            if ic_h is not None:
-                decay_scores[h].append(ic_h)
-
-        # 分层
-        try:
-            bins = pd.qcut(s_norm.rank(method="first"), q=layers, labels=range(1, layers + 1))
-        except ValueError:
-            continue
-        layer_ret: dict[int, float] = {}
-        codes_arr = s_norm.index.to_numpy()
-        bin_arr = np.asarray(bins)
-        for lv in all_layers:
-            members = codes_arr[bin_arr == lv]
-            if len(members) == 0:
-                layer_ret[int(lv)] = 0.0
-                continue
-            basket = fwd_period.loc[members].dropna()
-            layer_ret[int(lv)] = float(basket.mean()) if len(basket) else 0.0
-            cur = set(members.tolist())
-            prev = prev_members.get(lv) or set()
-            union = cur | prev
-            if union:
-                layer_turnovers[lv].append(1.0 - len(cur & prev) / len(union))
-            prev_members[lv] = cur
-        layer_period_rets.append(layer_ret)
-        layer_dates.append(d_next)
-
-        if ic is not None:
-            regime_rows.append({
-                "date": d, "ic": ic,
-                "spread": float(layer_ret.get(layers, 0.0) - layer_ret.get(1, 0.0)),
-            })
-
-    if len(ic_series) < 3:
-        return {"error": "有效截面不足（评分覆盖太少或窗口太短）——试试放宽时间窗口或减小每期样本",
-                "error_kind": "coverage"}
-
-    # ---- IC 汇总（原始 + 行业中性化）----
-    ics = np.array([x["ic"] for x in ic_series], dtype=float)
-    ic_summary = _ic_summary_block(ics)
-
-    icn_summary = None
-    if len(icn_series) >= 3:
-        icn_summary = _ic_summary_block(np.array([x["ic"] for x in icn_series], dtype=float))
-
-    # ---- 分层曲线 / 年化 / 回撤 / 单调性 / 换手 ----
+    bench_ma = bench.rolling(60).mean() if bench is not None else None
+    series, pearson, neutral, cap_series = [], [], [], []
+    decay_scores = {h: [] for h in horizons}
+    all_layers = list(range(1, layers + 1))
     curves = {lv: [1.0] for lv in all_layers}
-    for rets in layer_period_rets:
-        for lv in all_layers:
-            curves[lv].append(curves[lv][-1] * (1.0 + rets.get(lv, 0.0)))
-    n_periods = len(layer_period_rets)
-    layer_stats = []
-    layer_anns: dict[int, float] = {}
-    for lv in all_layers:
-        total = curves[lv][-1] - 1.0
-        ann = curves[lv][-1] ** (252.0 / max(n_periods * 21, 1)) - 1.0 if curves[lv][-1] > 0 else -1.0
-        layer_anns[lv] = ann
-        layer_stats.append({
-            "layer": lv,
-            "total": round(total, 4),
-            "annualized": round(ann, 4),
-            "max_drawdown": round(_max_drawdown(curves[lv]), 4),
-        })
-    spread_ann = layer_anns[all_layers[-1]] - layer_anns[all_layers[0]]
+    turns = {lv: [] for lv in all_layers}
+    prev = {lv: {} for lv in all_layers}
+    layer_rows, durations, cross_sizes, regime_rows = [], [], [], []
+    skipped, missing_labels = 0, 0
+    score_cache = {}
 
-    # 单调性：层数 vs 年化收益的 spearman（1.0 = 完美单调）
-    mono_x = np.arange(1, layers + 1, dtype=float)
-    mono_y = np.array([layer_anns[lv] for lv in all_layers], dtype=float)
-    if np.std(mono_x) > 0 and np.std(mono_y) > 0:
-        monotonicity = float(np.corrcoef(mono_x, mono_y)[0, 1])
-    else:
-        monotonicity = 0.0
+    def score(d):
+        if d not in score_cache:
+            values = pd.Series(score_provider(d, codes), dtype=float).reindex(codes)
+            score_cache[d] = values.replace([np.inf, -np.inf], np.nan)
+        return score_cache[d]
 
-    # 年化换手：分层成员的 Jaccard 距离均值 × 每年调仓次数
-    n_years = max(n_periods * 21 / 252.0, 1e-6)
-    rebal_per_year = n_periods / n_years
-    layer_mean_turnover = {lv: (float(np.mean(v)) if v else 0.0) for lv, v in layer_turnovers.items()}
-    turnover_ann = float(np.mean(list(layer_mean_turnover.values())) * rebal_per_year)
+    def forward(d, last):
+        pos = day_pos[d]
+        if pos + 1 >= len(days) or last not in close.index:
+            return pd.Series(dtype=float)
+        entry = days[pos + 1]
+        if entry not in opens.index:
+            return pd.Series(dtype=float)
+        price = opens.loc[entry].where(opens.loc[entry] > 0)
+        vol = frames.get("volume")
+        if vol is not None and entry in vol.index:
+            price = price.where(vol.loc[entry].reindex(codes) > 0)
+        return (close.loc[last].where(close.loc[last] > 0) / price - 1).replace([np.inf, -np.inf], np.nan)
 
-    # ---- 牛熊分阶段（沪深300 收盘相对 MA60）----
-    regime_block = None
-    if bench_ma is not None:
-        bull_ics, bear_ics = [], []
-        bull_spreads, bear_spreads = [], []
-        for r in regime_rows:
-            ts = pd.Timestamp(r["date"])
-            b = bench.get(ts)
-            ma = bench_ma.get(ts)
-            if b is None or ma is None or pd.isna(b) or pd.isna(ma):
-                continue
-            if b >= ma:
-                bull_ics.append(r["ic"]); bull_spreads.append(r["spread"])
-            else:
-                bear_ics.append(r["ic"]); bear_spreads.append(r["spread"])
-        if len(bull_ics) >= 2 and len(bear_ics) >= 2:
-            per_year = 12.0 if rebalance == "monthly" else 52.0
-            regime_block = {
-                "bull": {"ic_mean": round(float(np.mean(bull_ics)), 4), "n": len(bull_ics),
-                         "spread_ann": round(float(np.mean(bull_spreads)) * per_year, 4)},
-                "bear": {"ic_mean": round(float(np.mean(bear_ics)), 4), "n": len(bear_ics),
-                         "spread_ann": round(float(np.mean(bear_spreads)) * per_year, 4)},
-            }
-
-    # ---- 评级 ----
-    regime_consistent = None
-    if regime_block:
-        bs = np.sign(regime_block["bull"]["ic_mean"])
-        rs = np.sign(regime_block["bear"]["ic_mean"])
-        regime_consistent = (bs == rs) and bs != 0
-    rating = _rate(ic_summary, spread_ann, monotonicity,
-                   turnover_ann, layer_stats[-1]["max_drawdown"],
-                   len(ics), regime_consistent,
-                   icn_summary=icn_summary)
-
-    layer_curves_out = []
-    for j, d in enumerate(layer_dates):
-        row: dict = {"date": d.isoformat()}
-        for lv in all_layers:
-            row[f"L{lv}"] = round(curves[lv][j + 1], 4)
-        layer_curves_out.append(row)
-
-    decay_out = []
-    for h in horizons:
-        arr = np.array(decay_scores[h], dtype=float)
-        if len(arr) == 0:
+    for i, d in enumerate(signal_days[:-1]):
+        last = signal_days[i + 1]
+        pos = day_pos[d]
+        if pos < smoothing_days - 1:
+            skipped += 1
             continue
-        m, sd = float(arr.mean()), float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
-        decay_out.append({
-            "horizon": h,
-            "ic_mean": round(m, 4),
-            "icir": round(m / sd, 3) if sd > 0 else 0.0,
-            "n": len(arr),
-        })
-
-    return {
-        "strategy_id": None,
-        "factor_name": factor_name,
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "rebalance": rebalance,
-        "layers": layers,
-        "codes_analyzed": len(codes),
-        "periods": n_periods,
-        "sample_info": {
-            "periods": n_periods,
-            "avg_cross_section": round(float(np.mean(cross_sizes))) if cross_sizes else 0,
-            "observations": int(sum(cross_sizes)),
-        },
-        "ic_series": ic_series,
-        "ic_summary": ic_summary,
-        "ic_neutral_summary": icn_summary,
-        "rating": rating,
-        "layer_curves": layer_curves_out,
-        "layer_stats": layer_stats,
-        "layer_monotonicity": round(monotonicity, 3),
-        "turnover_annualized": round(turnover_ann, 2),
-        "top_minus_bottom_annualized": round(spread_ann, 4),
-        "decay": decay_out,
-        "regime": regime_block,
-    }
+        raw = pd.concat([score(x) for x in days[pos - smoothing_days + 1:pos + 1]], axis=1).mean(axis=1, skipna=False)
+        s_norm = _winsorize_zscore(raw)
+        fwd = forward(d, last)
+        pairs = finite_pairs(s_norm, fwd)
+        missing_labels += max(len(s_norm) - len(pairs), 0)
+        ic = _rank_ic(pairs["factor"], pairs["return"])
+        if len(pairs) < layers * 5 or ic is None:
+            skipped += 1
+            continue
+        s_norm, fwd_valid = pairs["factor"], pairs["return"]
+        series.append({"date": d.isoformat(), "execution_date": days[pos + 1].isoformat(),
+                       "return_end": last.isoformat(), "ic": ic, "n": len(pairs)})
+        cross_sizes.append(len(pairs))
+        if include_pearson:
+            value = _pearson_ic(s_norm, fwd_valid)
+            if value is not None:
+                pearson.append({"date": d.isoformat(), "ic": value})
+        if neutralize:
+            ind = pd.Series({c: industry.get(c) for c in s_norm.index}).dropna()
+            ind = ind[ind.map(ind.value_counts()) >= 2]
+            if len(ind) >= max(10, len(s_norm) * .5):
+                x = s_norm.reindex(ind.index)
+                residual = x - x.groupby(ind).transform("mean")
+                value = _rank_ic(residual, fwd_valid)
+                if value is not None:
+                    neutral.append({"date": d.isoformat(), "ic": value})
+        if cap_diagnostic:
+            value = _rank_ic(cap_bucket_demean(s_norm, caps), fwd_valid)
+            if value is not None:
+                cap_series.append(value)
+        for h in horizons:
+            if pos + h < len(days):
+                value = _rank_ic(s_norm, forward(d, days[pos + h]))
+                if value is not None:
+                    decay_scores[h].append(value)
+        bins = pd.qcut(s_norm.rank(method="first"), layers, labels=all_layers)
+        rets = {}
+        for lv in all_layers:
+            members = bins.index[bins == lv]
+            weights = {c: 1 / len(members) for c in members}
+            turns[lv].append(equal_weight_turnover(prev[lv], weights))
+            r = float(fwd_valid.loc[members].mean())
+            rets[lv] = r
+            curves[lv].append(curves[lv][-1] * (1 + r))
+            prev[lv] = {c: weights[c] * (1 + float(fwd_valid[c])) / (1 + r) for c in members} if r > -1 else {}
+        duration = day_pos[last] - pos
+        durations.append(duration)
+        layer_rows.append({"date": last.isoformat(), **{f"L{lv}": round(curves[lv][-1], 8) for lv in all_layers}})
+        if bench is not None and bench_ma is not None:
+            b, ma = bench.get(pd.Timestamp(d)), bench_ma.get(pd.Timestamp(d))
+            if b is not None and ma is not None and np.isfinite(b) and np.isfinite(ma):
+                regime_rows.append({"bull": bool(b >= ma), "ic": ic,
+                                    "spread": rets[layers] - rets[1], "days": duration})
+    if len(series) < 3:
+        return _failure("有效截面不足（至少3期、每层至少5只且因子需有离散度）；检查字段覆盖与时间范围")
+    summary = _ic_summary_block([r["ic"] for r in series])
+    neutral_summary = _ic_summary_block([r["ic"] for r in neutral]) if neutral else None
+    validation = chronological_validation(series)
+    years = sum(durations) / 252
+    layer_stats = []
+    for lv in all_layers:
+        nav = curves[lv][-1]
+        layer_stats.append({"layer": lv, "total": round(nav - 1, 8),
+                            "annualized": round(nav ** (1 / years) - 1, 8) if nav > 0 else -1.0,
+                            "max_drawdown": round(_max_drawdown(curves[lv]), 8),
+                            "turnover_annualized": round(sum(turns[lv]) / years, 8)})
+    spread = layer_stats[-1]["annualized"] - layer_stats[0]["annualized"]
+    mono_y = pd.Series([r["annualized"] for r in layer_stats]).rank()
+    monotonicity = float(pd.Series(all_layers).corr(mono_y)) if mono_y.std() > 0 else 0.0
+    # Spread has one unit long AND one unit short: charge BOTH legs, not the average of all layers.
+    turnover = (sum(turns[1]) + sum(turns[layers])) / years
+    regime = None
+    sides = {k: [r for r in regime_rows if r["bull"] == v] for k, v in (("bull", True), ("bear", False))}
+    if all(len(v) >= 2 for v in sides.values()):
+        regime = {k: {"ic_mean": float(np.mean([r["ic"] for r in v])), "n": len(v),
+                      "spread_ann": sum(r["spread"] for r in v) * 252 / sum(r["days"] for r in v)} for k, v in sides.items()}
+    consistent = (regime["bull"]["ic_mean"] * regime["bear"]["ic_mean"] > 0) if regime else None
+    long_layer = 0 if validation["direction_sign"] < 0 else -1
+    rating = _rate(summary, spread, monotonicity, turnover, layer_stats[long_layer]["max_drawdown"],
+                   len(series), consistent, neutral_summary, validation)
+    adjusted = _ic_summary_block([r["ic"] * validation["direction_sign"] for r in series])
+    if skipped:
+        rating["flags"].append(f"{skipped}期因覆盖/离散度不足被剔除；年化按有效持有交易日计算")
+    return {"engine_version": ENGINE_VERSION, "strategy_id": None, "factor_name": factor_name,
+            "status": rating["status_code"], "start": start.isoformat(), "end": end.isoformat(),
+            "rebalance": rebalance, "layers": layers, "codes_analyzed": len(codes),
+            "periods": len(series), "smoothing_days": smoothing_days,
+            "sample_info": {"periods": len(series), "avg_cross_section": round(float(np.mean(cross_sizes))),
+                            "observations": sum(cross_sizes), "skipped_periods": skipped,
+                            "missing_forward_labels": missing_labels, "holding_trading_days": sum(durations)},
+            "ic_summary": summary, "ic_adjusted_summary": adjusted, "ic_series": series,
+            "ic_neutral_summary": neutral_summary,
+            **({"ic_pearson_series": pearson, "ic_pearson_summary": _ic_summary_block([r["ic"] for r in pearson])} if include_pearson else {}),
+            "market_cap_diagnostic": {"enabled": cap_diagnostic, "summary": _ic_summary_block(cap_series) if cap_diagnostic else None,
+                                      "point_in_time": False, "used_in_rating": False,
+                                      "note": "当前市值十分位去均值仅作敏感性诊断，含未来信息；不得用于历史评分或样本外结论"},
+            "validation": validation, "rating": rating, "layer_curves": layer_rows,
+            "layer_stats": layer_stats, "layer_monotonicity": round(monotonicity, 8),
+            "turnover_annualized": round(turnover, 8), "top_minus_bottom_annualized": round(spread, 8),
+            "decay": [{"horizon": h, "ic_mean": (block := _ic_summary_block(v))["mean"],
+                       "icir": block["icir"], "p_value": block["p_value"], "n": block["n"],
+                       "status": "EXPLORATORY", "note": "重叠持有期会降低有效样本量，p值为未校正探索值"} for h, v in decay_scores.items()],
+            "regime": regime,
+            "methodology": {"signal": "t日收盘", "execution": "t+1日开盘", "exit": "下一调仓信号日收盘",
+                            "annualization": "有效持有交易日/252，不按固定21天折算",
+                            "universe": "起点及之前60个交易日平均成交额代理(close*volume)", "universe_as_of": start.isoformat(),
+                            "cost": "两腿等权权重变化(含漂移)累计/年数 × 单次完整换手摩擦；净价差=毛价差−成本",
+                            "industry": "当前行业映射近似，缺历史分类；行业结果仅作敏感性诊断",
+                            "limitations": ["仅包含已入库股票，仍有幸存者偏差", "财务缺原始公告日时采用法定披露期限近似，重述版本未复原", "分层年化价差不是多空组合的复利年化收益"]}}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import re
+import threading
 import time
 import traceback
 
@@ -101,6 +102,17 @@ def cached(key: str, ttl: int, fetcher):
 
 SPOT_MIN_ROWS = 4000
 SPOT_COLUMNS = ["代码", "名称", "行业", "最新价", "总市值", "总市值_亿", "涨跌幅", "成交量", "成交额", "换手率"]
+_SPOT_FETCH_LOCK = threading.Lock()   # 冷缓存时全市场抓取的单飞锁
+
+
+def _spot_ttl() -> int:
+    """盘中 5 分钟;盘外 1 小时——非交易时段这一帧就是最后收盘,不会变化,
+    短 TTL 只会让每个过期后的请求都付一次 30s+ 的全市场冷抓取。"""
+    now = dt.datetime.now()
+    if now.weekday() >= 5:
+        return 3600
+    hm = now.hour * 60 + now.minute
+    return 300 if 9 * 60 + 10 <= hm <= 15 * 60 + 10 else 3600
 
 
 def empty_spot_df() -> pd.DataFrame:
@@ -163,7 +175,7 @@ def fetch_spot_from_db() -> pd.DataFrame:
 
 def fetch_spot() -> pd.DataFrame:
     def _fetch():
-        print("[data-service] Fetching market spot (eastmoney push2)...")
+        print("[data-service] Fetching market spot (tencent qt.gtimg.cn first)...")
 
         def _accept(df):
             """规范化并校验行数;达标返回 DataFrame,否则 None。"""
@@ -175,7 +187,20 @@ def fetch_spot() -> pd.DataFrame:
                 return df
             return None
 
-        # 0) curl_cffi 指纹破甲实时源:push2delay 对A股实时且可翻满全市场 (~5900 行)
+        # 0) 腾讯批量行情(qt.gtimg.cn):无指纹墙、带总市值,行业由 stock_info 补列;
+        #    东财 clist 被墙(2026-09 起)后为主源
+        try:
+            import tx_realtime
+            df = _accept(tx_realtime.fetch_all_spot())
+            if df is not None:
+                print(f"[data-service] spot via tencent qt.gtimg.cn: {len(df)} rows")
+                spot_meta.record("tencent:qt.gtimg.cn", len(df))
+                return df
+            print("[data-service] tencent spot incomplete; falling back to eastmoney")
+        except Exception as e:
+            print(f"[data-service] tencent spot failed, fallback to eastmoney: {e}")
+
+        # 1) curl_cffi 指纹破甲实时源(东财 push2delay;墙若解除则其口径最全:行业/量比原生)
         try:
             import em_realtime
             df = _accept(em_realtime.fetch_all_spot())
@@ -187,7 +212,7 @@ def fetch_spot() -> pd.DataFrame:
         except Exception as e:
             print(f"[data-service] em_realtime spot failed, fallback to eastmoney aiohttp: {e}")
 
-        # 1) 原 eastmoney aiohttp 源
+        # 2) 原 eastmoney aiohttp 源
         try:
             df = _accept(eastmoney.fetch_all_spot())
             if df is not None:
@@ -239,10 +264,24 @@ def fetch_spot() -> pd.DataFrame:
     if cached_spot is not None and not getattr(cached_spot, "empty", False):
         return cached_spot
 
-    fresh = _fetch()
-    if fresh is not None and not getattr(fresh, "empty", False):
-        cache.set("spot", fresh, 300)
-        return fresh
+    # 单飞:冷缓存时并发请求若各自抓全市场,会向腾讯接口打出多份重复的 5866 只
+    # 批量请求(实测 6 个并发各耗时 31~60s),既拖慢请求也有被限流风险。
+    # 后进来的等首个结果即可;拿不到锁(首个抓取卡死)则退回旧缓存/空帧,不排队堆积。
+    # 注意:写缓存必须在锁内——否则等待者拿到锁时 leader 还没落缓存,会重复抓。
+    fresh: pd.DataFrame | None = None
+    if not _SPOT_FETCH_LOCK.acquire(timeout=90):
+        print("[data-service] spot fetch lock busy >90s; serving stale/empty")
+        return cached_spot if cached_spot is not None else empty_spot_df()
+    try:
+        again = cache.get("spot")
+        if again is not None and not getattr(again, "empty", False):
+            return again
+        fresh = _fetch()
+        if fresh is not None and not getattr(fresh, "empty", False):
+            cache.set("spot", fresh, _spot_ttl())
+            return fresh
+    finally:
+        _SPOT_FETCH_LOCK.release()
 
     return cached_spot if cached_spot is not None else empty_spot_df()
 
@@ -564,6 +603,94 @@ def policy_bucket(name: str, industry: str) -> tuple:
 # API Endpoints
 # ---------------------------------------------------------------------------
 
+def _limit_ratio(code: str, name: str) -> float:
+    """涨跌停幅度:创业板/科创板 ±20%(含 ST 不变),北交所 ±30%,主板 ST ±5%,主板 ±10%。"""
+    c = str(code).zfill(6)
+    if c.startswith(("30", "68")):
+        return 0.20
+    if c[0] in ("4", "8") or c.startswith("92"):
+        return 0.30
+    return 0.05 if "ST" in str(name or "").upper() else 0.10
+
+
+_HIST_BINS = ((-100, -9, "<-9%"), (-9, -7, "-9~-7%"), (-7, -5, "-7~-5%"), (-5, -3, "-5~-3%"),
+              (-3, -1, "-3~-1%"), (-1, 0, "-1~0%"), (0, 1, "0~1%"), (1, 3, "1~3%"),
+              (3, 5, "3~5%"), (5, 7, "5~7%"), (7, 9, "7~9%"), (9, 100, ">9%"))
+
+
+def _market_breadth(spot: pd.DataFrame) -> dict:
+    """市场宽度:涨跌分布、涨停/炸板/跌停梯队、成交额集中度。
+
+    只统计「当日有成交」的股票——停牌股没有博弈信息,计入会稀释分母。
+    缺字段(无昨收/无涨跌幅)的股票按 null 处理并计入 excluded,不补 0。
+    """
+    empty = {"sampled": 0, "excluded": 0, "up": 0, "down": 0, "flat": 0,
+             "limitUp": 0, "limitDown": 0, "touchedUp": 0, "touchedDown": 0,
+             "brokenUp": 0, "brokenDown": 0, "brokenRate": None, "brokenRateDown": None,
+             "upOver5": 0, "downOver5": 0, "medianChange": None,
+             "totalAmountYi": None, "top5pctAmountShare": None,
+             "histogram": [{"label": lab, "count": 0} for _, _, lab in _HIST_BINS]}
+    try:
+        if spot is None or spot.empty or "涨跌幅" not in spot.columns:
+            return empty
+        need = ["代码", "名称", "涨跌幅", "最新价", "昨收", "最高", "最低", "成交额"]
+        if any(c not in spot.columns for c in need):
+            return empty
+        d = spot[need].copy()
+        for c in ("涨跌幅", "最新价", "昨收", "最高", "最低", "成交额", "成交量"):
+            if c in d.columns:
+                d[c] = pd.to_numeric(d[c], errors="coerce")
+        if "成交量" in spot.columns:
+            vol = pd.to_numeric(spot["成交量"], errors="coerce").reindex(d.index)
+            d = d[vol.fillna(0) > 0]
+        d = d[d["涨跌幅"].notna()]
+        total_rows = len(spot)
+        n = len(d)
+        if n == 0:
+            return empty
+
+        chg = d["涨跌幅"]
+        # 涨停价按昨收×幅度四舍五入到分;昨收缺失/为 0 的行不参与涨停统计
+        ratio = [ _limit_ratio(c, nm) for c, nm in zip(d["代码"], d["名称"]) ]
+        prev = d["昨收"]
+        valid_prev = prev.notna() & (prev > 0)
+        up_line = (prev * (1 + pd.Series(ratio, index=d.index))).round(2)
+        dn_line = (prev * (1 - pd.Series(ratio, index=d.index))).round(2)
+        px, hi, lo = d["最新价"], d["最高"], d["最低"]
+        sealed_up = int((valid_prev & px.notna() & hi.notna() & (px >= up_line - 0.001)).sum())
+        touched_up = int((valid_prev & hi.notna() & (hi >= up_line - 0.001)).sum())
+        sealed_dn = int((valid_prev & px.notna() & lo.notna() & (px <= dn_line + 0.001)).sum())
+        touched_dn = int((valid_prev & lo.notna() & (lo <= dn_line + 0.001)).sum())
+        broken_up, broken_dn = touched_up - sealed_up, touched_dn - sealed_dn
+
+        hist = [{"label": lab, "count": int(((chg >= a) & (chg < b)).sum())} for a, b, lab in _HIST_BINS]
+
+        amt = d["成交额"].fillna(0)
+        total_amt = float(amt.sum())
+        top_share = None
+        k = max(1, int(round(n * 0.05)))
+        if total_amt > 0:
+            top_share = round(float(amt.nlargest(k).sum()) / total_amt * 100, 1)
+
+        return {
+            "sampled": n, "excluded": max(0, total_rows - n),
+            "up": int((chg > 0).sum()), "down": int((chg < 0).sum()), "flat": int((chg == 0).sum()),
+            "limitUp": sealed_up, "limitDown": sealed_dn,
+            "touchedUp": touched_up, "touchedDown": touched_dn,
+            "brokenUp": broken_up, "brokenDown": broken_dn,
+            "brokenRate": round(broken_up / touched_up * 100, 1) if touched_up else None,
+            "brokenRateDown": round(broken_dn / touched_dn * 100, 1) if touched_dn else None,
+            "upOver5": int((chg > 5).sum()), "downOver5": int((chg < -5).sum()),
+            "medianChange": round(float(chg.median()), 2),
+            "totalAmountYi": round(total_amt / 1e8, 0) if total_amt else None,
+            "top5pctAmountShare": top_share,
+            "histogram": hist,
+        }
+    except Exception as e:
+        print(f"[data-service] market breadth failed: {e}")
+        return empty
+
+
 @app.route("/api/market/summary")
 def market_summary():
     try:
@@ -589,9 +716,9 @@ def market_summary():
             avg_change = 0
         avg_change = safe_number(avg_change, 2, 0)
 
-        # Top gainers
+        # Top gainers(次新股不参与涨跌幅榜;涨跌家数仍按全市场计)
         if change_col:
-            top = merged.nlargest(10, change_col)
+            top = _drop_new_listings(merged).nlargest(10, change_col)
             top_list = []
             for _, r in top.iterrows():
                 top_list.append({
@@ -622,10 +749,13 @@ def market_summary():
             "upLimit": up_limit,
             "downLimit": down_limit,
             "avgChange": avg_change,
-            "northboundFlow": 0,
+            # 北向每日净买入自 2024-08-19 起停止披露:口径已不存在,按 SKILL 规则置 null
+            # 而非 0(0 会被读成「今天不增不减」)。前端不再展示该字段,保留键位仅为契约说明。
+            "northboundFlow": None,
             "topGainers": top_list,
             "topLosers": [],
             "hotSectors": hot_sectors,
+            "breadth": _market_breadth(spot),
         })
     except Exception as e:
         traceback.print_exc()
@@ -743,6 +873,10 @@ def stock_detail(code):
             "price": safe_round(r.get("最新价"), 2) or 0,
             "changePercent": safe_round(r.get("涨跌幅"), 2) or 0,
             "marketCap": safe_round(r.get("总市值_亿"), 0) or 0,
+            # 动态市盈率(f9)与市净率(f23)：行情源本来就抓了，此前一直没透出，
+            # 前端核心指标卡 PE/PB 因此长期显示 "—"
+            "pe": safe_round(r.get("市盈率"), 2),
+            "pb": safe_round(r.get("市净率"), 2),
         }
 
         # Best-effort fundamentals enrichment — warm cache only, never block the
@@ -939,20 +1073,40 @@ def sector_rotation():
 
         df = spot[spot["行业"].astype(str).str.strip().replace("-", pd.NA).notna()]
         df = df[pd.to_numeric(df["涨跌幅"], errors="coerce").notna()]
+        has_amt = "成交额" in df.columns
+        if has_amt:
+            df = df.copy()
+            df["成交额"] = pd.to_numeric(df["成交额"], errors="coerce")
 
-        sector_avg = df.groupby("行业").agg(
-            avg_change=("涨跌幅", "mean"),
-            count=("代码", "count"),
-        ).sort_values("avg_change", ascending=False)
+        agg = {"avg_change": ("涨跌幅", "mean"), "count": ("代码", "count")}
+        if has_amt:
+            agg["amount"] = ("成交额", "sum")
+        sector_avg = df.groupby("行业").agg(**agg).sort_values("avg_change", ascending=False)
         sector_avg = sector_avg[sector_avg["avg_change"].notna()]
+        # 每个行业的领涨/领跌股,热力图与板块钻取用
+        leaders: dict[str, tuple[str, float]] = {}
+        for ind, g in df.groupby("行业"):
+            g = g.dropna(subset=["涨跌幅"])
+            if g.empty:
+                continue
+            top = g.loc[g["涨跌幅"].idxmax()]
+            leaders[str(ind)] = (str(top.get("名称", "")), round(float(top["涨跌幅"]), 2))
 
         result = []
         for i, (name, row) in enumerate(sector_avg.iterrows()):
+            amt = row.get("amount") if has_amt else None
+            lead = leaders.get(str(name))
             result.append({
                 "name": str(name),
                 "change": round(float(row["avg_change"]), 2),
-                "flow": 0,
-                "momentum": 0,
+                # 资金流/动量口径当前无可用数据源(东财资金流已被墙):置 null 而非 0,
+                # 0 会被前端和读者当成「今天没有资金流动」。
+                "flow": None,
+                "momentum": None,
+                "count": int(row["count"]),
+                "amountYi": round(float(amt) / 1e8, 1) if pd.notna(amt) else None,
+                "leader": lead[0] if lead else None,
+                "leaderChange": lead[1] if lead else None,
                 "rank": i + 1,
             })
         return jsonify(result)
@@ -1099,11 +1253,22 @@ def market_indices():
         return jsonify({"error": str(e)}), 500
 
 
+_NEW_LISTING_RE = re.compile(r"^[NC][^0-9A-Za-z]")
+
+
+def _drop_new_listings(df: pd.DataFrame) -> pd.DataFrame:
+    """剔除 N/C 前缀次新股:上市初期无涨跌幅限制、无历史流通盘,混进涨跌幅榜是
+    口径错误(一只首日 +449% 的新股就能把整个榜单顶掉)。XD/XR 除权除息前缀不受影响。"""
+    if "名称" not in df.columns:
+        return df
+    return df[~df["名称"].astype(str).str.match(_NEW_LISTING_RE)]
+
+
 def _spot_sorted_list(ascending: bool, limit: int, key_col: str = "涨跌幅") -> list:
     spot = fetch_spot()
     if spot is None or spot.empty or key_col not in spot.columns:
         return _spot_sorted_list_from_db(ascending, limit, key_col)
-    df = spot.copy()
+    df = _drop_new_listings(spot.copy())
     df[key_col] = pd.to_numeric(df[key_col], errors="coerce")
     df = df.dropna(subset=[key_col])
     df = df.sort_values(key_col, ascending=ascending).head(limit)
@@ -1247,6 +1412,8 @@ try:
     from api.admin import bp as admin_bp
     from api.t_signal import bp as t_bp
     from api.decision import bp as decision_bp
+    from api.factormine import bp as factormine_bp
+    from api.research_jobs import bp as research_jobs_bp
     app.register_blueprint(decision_bp)
     app.register_blueprint(backtest_bp)
     app.register_blueprint(factorlab_bp)
@@ -1261,6 +1428,8 @@ try:
     app.register_blueprint(expr_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(t_bp)
+    app.register_blueprint(factormine_bp)
+    app.register_blueprint(research_jobs_bp)
 except Exception as _bp_err:
     print(f'[data-service] blueprint registration failed: {_bp_err}')
 

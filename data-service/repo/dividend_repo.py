@@ -14,23 +14,11 @@ COLS = ["code", "ann_date", "ex_date", "cash_per_10", "share_per_10", "transfer_
 def upsert_dividend(df: pd.DataFrame) -> int:
     if df is None or df.empty:
         return 0
-    return upsert(TABLE, df, COLS, update_columns=COLS[2:])
+    cols = [c for c in COLS if c in df.columns]
+    if not {"code", "ann_date"}.issubset(cols):
+        return 0
+    df = df.dropna(subset=["code", "ann_date"])
+    return upsert(TABLE, df, cols, update_columns=[c for c in cols if c not in ("code", "ann_date")],
+                  preserve_non_null=True)
 
 
-def get_dividend(code: str, years: int = 10) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT * FROM {TABLE} WHERE code=:c "
-        f"AND ann_date >= (CURDATE() - INTERVAL :y YEAR) "
-        f"ORDER BY ann_date DESC",
-        {"c": code, "y": years},
-    )
-
-
-def get_yield_universe() -> pd.DataFrame:
-    """Per-code: trailing 12-month total cash per share, count of years paying."""
-    return fetch_df(
-        "SELECT code, "
-        "  SUM(CASE WHEN ann_date >= (CURDATE() - INTERVAL 1 YEAR) THEN cash_per_10/10 ELSE 0 END) AS cash_ttm, "
-        "  COUNT(DISTINCT YEAR(ann_date)) AS pay_years "
-        "FROM stock_dividend WHERE cash_per_10 > 0 GROUP BY code"
-    )

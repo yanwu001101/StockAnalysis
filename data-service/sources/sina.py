@@ -2,6 +2,7 @@
 """Sina finance source — K-line fallback when Tencent fails."""
 from __future__ import annotations
 from typing import Any
+import math
 
 import pandas as pd
 
@@ -26,22 +27,24 @@ _SCALE_MAP = {"daily": 240, "weekly": 1680, "monthly": 7200}
 
 def _sina_sym(code: str) -> str:
     c = parser.normalize_code(code)
+    if c.startswith(("4", "8", "92")):
+        return f"bj{c}"
     return f"sh{c}" if c[0] in ("6", "9") else f"sz{c}"
 
 
 def _mf_sym(code: str) -> str:
     c = parser.normalize_code(code)
+    if c.startswith(("4", "8", "92")):
+        return f"bj{c}"
     if c[0] in ("6", "9"):
         return f"sh{c}"
-    if c[:2] in ("43", "83", "87", "92"):
-        return f"bj{c}"
     return f"sz{c}"
 
 
 def _f(v: Any) -> float | None:
     try:
         f = float(v)
-        return f
+        return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
 
@@ -107,34 +110,31 @@ class SinaSource(AbstractSource):
         return df
 
     async def fetch_moneyflow(self, code: str, days: int = 60) -> pd.DataFrame:
-        params = {
-            "page1": 1,
-            "num": min(max(days, 1), 60),
-            "sort": "opendate",
-            "asc": 0,
-            "daima": _mf_sym(code),
-        }
-        obj = await http_client.get_json(MONEYFLOW_URL, params=params, source=self.name)
-        if not isinstance(obj, list) or not obj:
-            return pd.DataFrame()
-        rows = []
-        for row in obj:
-            r0 = _f(row.get("r0_net"))
-            r1 = _f(row.get("r1_net"))
-            rows.append({
-                "code": parser.normalize_code(code),
-                "trade_date": row.get("opendate"),
-                "super_large_net": r0,
-                "large_net": r1,
-                "medium_net": _f(row.get("r2_net")),
-                "small_net": _f(row.get("r3_net")),
-                # 主力=超大+大(与东财口径一致);r1 缺失时置 None,不拿 netamount 冒充
-                "main_net": (r0 + r1) if (r0 is not None and r1 is not None) else None,
-            })
+        days = min(max(int(days), 1), 2000)
+        rows, seen = [], set()
+        for page in range(1, math.ceil(days / 60) + 1):
+            params = {"page1": page, "num": min(days, 60), "sort": "opendate",
+                      "asc": 0, "daima": _mf_sym(code)}
+            obj = await http_client.get_json(MONEYFLOW_URL, params=params, source=self.name)
+            if not isinstance(obj, list) or not obj:
+                break
+            added = 0
+            for row in obj:
+                day = row.get("opendate")
+                if not day or day in seen:
+                    continue
+                seen.add(day); added += 1
+                r0, r1 = _f(row.get("r0_net")), _f(row.get("r1_net"))
+                rows.append({"code": parser.normalize_code(code), "trade_date": day,
+                             "super_large_net": r0, "large_net": r1,
+                             "medium_net": _f(row.get("r2_net")), "small_net": _f(row.get("r3_net")),
+                             "main_net": r0 + r1 if r0 is not None and r1 is not None else None})
+            if not added or len(rows) >= days or len(obj) < min(days, 60):
+                break
         df = pd.DataFrame(rows)
         if not df.empty:
             df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
-        return df
+        return df.dropna(subset=["trade_date"]).sort_values("trade_date").tail(days).reset_index(drop=True) if not df.empty else df
 
 
 _default = SinaSource()

@@ -27,6 +27,13 @@
       </el-button>
     </AppCard>
 
+    <AppCard v-else-if="loading" title="多策略评分详情">
+      <!-- 冷缓存时策略评分可达数十秒：显示骨架而非误导性的「暂无数据」 -->
+      <div class="loading-rows">
+        <div class="skeleton-row" v-for="i in 6" :key="i" :style="{ width: (88 - i * 6) + '%' }" />
+      </div>
+    </AppCard>
+
     <AppCard v-else title="多策略评分详情">
       <EmptyState
         variant="empty"
@@ -47,7 +54,7 @@ import ScorePill from '@/components/stock/ScorePill.vue'
 import RadarChart from '@/components/charts/RadarChart.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 
-const props = defineProps<{ scores: Record<string, number> }>()
+const props = withDefaults(defineProps<{ scores: Record<string, number>; loading?: boolean }>(), { loading: false })
 const strategyStore = useStrategyStore()
 const { isMobile } = useDevice()
 
@@ -87,4 +94,7 @@ function colorOf(score: number) {
 @media (max-width: 768px) {
   .strategy-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 }
+.loading-rows { display: flex; flex-direction: column; gap: 12px; padding: 6px 0; }
+.skeleton-row { height: 34px; border-radius: var(--radius); background: linear-gradient(100deg, var(--bg-2) 40%, var(--surface) 50%, var(--bg-2) 60%); background-size: 200% 100%; animation: ss-sh 1.4s ease infinite; }
+@keyframes ss-sh { to { background-position: -200% 0; } }
 </style>

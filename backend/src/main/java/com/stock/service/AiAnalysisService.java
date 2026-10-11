@@ -179,7 +179,7 @@ public class AiAnalysisService {
         return Map.of("id", id, "saved", true);
     }
 
-    private String chat(UserAiConfig cfg, List<JSONObject> messages) {
+    String chat(UserAiConfig cfg, List<JSONObject> messages) {
         String apiKey = decrypt(cfg.getApiKeyCipher());
         JSONObject req = new JSONObject();
         req.put("model", cfg.getModel());
@@ -209,7 +209,7 @@ public class AiAnalysisService {
         return configMapper.selectOne(new LambdaQueryWrapper<UserAiConfig>().eq(UserAiConfig::getUserId, userId));
     }
 
-    private UserAiConfig requireEnabledConfig(Long userId) {
+    UserAiConfig requireEnabledConfig(Long userId) {
         UserAiConfig cfg = findConfig(userId);
         if (cfg == null || cfg.getEnabled() == null || cfg.getEnabled() == 0) {
             throw new BusinessException("请先在 AI 设置里配置并启用模型 API Key");
@@ -220,7 +220,7 @@ public class AiAnalysisService {
         return cfg;
     }
 
-    private String preferenceSummary(Long userId) {
+    String preferenceSummary(Long userId) {
         List<AiAnalysisRun> rows = runMapper.selectList(new LambdaQueryWrapper<AiAnalysisRun>()
             .eq(AiAnalysisRun::getUserId, userId)
             .ne(AiAnalysisRun::getFeedback, "")
@@ -251,7 +251,7 @@ public class AiAnalysisService {
         return Map.of("id", id, "name", name, "baseUrl", baseUrl, "model", model);
     }
 
-    private JSONObject message(String role, String content) {
+    JSONObject message(String role, String content) {
         JSONObject o = new JSONObject();
         o.put("role", role);
         o.put("content", content);

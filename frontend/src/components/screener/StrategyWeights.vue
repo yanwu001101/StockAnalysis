@@ -37,6 +37,12 @@
         <el-button v-if="totalWeight !== 100 && totalWeight > 0" link size="small" @click="normalizeWeights">一键归一化为 100%</el-button>
       </div>
 
+      <div class="sync-state" :class="strategyStore.syncStatus" role="status">
+        <span>{{ strategyStore.syncMessage }}</span>
+        <el-button v-if="strategyStore.syncStatus === 'error'" link @click="strategyStore.hydrateCloud()">重试同步</el-button>
+        <el-button v-if="strategyStore.syncStatus === 'conflict'" link @click="reloadCloud">加载云端版本</el-button>
+        <el-button v-if="strategyStore.hasLegacy" link @click="strategyStore.importLegacyConfigs()">导入本机旧方案</el-button>
+      </div>
       <div class="strategy-list">
         <div class="strategy-card" v-for="s in strategyStore.strategies" :key="s.id" :class="{ off: !s.enabled }">
           <div class="strategy-top">
@@ -115,7 +121,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Delete, View } from '@element-plus/icons-vue'
 import { useStrategyStore } from '@/stores/strategy'
 import { runScreener } from '@/api/strategy'
@@ -126,6 +132,12 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import StockTable from '@/components/stock/StockTable.vue'
 
 const strategyStore = useStrategyStore()
+async function reloadCloud() {
+  try {
+    await ElMessageBox.confirm('用云端版本替换当前本地权重？未同步修改将被替换。', '配置版本冲突', { type: 'warning' })
+    await strategyStore.hydrateCloud(true)
+  } catch { /* User cancelled. */ }
+}
 const previewData = ref<any[]>([])
 const showSaveDialog = ref(false)
 const showPreview = ref(false)

@@ -36,12 +36,11 @@ def _parse_costs(body: dict) -> dict | None:
     return out or None
 
 
-@bp.route("/factorlab", methods=["POST"])
-def factorlab():
-    body = request.get_json(force=True, silent=True) or {}
+def run_factorlab_payload(body: dict) -> dict:
+    """payload 版自定义因子检验：同步路由与异步任务（api/research_jobs）共用。"""
     expr = str(body.get("expression") or "").strip()
     if not expr:
-        return jsonify({"error": "缺少 expression", "error_kind": "expression"}), 400
+        raise ValueError("缺少 expression")
     end = _parse_date(body.get("end_date") or body.get("endDate"), dt.date.today())
     start = _parse_date(body.get("start_date") or body.get("startDate"),
                         end - dt.timedelta(days=365 * 2))
@@ -49,21 +48,29 @@ def factorlab():
     layers = int(body.get("layers") or 5)
     max_codes = int(body.get("max_codes") or body.get("maxCodes") or 400)
     neutralize = bool(body.get("neutralize", True))
+    return alphalab.analyze_expr(expr, start, end, rebalance=rebalance,
+                                 layers=layers, max_codes=max_codes,
+                                 neutralize=neutralize,
+                                 smoothing_days=int(body.get("smoothingDays", body.get("smoothing_days", 1))),
+                                 cap_diagnostic=body.get("capDiagnostic", body.get("cap_diagnostic", False)) is True)
+
+
+@bp.route("/factorlab", methods=["POST"])
+def factorlab():
+    body = request.get_json(force=True, silent=True) or {}
     try:
-        result = alphalab.analyze_expr(expr, start, end, rebalance=rebalance,
-                                       layers=layers, max_codes=max_codes,
-                                       neutralize=neutralize)
+        return jsonify(run_factorlab_payload(body))
+    except ValueError as e:
+        return jsonify({"error": str(e), "error_kind": "expression"}), 400
     except Exception as e:
         return jsonify({"error": str(e), "error_kind": "compute"}), 500
-    return jsonify(result)
 
 
-@bp.route("/backtest", methods=["POST"])
-def backtest():
-    body = request.get_json(force=True, silent=True) or {}
+def run_backtest_payload(body: dict) -> dict:
+    """payload 版自定义因子回测：同步路由与异步任务（api/research_jobs）共用。"""
     expr = str(body.get("expression") or "").strip()
     if not expr:
-        return jsonify({"error": "缺少 expression", "error_kind": "expression"}), 400
+        raise ValueError("缺少 expression")
     end = _parse_date(body.get("end_date") or body.get("endDate"), dt.date.today())
     start = _parse_date(body.get("start_date") or body.get("startDate"),
                         end - dt.timedelta(days=365 * 2))
@@ -71,14 +78,21 @@ def backtest():
     top_n = int(body.get("top_n") or body.get("topN") or 10)
     rebalance = body.get("rebalance") or "weekly"
     max_codes = int(body.get("max_codes") or body.get("maxCodes") or 500)
+    return alphalab.backtest_expr(expr, start, end, initial_capital=capital,
+                                  top_n=top_n, rebalance=rebalance,
+                                  costs=_parse_costs(body),
+                                  max_codes=max_codes)
+
+
+@bp.route("/backtest", methods=["POST"])
+def backtest():
+    body = request.get_json(force=True, silent=True) or {}
     try:
-        result = alphalab.backtest_expr(expr, start, end, initial_capital=capital,
-                                        top_n=top_n, rebalance=rebalance,
-                                        costs=_parse_costs(body),
-                                        max_codes=max_codes)
+        return jsonify(run_backtest_payload(body))
+    except ValueError as e:
+        return jsonify({"error": str(e), "error_kind": "expression"}), 400
     except Exception as e:
         return jsonify({"error": str(e), "error_kind": "compute"}), 500
-    return jsonify(result)
 
 
 @bp.route("/help", methods=["GET"])

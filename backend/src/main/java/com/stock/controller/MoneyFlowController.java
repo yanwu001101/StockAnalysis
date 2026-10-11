@@ -32,9 +32,4 @@ public class MoneyFlowController {
         return ApiResponse.ok(dataService.getMoneyFlowSector());
     }
 
-    @GetMapping("/stock/{code}")
-    public ApiResponse<?> stockFlow(@PathVariable String code,
-                                    @RequestParam(defaultValue = "60") int days) {
-        return ApiResponse.ok(dataService.getMoneyFlowStock(code, days));
-    }
 }

@@ -11,16 +11,18 @@
           <span class="ex-desc">{{ ex.desc }}</span>
         </el-option>
       </el-select>
-      <el-popover trigger="click" :width="380">
+      <el-popover trigger="click" width="min(380px, calc(100vw - 24px))" popper-class="alpha-help-popover">
         <template #reference>
           <el-button size="small" plain>字段 / 算子</el-button>
         </template>
         <div class="alpha-help">
+          <span v-if="helpLoading" role="status">正在加载字段和算子…</span>
+          <div v-else-if="helpError" role="alert">帮助加载失败 <el-button link @click="loadHelp">重试</el-button></div>
           <div v-for="g in (help?.fields ?? [])" :key="g.category" class="alpha-help-group">
             <div class="alpha-help-cat">{{ g.category }}</div>
-            <div v-for="it in g.items" :key="it.name" class="alpha-help-item" @click="insertToken(it.name)">
+            <button type="button" v-for="it in g.items" :key="it.name" class="alpha-help-item" @click="insertToken(it.name)">
               <code>{{ it.name }}</code><span>{{ it.desc }}</span>
-            </div>
+            </button>
           </div>
           <div v-if="help?.notes?.length" class="alpha-help-notes">
             <div v-for="n in help.notes" :key="n">· {{ n }}</div>
@@ -40,9 +42,17 @@ defineProps<{ modelValue: string; rows?: number }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void; (e: 'change', v: string): void }>()
 
 const help = ref<AlphaHelp | null>(null)
+const helpLoading = ref(false)
+const helpError = ref(false)
 const rootEl = ref<HTMLElement | null>(null)
 const inputEl = ref<{ textarea?: HTMLTextAreaElement } | null>(null)
-onMounted(() => { getAlphaHelp().then(h => { help.value = h }).catch(() => { /* 帮助面板失败不影响主流程 */ }) })
+async function loadHelp() {
+  helpLoading.value = true
+  helpError.value = false
+  try { help.value = await getAlphaHelp() } catch { helpError.value = true }
+  finally { helpLoading.value = false }
+}
+onMounted(loadHelp)
 
 /** 点击帮助项：字段直接插入，算子补一对括号，光标落括号内。 */
 function insertToken(token: string) {
@@ -52,7 +62,7 @@ function insertToken(token: string) {
   const before = value.slice(0, pos)
   const after = value.slice(pos)
   const base = token.split('(')[0]
-  const isOp = token.includes('(') && base === base.toUpperCase() && /[A-Z]/.test(base)
+  const isOp = token.includes('(')
   const insert = isOp ? `${base}()` : base
   emit('update:modelValue', before + insert + after)
   requestAnimationFrame(() => {
@@ -68,14 +78,14 @@ function insertToken(token: string) {
 <style scoped>
 .alpha-expr { display: flex; flex-direction: column; gap: 8px; }
 .expr-input :deep(textarea) { font-family: Consolas, Monaco, monospace; font-size: 12px; }
-.expr-tools { display: flex; gap: 8px; }
+.expr-tools { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .ex-name { font-size: 12px; }
 .ex-desc { float: right; font-size: 11px; color: var(--text-3); margin-left: 12px; }
 .alpha-help { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .alpha-help-cat { font-size: 11px; color: var(--text-3); margin-bottom: 4px; }
-.alpha-help-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 4px; border-radius: 6px; cursor: pointer; }
+.alpha-help-item { display: flex; gap: 8px; align-items: baseline; padding: 8px 4px; border-radius: 6px; cursor: pointer; width: 100%; min-width: 0; border: 0; background: transparent; text-align: left; }
 .alpha-help-item:hover { background: var(--surface-hover); }
-.alpha-help-item code { font-size: 12px; color: var(--brand); white-space: nowrap; }
-.alpha-help-item span { font-size: 11px; color: var(--text-3); }
+.alpha-help-item code { font-size: 12px; color: var(--brand); overflow-wrap: anywhere; flex: 0 1 45%; }
+.alpha-help-item span { font-size: 11px; color: var(--text-3); overflow-wrap: anywhere; flex: 1; }
 .alpha-help-notes { font-size: 11px; color: var(--text-3); line-height: 1.7; border-top: 1px solid var(--line); padding-top: 8px; }
 </style>

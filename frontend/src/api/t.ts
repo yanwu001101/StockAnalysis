@@ -159,9 +159,6 @@ export interface TBatchPosition {
   available?: number
 }
 
-export function getTSignalBatchWithPositions(positions: TBatchPosition[]): Promise<TSignal[]> {
-  return request.post('/t/batch', { positions })
-}
 
 // 量价形态中文说明(前端展示用)
 export const PV_LABEL: Record<string, string> = {

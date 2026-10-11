@@ -168,12 +168,6 @@ public class UserService {
         watchlistMapper.delete(w);
     }
 
-    /** @deprecated kept for ABI; routes through the userId-aware overload. */
-    @Deprecated
-    public void removeFromWatchlist(Long groupId, String code) {
-        removeFromWatchlist(null, groupId, code);
-    }
-
     public WatchlistGroup createGroup(Long userId, String name) {
         WatchlistGroup group = new WatchlistGroup();
         group.setUserId(userId);

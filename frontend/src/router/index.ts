@@ -39,6 +39,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '选股', icon: 'Search' },
       },
       {
+        path: 'lab',
+        name: 'Research',
+        component: () => import('@/views/Research.vue'),
+        meta: { title: '研究', icon: 'DataAnalysis' },
+      },
+      {
         path: 'market',
         name: 'Market',
         component: () => import('@/views/Market.vue'),
@@ -66,8 +72,8 @@ const routes: RouteRecordRaw[] = [
       // ---- 旧路由：全部重定向到合并后的页面 / tab，保证收藏与外链可用 ----
       { path: 'conditions', redirect: { path: '/screener', query: { tab: 'condition' } } },
       { path: 'expression', redirect: { path: '/screener', query: { tab: 'expression' } } },
-      { path: 'strategy', redirect: { path: '/screener', query: { tab: 'lab', sub: 'weights' } } },
-      { path: 'backtest', redirect: { path: '/screener', query: { tab: 'lab', sub: 'backtest' } } },
+      { path: 'strategy', redirect: { path: '/lab', query: { sub: 'weights' } } },
+      { path: 'backtest', redirect: { path: '/lab', query: { sub: 'backtest' } } },
       { path: 'moneyflow', redirect: { path: '/market' } },
       { path: 'lhb', redirect: { path: '/market', query: { tab: 'lhb' } } },
       { path: 'watchlist', redirect: { path: '/my' } },

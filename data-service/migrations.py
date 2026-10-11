@@ -103,6 +103,10 @@ def ensure_schema() -> list[str]:
             from decision.snapshot import DDL as SNAPSHOT_DDL
             for stmt in [x.strip() for x in SNAPSHOT_DDL.split(";") if x.strip()]:
                 conn.execute(text(stmt))
+            # 因子挖掘：任务/候选因子/结果缓存（幂等）
+            from factormine.repo import FM_TABLES_DDL as FM_DDL
+            for stmt in [x.strip() for x in FM_DDL.split(";") if x.strip()]:
+                conn.execute(text(stmt))
         if applied:
             logger.info("[migrations] applied: %s", ", ".join(applied))
     except Exception as e:

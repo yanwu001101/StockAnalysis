@@ -52,3 +52,38 @@ def calc_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
         (low - close.shift()).abs()
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean()
+
+
+def _true_range(high, low, close):
+    """TR 元素级最大值；Series 走 concat().max(axis=1)，DataFrame 走 np.maximum.reduce。"""
+    a, b, c = high - low, (high - close.shift()).abs(), (low - close.shift()).abs()
+    if isinstance(high, pd.DataFrame):
+        arr = np.maximum.reduce([a.to_numpy(), b.to_numpy(), c.to_numpy()])
+        return pd.DataFrame(arr, index=high.index, columns=high.columns)
+    return pd.concat([a, b, c], axis=1).max(axis=1)
+
+
+def calc_atr_df(high, low, close, period: int = 14):
+    return _true_range(high, low, close).rolling(period).mean()
+
+
+def calc_cci(high, low, close, period: int = 14):
+    """CCI：滚动窗口内真实平均绝对偏差（rolling.apply），无未来数据。"""
+    tp = (high + low + close) / 3.0
+    sma = tp.rolling(period).mean()
+    mad = tp.rolling(period).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
+    return (tp - sma) / (0.015 * mad.replace(0, np.nan))
+
+
+def calc_adx(high, low, close, period: int = 14):
+    """Wilder ADX：返回 (adx, +DI, -DI)。ewm/where 对 Series 与 DataFrame 均适用。"""
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    atr = _true_range(high, low, close).ewm(alpha=1.0 / period, min_periods=period).mean()
+    pdi = 100.0 * plus_dm.ewm(alpha=1.0 / period, min_periods=period).mean() / atr
+    mdi = 100.0 * minus_dm.ewm(alpha=1.0 / period, min_periods=period).mean() / atr
+    dx = 100.0 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
+    adx = dx.ewm(alpha=1.0 / period, min_periods=period).mean()
+    return adx, pdi, mdi

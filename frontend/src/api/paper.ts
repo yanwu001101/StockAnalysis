@@ -13,6 +13,3 @@ export function resetPaper(body: { initialCapital: number; topN: number }): Prom
   return request.post('/paper/reset', body)
 }
 
-export function runPaper(): Promise<any> {
-  return request.post('/paper/run', {})
-}

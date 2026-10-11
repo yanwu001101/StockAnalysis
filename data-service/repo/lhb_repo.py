@@ -26,21 +26,3 @@ def upsert_lhb(df: pd.DataFrame) -> int:
                                                     "net_amount", "seat_type"])
 
 
-def get_recent_lhb(code: str, days: int = 60) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT * FROM {TABLE} WHERE code=:c "
-        f"AND trade_date >= (CURDATE() - INTERVAL :d DAY) "
-        f"ORDER BY trade_date DESC",
-        {"c": code, "d": days},
-    )
-
-
-def get_institution_picks(days: int = 30) -> pd.DataFrame:
-    """Codes whose LHB entries in the last N days include 机构席位."""
-    return fetch_df(
-        "SELECT code, COUNT(*) AS n_inst, SUM(net_amount) AS net_sum "
-        "FROM stock_lhb WHERE seat_type='机构' "
-        "AND trade_date >= (CURDATE() - INTERVAL :d DAY) "
-        "GROUP BY code ORDER BY net_sum DESC",
-        {"d": days},
-    )

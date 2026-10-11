@@ -55,6 +55,7 @@ def upsert(
     rows: list[dict] | pd.DataFrame,
     columns: list[str],
     update_columns: list[str] | None = None,
+    preserve_non_null: bool = False,
 ) -> int:
     """Insert rows into `table`; on duplicate key, update `update_columns`.
 
@@ -71,12 +72,20 @@ def upsert(
         rows = rows.to_dict("records")
     if not rows:
         return 0
+    if not columns:
+        raise ValueError("upsert requires at least one column")
     cleaned = _clean_rows(rows, columns)
     if update_columns is None:
         update_columns = columns[1:]
     placeholders = ", ".join(f":{c}" for c in columns)
     col_list = ", ".join(f"`{c}`" for c in columns)
-    update_clause = ", ".join(f"`{c}`=VALUES(`{c}`)" for c in update_columns)
+    update_clause = ", ".join(
+        f"`{c}`=COALESCE(VALUES(`{c}`),`{c}`)" if preserve_non_null else f"`{c}`=VALUES(`{c}`)"
+        for c in update_columns)
+    # PK-only payloads may legitimately have no fields to update. Keep duplicates
+    # unchanged instead of generating an empty ON DUPLICATE KEY UPDATE clause.
+    if not update_clause:
+        update_clause = f"`{columns[0]}`=`{columns[0]}`"
     sql = text(
         f"INSERT INTO `{table}` ({col_list}) VALUES ({placeholders}) "
         f"ON DUPLICATE KEY UPDATE {update_clause}"
@@ -88,21 +97,6 @@ def upsert(
     except Exception as e:
         logger.debug("upsert %s failed: %s", table, e)
         return 0
-
-
-def latest_date(table: str, code: str, date_col: str = "trade_date") -> dt.date | None:
-    eng = engine()
-    if eng is None:
-        return None
-    try:
-        with eng.connect() as conn:
-            row = conn.execute(
-                text(f"SELECT MAX(`{date_col}`) FROM `{table}` WHERE `code`=:c"),
-                {"c": code},
-            ).fetchone()
-            return row[0] if row and row[0] else None
-    except Exception:
-        return None
 
 
 def fetch_df(sql: str, params: dict | None = None) -> pd.DataFrame:

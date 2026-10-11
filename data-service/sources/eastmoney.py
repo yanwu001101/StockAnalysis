@@ -386,9 +386,9 @@ class EastmoneySource(AbstractSource):
         df = pd.DataFrame(rows).rename(columns={
             "NOTICE_DATE": "ann_date",
             "EX_DIVIDEND_DATE": "ex_date",
-            "PAY_CASH": "cash_per_10",
+            "PRETAX_BONUS_RMB": "cash_per_10",
             "BONUS_RATIO": "share_per_10",
-            "TRANSFER_RATIO": "transfer_per_10",
+            "IT_RATIO": "transfer_per_10",
         })
         for c in ("ann_date", "ex_date"):
             if c in df:

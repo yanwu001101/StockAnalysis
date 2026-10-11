@@ -59,16 +59,6 @@ public class DecisionController {
         return ApiResponse.ok(dataService.getDecisionSnapshots(date));
     }
 
-    @GetMapping("/snapshot/{id}")
-    public ApiResponse<?> snapshot(@PathVariable String id, @RequestParam(required = false) Integer limit) {
-        return ApiResponse.ok(dataService.getDecisionSnapshot(id, limit));
-    }
-
-    @GetMapping("/stock/{code}/history")
-    public ApiResponse<?> history(@PathVariable String code, @RequestParam(required = false) Integer n) {
-        return ApiResponse.ok(dataService.getDecisionStockHistory(code, n));
-    }
-
     /** 手动触发一次快照(冷启动/盘中补跑)。需要登录,避免匿名刷重算。 */
     @PostMapping("/snapshot/run")
     public ApiResponse<?> run(@RequestBody(required = false) Map<String, Object> body, HttpServletRequest request) {

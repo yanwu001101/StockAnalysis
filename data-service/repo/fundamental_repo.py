@@ -23,7 +23,7 @@ def upsert_fundamental(df: pd.DataFrame, columns: list[str] | None = None) -> in
     """落库。
 
     `columns` 默认取 df 里真实存在的那些列——不把 COLS 全量写进去，是为了避免
-    「一条只补了营收/净利的新链路」把别的链路写过的 total_assets/current_assets
+    「一条只补了营收/净利的新链路」把另一条链路写过的 total_assets/current_assets
     等列覆写成 NULL（akshare 业绩报表本来就没有这些字段）。
     """
     if df is None or df.empty:
@@ -34,24 +34,6 @@ def upsert_fundamental(df: pd.DataFrame, columns: list[str] | None = None) -> in
     cols = columns or [c for c in COLS if c in df.columns]
     if "code" not in cols or "report_date" not in cols:
         return 0
-    return upsert(TABLE, df, cols, update_columns=cols[2:])
+    return upsert(TABLE, df, cols, update_columns=[c for c in cols[2:]])
 
 
-def get_fundamental(code: str, periods: int = 12) -> pd.DataFrame:
-    return fetch_df(
-        f"SELECT * FROM {TABLE} WHERE code=:c "
-        f"ORDER BY report_date DESC LIMIT :n",
-        {"c": code, "n": periods},
-    )
-
-
-def get_latest_universe(min_roe: float = 0.0) -> pd.DataFrame:
-    """Latest report per code, joined with itself for screening."""
-    return fetch_df(
-        "SELECT f.* FROM stock_fundamental f "
-        "INNER JOIN ("
-        "  SELECT code, MAX(report_date) AS rd FROM stock_fundamental GROUP BY code"
-        ") m ON f.code=m.code AND f.report_date=m.rd "
-        "WHERE COALESCE(f.roe, 0) >= :min_roe",
-        {"min_roe": min_roe},
-    )

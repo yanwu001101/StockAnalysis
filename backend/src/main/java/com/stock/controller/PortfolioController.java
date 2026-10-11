@@ -47,15 +47,6 @@ public class PortfolioController {
         return ApiResponse.ok("deleted");
     }
 
-    @GetMapping("/advice")
-    public ApiResponse<?> advice(@RequestParam(defaultValue = "0") BigDecimal cash,
-                                 @RequestParam(defaultValue = "balanced") String mode,
-                                 HttpServletRequest request) {
-        Long userId = userId(request);
-        if (userId == null) return ApiResponse.error(401, "未登录");
-        return ApiResponse.ok(portfolioService.advice(userId, cash, mode));
-    }
-
     @PostMapping("/advice")
     public ApiResponse<?> advicePost(@RequestBody Map<String, Object> body, HttpServletRequest request) {
         Long userId = userId(request);

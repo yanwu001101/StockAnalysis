@@ -259,35 +259,42 @@ function applySort() {
 const distOption = computed<EChartsOption | null>(() => {
   if (!results.value.length) return null
   const t = tokens.value
-  const ranges = ['0-20', '20-40', '40-60', '60-70', '70-80', '80-90', '90-100']
-  const counts = [0, 0, 0, 0, 0, 0, 0]
-  results.value.forEach(r => {
-    const s = r.compositeScore || 0
-    if (s < 20) counts[0]++
-    else if (s < 40) counts[1]++
-    else if (s < 60) counts[2]++
-    else if (s < 70) counts[3]++
-    else if (s < 80) counts[4]++
-    else if (s < 90) counts[5]++
-    else counts[6]++
-  })
-  const colors = [t.up, t.up, t.warn, t.warn, t.down, t.down, t.down]
+  // 10 等距桶（0-10 … 90-100）：原 7 桶桶距不一致（20/20/20/10/10/10/10），
+  // 且高分桶用绿色——语义像是「分越高越弱」。改为统一 10 分桶 + 单色，
+  // 形状本身即是信息；中位数用竖线标注。
+  const N = 10
+  const counts = new Array(N).fill(0)
+  const scores = results.value.map(r => r.compositeScore || 0)
+  scores.forEach(s => counts[Math.min(N - 1, Math.max(0, Math.floor(s / 10)))]++)
+  const sorted = [...scores].sort((a, b) => a - b)
+  const median = sorted.length
+    ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2]
+        : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+    : 0
   return {
     backgroundColor: 'transparent',
     textStyle: { fontFamily: t.font, color: t.text },
-    grid: { left: 36, right: 12, top: 16, bottom: 28 },
-    xAxis: { type: 'category', data: ranges,
+    grid: { left: 36, right: 12, top: 24, bottom: 28 },
+    xAxis: { type: 'category', data: counts.map((_, i) => `${i * 10}-${i * 10 + 10}`),
       axisLabel: { color: t.text3, fontSize: 10 },
       axisLine: { lineStyle: { color: t.line } },
       axisTick: { show: false } },
-    yAxis: { type: 'value',
+    yAxis: { type: 'value', minInterval: 1,
       splitLine: { lineStyle: { color: t.line, type: 'dashed' } },
       axisLabel: { color: t.text3, fontSize: 10 },
       axisLine: { show: false }, axisTick: { show: false } },
     series: [{
       type: 'bar',
-      data: counts.map((v, i) => ({ value: v, itemStyle: { color: colors[i], borderRadius: [4, 4, 0, 0] } })),
-      barWidth: '58%',
+      data: counts.map(v => ({ value: v, itemStyle: { color: t.brand, opacity: 0.85, borderRadius: [4, 4, 0, 0] } })),
+      barWidth: '62%',
+      label: { show: true, position: 'top', color: t.text3, fontSize: 10,
+               formatter: (p: any) => (p.value > 0 ? String(p.value) : '') },
+      markLine: scores.length >= 3 ? {
+        symbol: 'none', silent: true,
+        lineStyle: { color: t.warnText || t.warn, type: 'dashed', width: 1.2 },
+        label: { color: t.warnText || t.warn, fontSize: 10, formatter: `中位数 ${median.toFixed(0)}` },
+        data: [{ xAxis: String(Math.min(N - 1, Math.max(0, Math.floor(median / 10)))) }],
+      } : undefined,
     }],
     tooltip: { trigger: 'axis', ...baseTooltip(t) },
   }

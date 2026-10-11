@@ -44,44 +44,6 @@ CREATE TABLE IF NOT EXISTS `watchlist` (
     INDEX `idx_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 用户策略配置表
-CREATE TABLE IF NOT EXISTS `user_strategy` (
-    `id` BIGINT NOT NULL AUTO_INCREMENT,
-    `user_id` BIGINT NOT NULL,
-    `name` VARCHAR(100) NOT NULL,
-    `config_json` TEXT NOT NULL,
-    `filter_json` TEXT,
-    `is_default` TINYINT DEFAULT 0,
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    `deleted` TINYINT DEFAULT 0,
-    PRIMARY KEY (`id`),
-    INDEX `idx_user_id` (`user_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 回测记录表
-CREATE TABLE IF NOT EXISTS `backtest_record` (
-    `id` BIGINT NOT NULL AUTO_INCREMENT,
-    `user_id` BIGINT NOT NULL,
-    `strategy_id` BIGINT,
-    `start_date` DATE NOT NULL,
-    `end_date` DATE NOT NULL,
-    `initial_capital` DECIMAL(15,2) NOT NULL,
-    `top_n` INT DEFAULT 10,
-    `total_return` DECIMAL(10,4),
-    `annualized_return` DECIMAL(10,4),
-    `max_drawdown` DECIMAL(10,4),
-    `sharpe_ratio` DECIMAL(10,4),
-    `win_rate` DECIMAL(10,4),
-    `trade_count` INT DEFAULT 0,
-    `equity_curve_json` LONGTEXT,
-    `trades_json` LONGTEXT,
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    `deleted` TINYINT DEFAULT 0,
-    PRIMARY KEY (`id`),
-    INDEX `idx_user_id` (`user_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- 股票基础信息缓存表
 CREATE TABLE IF NOT EXISTS `stock_info` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -134,22 +96,6 @@ CREATE TABLE IF NOT EXISTS `stock_kline_weekly` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------- Phase 3: 多源数据扩展（分钟K/财务/资金流/北向/龙虎榜/股东/分红/概念/公告） ----------
-
--- 分钟级 K 线（5/15/30/60min）
-CREATE TABLE IF NOT EXISTS `stock_kline_minute` (
-    `code` VARCHAR(10) NOT NULL,
-    `dt` DATETIME NOT NULL,
-    `period` VARCHAR(8) NOT NULL DEFAULT '5min',
-    `open` DECIMAL(10,3),
-    `close` DECIMAL(10,3),
-    `high` DECIMAL(10,3),
-    `low` DECIMAL(10,3),
-    `volume` BIGINT,
-    `amount` DECIMAL(20,2),
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (`code`, `dt`, `period`),
-    INDEX `idx_kmin_dt` (`dt`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 财务三表 + 关键比率（合并视图，季度/年度）
 CREATE TABLE IF NOT EXISTS `stock_fundamental` (
@@ -405,4 +351,34 @@ CREATE TABLE IF NOT EXISTS `index_kline_daily` (
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`code`, `trade_date`),
     INDEX `idx_ikl_date` (`trade_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- AI 多轮对话：会话 + 消息
+-- 用户策略权重和方案；version 用于多设备乐观锁。
+CREATE TABLE IF NOT EXISTS `user_strategy_config` (
+    `user_id` BIGINT NOT NULL PRIMARY KEY,
+    `version` BIGINT NOT NULL DEFAULT 1,
+    `config_json` JSON NOT NULL,
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `ai_chat_session` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT NOT NULL,
+    `title` VARCHAR(100) NOT NULL DEFAULT '新对话',
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_aichat_user` (`user_id`, `updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `ai_chat_message` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `session_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `role` VARCHAR(10) NOT NULL,
+    `content` TEXT NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    INDEX `idx_aichat_msg` (`session_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

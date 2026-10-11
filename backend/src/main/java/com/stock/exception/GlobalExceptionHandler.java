@@ -24,7 +24,9 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<?>> handleBusiness(BusinessException e) {
         // Already user-facing — pass message through, no stack trace in log
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        HttpStatus status = HttpStatus.resolve(e.getCode());
+        if (status == null || !status.is4xxClientError()) status = HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status)
                 .body(ApiResponse.error(e.getCode(), e.getMessage()));
     }
 

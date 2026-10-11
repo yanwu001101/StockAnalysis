@@ -186,7 +186,7 @@ def _universe_ohlcv(start: dt.date, end: dt.date) -> dict[str, pd.DataFrame]:
 def _load_panel(codes: list[str], end: dt.date,
                 start: dt.date | None = None) -> dict[str, dict[str, pd.DataFrame]]:
     """Bulk-load every code's full history up to `end` in a single round-trip
-    per table. Returns {code -> {"dk", "fund", "nb", "lhb"}} so the rebalance
+    per table. Returns {code -> {"dk", "fund", "nb", "lhb", "mf"}} so the rebalance
     loop can slice an as-of view without hitting MySQL again.
 
     Without this, a 200-stock x 52-week back-test would issue 40 000 queries.
@@ -226,6 +226,14 @@ def _load_panel(codes: list[str], end: dt.date,
         f"SELECT * FROM stock_lhb "
         f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'{lower}"
     )
+    # 资金流：strategies/fund_price_divergence 要 5 日主力净额，缺这一路时
+    # ctx.moneyflow_df 恒为 None → 该策略在研究链路里每期 insufficient_data，
+    # 体检直接判 coverage（原先表里也只有 60 天，两头都是坑）。
+    mf = _bulk(
+        f"SELECT code, trade_date, super_large_net, large_net, medium_net, small_net, main_net "
+        f"FROM stock_moneyflow "
+        f"WHERE code IN ({in_list}) AND trade_date <= '{end.isoformat()}'{lower} AND main_net IS NOT NULL"
+    )
 
     if not dk.empty:
         dk["trade_date"] = pd.to_datetime(dk["trade_date"]).dt.date
@@ -238,6 +246,8 @@ def _load_panel(codes: list[str], end: dt.date,
         nb["trade_date"] = pd.to_datetime(nb["trade_date"]).dt.date
     if not lhb.empty and "trade_date" in lhb.columns:
         lhb["trade_date"] = pd.to_datetime(lhb["trade_date"]).dt.date
+    if not mf.empty and "trade_date" in mf.columns:
+        mf["trade_date"] = pd.to_datetime(mf["trade_date"]).dt.date
 
     panel: dict[str, dict[str, pd.DataFrame]] = {}
     for code in codes:
@@ -246,6 +256,7 @@ def _load_panel(codes: list[str], end: dt.date,
             "fund": fund[fund["code"] == code].sort_values("report_date") if not fund.empty and "report_date" in fund.columns else pd.DataFrame(),
             "nb": nb[nb["code"] == code].sort_values("trade_date") if not nb.empty and "trade_date" in nb.columns else pd.DataFrame(),
             "lhb": lhb[lhb["code"] == code].sort_values("trade_date") if not lhb.empty and "trade_date" in lhb.columns else pd.DataFrame(),
+            "mf": mf[mf["code"] == code].sort_values("trade_date") if not mf.empty and "trade_date" in mf.columns else pd.DataFrame(),
         }
     return panel
 
@@ -320,6 +331,9 @@ def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.da
     lhb_full = panel_one.get("lhb")
     if lhb_full is not None and not lhb_full.empty:
         ctx.lhb_df = lhb_full[lhb_full["trade_date"] <= as_of].tail(60)
+    mf_full = panel_one.get("mf")
+    if mf_full is not None and not mf_full.empty:
+        ctx.moneyflow_df = mf_full[mf_full["trade_date"] <= as_of].tail(30)
     try:
         res = strat.score(ctx)
         return float(res.score) if res and res.score > 0 else 0.0
@@ -614,12 +628,12 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
 # Single-stock timing backtest
 # ---------------------------------------------------------------------------
 
-def _load_full_history(code: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _load_full_history(code: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Pull all available history rows for one code, sorted ascending by date."""
     eng = db.get_engine()
     empty = pd.DataFrame()
     if eng is None:
-        return empty, empty, empty, empty
+        return empty, empty, empty, empty, empty
     with eng.connect() as conn:
         dk = pd.read_sql(
             text("SELECT trade_date, open, close, high, low, volume "
@@ -638,7 +652,13 @@ def _load_full_history(code: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFr
             text("SELECT * FROM stock_lhb WHERE code=:c ORDER BY trade_date ASC"),
             conn, params={"c": code},
         )
-    return dk, fund, nb, lhb
+        mf = pd.read_sql(
+            text("SELECT trade_date, super_large_net, large_net, medium_net, small_net, main_net "
+                 "FROM stock_moneyflow WHERE code=:c AND main_net IS NOT NULL "
+                 "ORDER BY trade_date ASC"),
+            conn, params={"c": code},
+        )
+    return dk, fund, nb, lhb, mf
 
 
 def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
@@ -665,7 +685,7 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
     if strat is None:
         return {"error": f"unknown strategy_id: {strategy_id}"}
 
-    full_dk, full_fund, full_nb, full_lhb = _load_full_history(code)
+    full_dk, full_fund, full_nb, full_lhb, full_mf = _load_full_history(code)
     if full_dk.empty:
         return {"error": f"no kline data for {code}"}
 
@@ -748,6 +768,15 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
             ctx.northbound_df = full_nb[full_nb["trade_date"] <= d].tail(60)
         if not full_lhb.empty and "trade_date" in full_lhb.columns:
             ctx.lhb_df = full_lhb[full_lhb["trade_date"] <= d].tail(60)
+        if not full_mf.empty and "trade_date" in full_mf.columns:
+            ctx.moneyflow_df = full_mf[full_mf["trade_date"] <= d].tail(30)
+        # 与 _score_at 同步：单股择时回测也用同一份 as-of 行业强度口径
+        ind = _industry_of(code)
+        if ind:
+            ctx.industry = ind
+            got = sector_rank.rank_at(ind, d)
+            if got:
+                ctx.sector_rank, ctx.sector_rank_n = got
 
         try:
             res = strat.score(ctx)

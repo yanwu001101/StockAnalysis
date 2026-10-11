@@ -110,31 +110,38 @@ class SinaSource(AbstractSource):
         return df
 
     async def fetch_moneyflow(self, code: str, days: int = 60) -> pd.DataFrame:
-        days = min(max(int(days), 1), 2000)
-        rows, seen = [], set()
-        for page in range(1, math.ceil(days / 60) + 1):
-            params = {"page1": page, "num": min(days, 60), "sort": "opendate",
-                      "asc": 0, "daima": _mf_sym(code)}
-            obj = await http_client.get_json(MONEYFLOW_URL, params=params, source=self.name)
-            if not isinstance(obj, list) or not obj:
-                break
-            added = 0
-            for row in obj:
-                day = row.get("opendate")
-                if not day or day in seen:
-                    continue
-                seen.add(day); added += 1
-                r0, r1 = _f(row.get("r0_net")), _f(row.get("r1_net"))
-                rows.append({"code": parser.normalize_code(code), "trade_date": day,
-                             "super_large_net": r0, "large_net": r1,
-                             "medium_net": _f(row.get("r2_net")), "small_net": _f(row.get("r3_net")),
-                             "main_net": r0 + r1 if r0 is not None and r1 is not None else None})
-            if not added or len(rows) >= days or len(obj) < min(days, 60):
-                break
+        """个股每日资金流（新浪口径:r0=超大单 r1=大单 r2=中单 r3=小单,元）。
+
+        主力净额 = 超大单 + 大单,与东财口径一致。大单缺失时主力净额
+        置 None(不能拿 netamount 冒充主力口径,也不能写 0)。
+
+        深度靠 `num` 一次拿满：实测 num=2000 不截断(单请求即 8 年历史),
+        而 `page1=2` 返回与 page1=1 **完全相同**的行——分页参数被忽略。
+        之前按 page 循环 + num=60 的写法看起来能加深,实际永远只有 60 天
+        (库里 avg=60.4 天/只 就是这么来的),不要再写分页循环。
+        """
+        limit = min(max(int(days), 1), 2000)
+        params = {"page1": 1, "num": limit, "sort": "opendate",
+                  "asc": 0, "daima": _mf_sym(code)}
+        obj = await http_client.get_json(MONEYFLOW_URL, params=params, source=self.name)
+        if not isinstance(obj, list) or not obj:
+            return pd.DataFrame()
+        rows = []
+        for row in obj:
+            day = row.get("opendate")
+            if not day:
+                continue
+            r0, r1 = _f(row.get("r0_net")), _f(row.get("r1_net"))
+            rows.append({"code": parser.normalize_code(code), "trade_date": day,
+                         "super_large_net": r0, "large_net": r1,
+                         "medium_net": _f(row.get("r2_net")), "small_net": _f(row.get("r3_net")),
+                         "main_net": r0 + r1 if r0 is not None and r1 is not None else None})
         df = pd.DataFrame(rows)
-        if not df.empty:
-            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
-        return df.dropna(subset=["trade_date"]).sort_values("trade_date").tail(days).reset_index(drop=True) if not df.empty else df
+        if df.empty:
+            return df
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+        return (df.dropna(subset=["trade_date"])
+                  .sort_values("trade_date").tail(limit).reset_index(drop=True))
 
 
 _default = SinaSource()

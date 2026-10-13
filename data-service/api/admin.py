@@ -9,6 +9,7 @@
 from __future__ import annotations
 import datetime as dt
 import threading
+import time
 import uuid
 
 from flask import Blueprint, jsonify, request
@@ -27,6 +28,7 @@ bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 _RUNS: dict[str, dict] = {}
 _RUNS_LOCK = threading.Lock()
 _RUNS_MAX = 50
+_MAX_ACTIVE_RUNS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -37,32 +39,10 @@ _RUNS_MAX = 50
 _TABLES = [
     "stock_announcement", "stock_concept", "stock_dividend", "stock_fundamental",
     "stock_info", "stock_kline_daily", "stock_kline_weekly",
+    "index_kline_daily", "industry_index_daily",
     "stock_lhb", "stock_moneyflow", "stock_northbound", "stock_shareholder",
     "user", "watchlist", "watchlist_group",
 ]
-
-# 表 → 时间列（用于覆盖度/新鲜度看板）
-_FRESH_TABLES = {
-    "stock_kline_daily": "trade_date",
-    "stock_kline_weekly": "trade_date",
-    "stock_moneyflow": "trade_date",
-    "stock_fundamental": "report_date",
-    "stock_lhb": "trade_date",
-    "stock_shareholder": "report_date",
-}
-
-
-def _active_universe_size() -> int:
-    """现货快照里成交额>0 的股票数——各表覆盖度的分母。"""
-    try:
-        df = cache.get("spot")
-        if df is None or not hasattr(df, "columns") or "成交额" not in df.columns:
-            return 0
-        import pandas as pd
-        amt = pd.to_numeric(df["成交额"], errors="coerce").fillna(0)
-        return int((amt > 0).sum())
-    except Exception:
-        return 0
 
 
 def _mysql_status() -> dict:
@@ -70,7 +50,6 @@ def _mysql_status() -> dict:
     if eng is None:
         return {"connected": False}
     rows: dict = {}
-    freshness: dict = {}
     try:
         with eng.connect() as conn:
             for t in _TABLES:
@@ -79,24 +58,9 @@ def _mysql_status() -> dict:
                     rows[t] = int(r[0]) if r else 0
                 except Exception:
                     rows[t] = None  # table missing or other error
-            # 覆盖度与新鲜度:行数会说谎(旧表行数大但只覆盖 1031 只)。
-            # 分母用现货快照活跃股数,让「覆盖了多少只能算的票」一眼可见。
-            denom = _active_universe_size()
-            for t, date_col in _FRESH_TABLES.items():
-                try:
-                    r = conn.execute(text(
-                        f"SELECT COUNT(DISTINCT code), MAX({date_col}) FROM {t}"
-                    )).fetchone()
-                    codes = int(r[0]) if r and r[0] is not None else 0
-                    freshness[t] = {
-                        "codes": codes,
-                        "maxDate": str(r[1]) if r and r[1] is not None else None,
-                        "coveragePct": round(codes / denom * 100, 1) if denom else None,
-                        "universe": denom,
-                    }
-                except Exception as e:
-                    freshness[t] = {"error": str(e)}
-        return {"connected": True, "tables": rows, "freshness": freshness}
+            from core.data_health import collect_freshness
+            diagnostics = collect_freshness(conn, cache.get("spot"))
+        return {"connected": True, "tables": rows, **diagnostics}
     except Exception as e:
         return {"connected": False, "error": str(e)}
 
@@ -194,25 +158,33 @@ _VALID_JOBS = ("postmarket", "weekend", "premarket", "intraday", "strategy_score
 
 
 def _trim_runs() -> None:
-    """Keep the in-memory run history bounded."""
-    if len(_RUNS) <= _RUNS_MAX:
-        return
-    drop_n = len(_RUNS) - _RUNS_MAX
-    by_start = sorted(_RUNS.items(), key=lambda kv: kv[1].get("started_at") or "")
-    for k, _ in by_start[:drop_n]:
+    """Bound terminal history only. Caller holds _RUNS_LOCK."""
+    terminal = [(k, v) for k, v in _RUNS.items() if v.get("status") != "running"]
+    by_start = sorted(terminal, key=lambda kv: kv[1].get("started_at") or "")
+    for k, _ in by_start[:max(0, len(terminal) - _RUNS_MAX)]:
         _RUNS.pop(k, None)
 
 
 @bp.route("/warmup", methods=["POST"])
 def warmup_start():
-    body = request.get_json(silent=True) or {}
-    job = (request.args.get("job") or body.get("job") or "postmarket").strip()
+    body = request.get_json(silent=True)
+    if request.get_data() and not isinstance(body, dict):
+        return jsonify({"error": "请求体必须是 JSON 对象"}), 400
+    job = request.args.get("job") if "job" in request.args else (body or {}).get("job", "postmarket")
+    if not isinstance(job, str):
+        return jsonify({"error": "job 必须为字符串"}), 400
+    job = job.strip()
     if job not in _VALID_JOBS:
         return jsonify({"error": f"unknown job: {job}", "valid": list(_VALID_JOBS)}), 400
 
     run_id = uuid.uuid4().hex[:12]
     started_at = dt.datetime.now().isoformat(timespec="seconds")
     with _RUNS_LOCK:
+        active = [r for r in _RUNS.values() if r.get("status") == "running"]
+        if any(r["job"] == job for r in active):
+            return jsonify({"error": "同名任务仍在运行，请等待当前任务结束", "code": "WARMUP_ALREADY_RUNNING"}), 409
+        if len(active) >= _MAX_ACTIVE_RUNS:
+            return jsonify({"error": "数据任务并发已满，请稍后重试", "code": "WARMUP_CAPACITY"}), 429
         _RUNS[run_id] = {
             "id": run_id,
             "job": job,
@@ -225,23 +197,41 @@ def warmup_start():
         _trim_runs()
 
     def _runner():
-        start = dt.datetime.now()
+        start = time.monotonic()
+        update = {}
         try:
             mod = __import__(f"jobs.{job}", fromlist=["run"])
-            mod.run()
-            with _RUNS_LOCK:
-                _RUNS[run_id]["status"] = "success"
+            outcome = mod.run()
+            valid = (isinstance(outcome, dict) and outcome.get("outcome_version") == 1
+                     and outcome.get("status") in ("success", "partial", "failed", "skipped"))
+            if valid:
+                update = {"status": outcome["status"], "outcome": outcome,
+                          "outcome_version": 1, "universe_size": outcome.get("universe_size"),
+                          "row_semantics": outcome.get("row_semantics"),
+                          "error": outcome.get("error"), "rows": outcome.get("rows"),
+                          "reason": outcome.get("reason"), "steps": outcome.get("steps", [])}
+            else:
+                # Legacy None/int is not evidence of writes; e.g. an old
+                # strategy-score job returns the total table size, not delta.
+                update = {"status": "unknown", "rows": None,
+                          "reason": "legacy_unverified",
+                          "note": "任务已返回，但未提供可验证的本轮执行结果。"}
         except Exception as e:
-            with _RUNS_LOCK:
-                _RUNS[run_id]["status"] = "failed"
-                _RUNS[run_id]["error"] = str(e)[:500]
+            update = {"status": "failed", "error": str(e)[:500], "rows": None}
         finally:
             end = dt.datetime.now()
             with _RUNS_LOCK:
+                _RUNS[run_id].update(update)
                 _RUNS[run_id]["finished_at"] = end.isoformat(timespec="seconds")
-                _RUNS[run_id]["duration_s"] = round((end - start).total_seconds(), 1)
+                _RUNS[run_id]["duration_s"] = round(time.monotonic() - start, 1)
+                _trim_runs()
 
-    threading.Thread(target=_runner, daemon=True, name=f"warmup-{job}-{run_id}").start()
+    try:
+        threading.Thread(target=_runner, daemon=True, name=f"warmup-{job}-{run_id}").start()
+    except Exception:
+        with _RUNS_LOCK:
+            _RUNS.pop(run_id, None)
+        return jsonify({"error": "数据任务启动失败，请稍后重试", "code": "WARMUP_UNAVAILABLE"}), 503
     return jsonify({"id": run_id, "job": job, "status": "running", "started_at": started_at})
 
 
@@ -268,7 +258,7 @@ def warmup_status():
 def scheduler_jobs():
     sched = getattr(scheduler_mod, "_sched", None)
     if sched is None:
-        return jsonify({"jobs": [], "running": False})
+        return jsonify({"jobs": [], "running": False, "valid_runs": list(_VALID_JOBS)})
     jobs = []
     for j in sched.get_jobs():
         jobs.append({

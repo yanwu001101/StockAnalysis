@@ -26,7 +26,7 @@ def _pd_series(rows: list[dict], col: str) -> pd.Series:
     s = pd.Series(
         [float(r[col]) if r.get(col) is not None else np.nan for r in rows],
         index=pd.to_datetime([r["trade_date"] for r in rows]),
-    ).dropna()
+    )
     return s.sort_index()
 
 
@@ -39,14 +39,9 @@ def overview():
     equity = _pd_series(curve, "equity")
     bench_raw = _pd_series(curve, "benchmark_close")
 
-    bench_aligned = None
-    if len(equity) >= 2 and len(bench_raw) >= 2:
-        bench = bench_raw.reindex(equity.index).ffill()
-        base = bench.iloc[0]
-        if base and not pd.isna(base):
-            bench_aligned = bench / base * float(equity.iloc[0])
-
-    metrics = compute(equity, benchmark=bench_aligned)
+    # Preserve raw dates/missing quotes. The metric engine aligns exact
+    # endpoints; ffill here would silently invent benchmark coverage.
+    metrics = compute(equity, benchmark=bench_raw)
     positions = paper_repo.get_positions()
 
     # 持仓现价/市值

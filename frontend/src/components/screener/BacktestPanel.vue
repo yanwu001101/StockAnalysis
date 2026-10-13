@@ -2,7 +2,7 @@
   <div class="backtest-panel" :class="{ mobile: isMobile }">
     <div class="config-col">
       <AppCard title="回测参数" sub="基于历史数据验证策略有效性">
-        <el-form label-position="top" size="small" class="config-form">
+        <el-form label-position="top" size="small" class="config-form" :disabled="loading">
           <SegmentTabs v-model="mode" :options="modeOptions" small style="margin-bottom: 12px;" />
 
           <template v-if="mode === 'strategy'">
@@ -62,7 +62,7 @@
             <div class="saved-main" @click="loadSaved(item)">
               <div class="saved-name" :title="item.name">{{ item.name }}</div>
               <div class="saved-meta">
-                <ChangeText :value="item.totalReturn * 100" :digits="1" />
+                <ChangeText :value="item.totalReturn == null ? null : item.totalReturn * 100" :digits="1" />
                 <span class="saved-date">{{ fmtDate(item.createdAt) }}</span>
               </div>
             </div>
@@ -72,18 +72,35 @@
       </AppCard>
     </div>
 
-    <div class="result-area" v-if="result">
-      <AppCard title="回测结果">
+    <div v-if="loading" class="result-area" role="status" aria-live="polite">
+      <AppCard :title="jobRunning ? `回测计算中 · ${jobElapsed}s` : '正在载入回测'">
+        <StatGrid :items="pendingMetrics" :cols="isMobile ? 2 : 3" loading />
+        <p>当前任务完成前不展示上一份结果。计算完成后将绑定本次提交参数。</p>
+      </AppCard>
+    </div>
+    <div v-else-if="runError" class="result-area" role="alert">
+      <AppCard :title="errorTitle"><p>{{ runError }}</p><p>未生成可用回测结果，请检查数据覆盖和参数后重试。</p></AppCard>
+    </div>
+    <div class="result-area" v-else-if="result">
+      <AppCard title="回测结果" :sub="resultDescription">
         <template #actions>
           <el-button size="small" type="success" plain @click="saveCurrent">
             <el-icon><Star /></el-icon>&nbsp;保存
           </el-button>
         </template>
         <StatGrid :items="metricItems" :cols="isMobile ? 2 : 3" />
+        <MetricsEvidence :evidence="result.metrics" />
+        <p v-if="metricItems.some(item => item.value === '—')" class="result-note" role="status">部分指标缺失或不可计算，已显示「—」，不代表 0。</p>
+        <div v-if="result.execution_note" class="execution-note">
+          <p>{{ result.execution_note }}</p>
+          <p v-if="result.open_position">期末未平仓：{{ result.open_position.code }} · {{ result.open_position.shares }} 股 ·
+            估值 {{ metric(result.open_position.market_value, 2) }} 元（{{ result.open_position.valuation_date }}）。总收益含持仓估值，非全部已实现收益。</p>
+          <p v-if="result.unfilled_orders?.length">未成交信号 {{ result.unfilled_orders.length }} 条，未计为实际成交。</p>
+        </div>
       </AppCard>
 
       <AppCard v-if="(result as any).picks?.length" title="本次回测选股"
-               :sub="mode === 'factor' ? '按因子值降序 TopN（最近一个调仓期）' : '按策略综合分排名'">
+               :sub="lastRequest?.mode === 'factor' ? '按因子值降序 TopN（最近一个调仓期）' : '按策略综合分排名'">
         <div class="picks-grid">
           <span v-for="(code, idx) in (result as any).picks" :key="code" class="pick-chip"
                 @click="$router.push(stockPath(code))">
@@ -118,7 +135,7 @@
       </AppCard>
     </div>
 
-    <el-empty v-if="!loading && !result && !isMobile" description="设置回测参数后点击「开始回测」" class="empty-hint" />
+    <el-empty v-if="!loading && !result && !runError" description="设置回测参数后点击「开始回测」" class="empty-hint" />
   </div>
 </template>
 
@@ -130,6 +147,7 @@ import type { EChartsOption } from 'echarts'
 import * as echarts from 'echarts'
 import { saveBacktest, listSavedBacktests, getSavedBacktest, deleteSavedBacktest } from '@/api/strategy'
 import { useResearchJob } from '@/composables/useResearchJob'
+import { useBacktestResult } from '@/composables/useBacktestResult'
 import AppCard from '@/components/ui/AppCard.vue'
 import StatGrid from '@/components/ui/StatGrid.vue'
 import SegmentTabs from '@/components/ui/SegmentTabs.vue'
@@ -137,12 +155,15 @@ import StockTable from '@/components/stock/StockTable.vue'
 import ChangeText from '@/components/stock/ChangeText.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AlphaExprInput from '@/components/screener/AlphaExprInput.vue'
+import MetricsEvidence from '@/components/screener/MetricsEvidence.vue'
 import { useStrategyStore } from '@/stores/strategy'
 import { useUserStore } from '@/stores/user'
 import { useRefreshable } from '@/composables/useRefreshable'
 import { useDevice } from '@/composables/useDevice'
 import { useChartTokens, baseTooltip, hexToRgba } from '@/composables/useEcharts'
 import { stockPath } from '@/utils/score'
+import { backtestMetricItems } from '@/utils/backtestResult'
+import { metric } from '@/utils/factorResult'
 import type { BacktestResult, SavedBacktestSummary } from '@/types'
 import type { StockColumn, StatItem, SegmentOption } from '@/types/ui'
 
@@ -151,17 +172,17 @@ const userStore = useUserStore()
 const { isMobile } = useDevice()
 const tokens = useChartTokens()
 
-const result = ref<BacktestResult | null>(null)
+const { result, lastRequest, loading, error: runError, errorTitle, run: runResult, restore: restoreResult } = useBacktestResult()
 type Side = 'all' | 'buy' | 'sell'
 const tradeSideFilter = ref<Side>('all')
 const sideOptions: SegmentOption<Side>[] = [
   { label: '全部', value: 'all' }, { label: '仅买入', value: 'buy' }, { label: '仅卖出', value: 'sell' },
 ]
-const lastRequest = ref<any>(null)              // 最近一次发给 /backtest 的请求体,保存时一并落库
 const savedList = ref<SavedBacktestSummary[]>([])
 
 const tradeColumns: StockColumn[] = [
   { key: 'date', label: '日期', mobile: 'title' },
+  { key: 'signal_date', label: '信号日', mobile: 'secondary' },
   { key: 'code', label: '代码', mobile: 'secondary' },
   { key: 'side', label: '方向', align: 'center', mobile: 'primary' },
   { key: 'price', label: '价格', type: 'num', digits: 2 },
@@ -176,31 +197,13 @@ const filteredTrades = computed(() => {
   return all.filter(t => t.side === tradeSideFilter.value)
 })
 
-const metricItems = computed<StatItem[]>(() => {
-  const r = result.value
-  if (!r) return []
-  const pct = (v: number, d = 2) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(d)}%`
-  const items: StatItem[] = [
-    { label: '总收益率', value: pct(r.totalReturn), cls: r.totalReturn >= 0 ? 'price-up' : 'price-down' },
-    { label: '年化收益率', value: pct(r.annualizedReturn), cls: r.annualizedReturn >= 0 ? 'price-up' : 'price-down' },
-    { label: '最大回撤', value: `-${(r.maxDrawdown * 100).toFixed(2)}%`, cls: 'price-down' },
-    { label: '夏普比率', value: r.sharpeRatio.toFixed(2), cls: 'brand-text' },
-    { label: '胜率', value: `${(r.winRate * 100).toFixed(1)}%`, cls: 'warn-text' },
-    { label: '交易次数', value: r.tradeCount },
-  ]
-  if (r.benchmarkReturn != null) {
-    items.push({ label: '基准 (沪深300)', value: pct(r.benchmarkReturn), cls: r.benchmarkReturn >= 0 ? 'price-up' : 'price-down' })
-  }
-  if (r.excessReturn != null) {
-    items.push({ label: '超额收益', value: pct(r.excessReturn), cls: r.excessReturn >= 0 ? 'price-up' : 'price-down' })
-  }
-  if (r.turnoverRate != null) {
-    items.push({ label: '年化换手率', value: `${(r.turnoverRate * 100).toFixed(0)}%` })
-  }
-  if (r.totalCosts != null) {
-    items.push({ label: '交易成本合计', value: `${(r.totalCosts / 10000).toFixed(2)} 万`, cls: 'price-down' })
-  }
-  return items
+const metricItems = computed<StatItem[]>(() => result.value ? backtestMetricItems(result.value) : [])
+const pendingMetrics = ['总收益率', '年化收益率', '最大回撤', '夏普比率', '胜率', '交易次数'].map(label => ({ label, value: null }))
+const resultDescription = computed(() => {
+  const req = lastRequest.value
+  if (!req) return '历史结果；提交参数缺失'
+  const subject = req.mode === 'factor' || req.expression ? `因子 ${req.expression}` : `${req.stockCode || '组合'} · ${req.strategyId || '策略'} `
+  return `${subject} · ${req.startDate || '—'} 至 ${req.endDate || '—'} · ${req.rebalance || '—'}（实际提交参数）`
 })
 
 const config = reactive({
@@ -222,33 +225,31 @@ const modeOptions: SegmentOption<BtMode>[] = [
   { label: '因子回测', value: 'factor' },
 ]
 
-const { running: loading, elapsed: jobElapsed, run: runJob } = useResearchJob()
+const { running: jobRunning, elapsed: jobElapsed, run: runJob } = useResearchJob()
 
 async function runTest() {
+  if (loading.value) return
   if (mode.value === 'factor' && !config.expression.trim()) {
     ElMessage.warning('请输入因子表达式')
     return
   }
+  if (!config.startDate || !config.endDate || config.startDate > config.endDate) {
+    ElMessage.warning('请选择有效的起止日期，开始日期不得晚于结束日期')
+    return
+  }
+  const submittedMode = mode.value
   try {
-    if (mode.value === 'factor') {
-      result.value = await runJob('alphalab-backtest', {
+    if (submittedMode === 'factor') {
+      await runResult({
+        mode: 'factor',
         expression: config.expression.trim(),
         startDate: config.startDate,
         endDate: config.endDate,
         initialCapital: config.initialCapital * 10000,    // 万元 -> 元
         topN: config.topN,
         rebalance: config.rebalance,
-      })
-      lastRequest.value = {
-        mode: 'factor',
-        expression: config.expression.trim(),
-        startDate: config.startDate,
-        endDate: config.endDate,
-        initialCapital: config.initialCapital * 10000,
-        topN: config.topN,
-        rebalance: config.rebalance,
-      }
-      ElMessage.success('因子回测完成')
+      }, body => runJob('alphalab-backtest', body))
+      announceCompletion('因子回测完成')
       return
     }
     const body: any = {
@@ -264,19 +265,25 @@ async function runTest() {
       body.topN = config.topN
       body.strategyConfig = strategyStore.getConfigMap()
     }
-    result.value = await runJob<BacktestResult>('backtest', body)
-    lastRequest.value = body
-    ElMessage.success(config.stockCode ? `${config.stockCode} 择时回测完成` : '组合回测完成')
+    await runResult(body, submitted => runJob<BacktestResult>('backtest', submitted))
+    announceCompletion(body.stockCode ? `${body.stockCode} 择时回测完成` : '组合回测完成')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '回测失败')
   }
+}
+
+function announceCompletion(message: string) {
+  const status = result.value?.metrics?.status
+  if (status && status !== 'VALID') ElMessage.warning('执行记录已返回，但净值输入异常或样本不足，请查看指标状态')
+  else ElMessage.success(message)
 }
 
 const curveOption = computed<EChartsOption | null>(() => {
   const data = result.value?.equityCurve
   if (!data?.length) return null
   const t = tokens.value
-  const bench = (result.value as any)?.benchmarkCurve as { date: string; value: number }[] | undefined
+  const bench = result.value?.benchmarkCurve
+  const benchmarkByDate = new Map(bench?.map(point => [point.date, point.value]))
   const series: any[] = [{
     type: 'line',
     data: data.map(d => d.value),
@@ -292,7 +299,7 @@ const curveOption = computed<EChartsOption | null>(() => {
   if (bench?.length) {
     series.push({
       type: 'line',
-      data: bench.map(d => d.value),
+      data: data.map(point => benchmarkByDate.get(point.date) ?? null),
       smooth: true,
       symbol: 'none',
       name: '沪深300',
@@ -320,13 +327,16 @@ const curveOption = computed<EChartsOption | null>(() => {
 // ---- 保存 / 历史 ----
 
 function defaultName(): string {
-  const stratName = strategyStore.strategies.find(s => s.id === config.strategyId)?.name || config.strategyId
-  const prefix = config.stockCode ? `${config.stockCode} ` : ''
-  return `${prefix}${stratName} ${config.startDate}~${config.endDate}`
+  const req = lastRequest.value || {}
+  const stratName = req.mode === 'factor' || req.expression ? `因子 ${req.expression}`
+    : strategyStore.strategies.find(s => s.id === req.strategyId)?.name || req.strategyId || '历史回测'
+  const prefix = req.stockCode ? `${req.stockCode} ` : ''
+  return `${prefix}${stratName} ${req.startDate || '—'}~${req.endDate || '—'}`
 }
 
 async function saveCurrent() {
   const snapshot = result.value
+  const requestSnapshot = lastRequest.value
   if (!snapshot) return
   if (!userStore.isLoggedIn) {
     ElMessage.warning('请先登录后再保存回测')
@@ -339,7 +349,7 @@ async function saveCurrent() {
       inputValue: defaultName(),
       inputValidator: (v: string) => (!!v && v.trim().length > 0) || '名字不能为空',
     })
-    await saveBacktest({ name: value.trim(), request: lastRequest.value, result: snapshot })
+    await saveBacktest({ name: value.trim(), request: requestSnapshot, result: snapshot })
     ElMessage.success('已保存')
     await refreshSaved()
   } catch (e) {
@@ -355,15 +365,21 @@ async function refreshSaved() {
 }
 
 async function loadSaved(item: SavedBacktestSummary) {
+  if (loading.value) return
   try {
-    const detail = await getSavedBacktest(item.id)
-    result.value = detail.result
+    await restoreResult(async () => {
+      const detail = await getSavedBacktest(item.id)
+      return { result: detail.result, request: detail.request || {} }
+    })
     // 回填配置标量,方便对照;故意不动全局策略权重 store(避免覆盖用户当前调参)
-    const req = detail.request || {}
+    const req = lastRequest.value || {}
+    mode.value = req.mode === 'factor' || req.expression ? 'factor' : 'strategy'
+    config.expression = req.expression || ''
     config.stockCode = req.stockCode || item.stockCode || ''
     config.strategyId = req.strategyId || item.strategyId || config.strategyId
-    config.startDate = item.startDate || config.startDate
-    config.endDate = item.endDate || config.endDate
+    config.startDate = req.startDate || item.startDate || config.startDate
+    config.endDate = req.endDate || item.endDate || config.endDate
+    if (req.rebalance) config.rebalance = req.rebalance
     if (req.initialCapital) config.initialCapital = req.initialCapital / 10000
     if (req.topN) config.topN = req.topN
     tradeSideFilter.value = 'all'
@@ -415,6 +431,8 @@ useRefreshable('回测', runTest, { immediate: false, autoRefresh: false })
 .result-area { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .backtest-panel.mobile .result-area { gap: 12px; }
 .empty-hint { grid-column: 1 / -1; }
+.result-note { color: var(--warn-text); font-size: 12px; line-height: 1.6; }
+.execution-note { color: var(--text-3); font-size: 12px; line-height: 1.6; }
 .picks-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .trades-count { margin-left: 8px; font-size: 12px; color: var(--text-3); font-weight: 400; }
 .side-tag { font-size: 11px; padding: 2px 10px; border-radius: var(--radius-pill); }

@@ -3,18 +3,18 @@ import request from './request'
 export interface AdminHealth {
   timestamp: string
   mysql: {
-    connected: boolean
+    connected: boolean | null
     tables?: Record<string, number | null>
     error?: string
   }
   redis: {
-    connected: boolean
+    connected: boolean | null
     ds_key_count?: number
     memory_used_bytes?: number
     error?: string
   }
   spot: {
-    present: boolean
+    present: boolean | null
     ttl_seconds?: number
     rows?: number
     size_bytes?: number
@@ -26,11 +26,13 @@ export interface AdminHealth {
 export interface WarmupRun {
   id: string
   job: string
-  status: 'running' | 'success' | 'failed'
+  status: 'running' | 'success' | 'partial' | 'failed' | 'skipped' | 'unknown'
   started_at: string
   finished_at?: string | null
   duration_s?: number | null
   error?: string | null
+  reason?: string | null
+  rows?: number | null
 }
 
 export function getAdminHealth(): Promise<AdminHealth> {

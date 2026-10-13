@@ -1,5 +1,13 @@
 import type { FactorLabResult } from '@/types'
 
+export const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+export function percent(value: number | null | undefined, digits = 2, signed = true): string {
+  if (!isFiniteNumber(value)) return '—'
+  return `${signed && value > 0 ? '+' : ''}${(value * 100).toFixed(digits)}%`
+}
+
 export function metric(value: number | null | undefined, digits = 4): string {
   return value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits)
 }

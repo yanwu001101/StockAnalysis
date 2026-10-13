@@ -10,7 +10,7 @@ import os
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -81,13 +81,20 @@ class SourceSettings(BaseSettings):
 class SchedulerSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    warmup_top_n: int = Field(default=300, alias="WARMUP_TOP_N")
+    # Same convention as scheduler.py: 0 = the entire eligible universe.
+    warmup_top_n: int = Field(default=0, alias="WARMUP_TOP_N")
 
 
 class AlertSettings(BaseSettings):
     """推送告警：webhook 机器人（企业微信/钉钉/飞书/自定义）。URL 为空 = 关闭。"""
     webhook_url: str = Field(default="", alias="ALERT_WEBHOOK_URL")
     webhook_type: str = Field(default="", alias="ALERT_WEBHOOK_TYPE")
+
+
+class ResearchAuthSettings(BaseSettings):
+    """Shared JWT key is used only to derive a domain-separated gateway key."""
+    model_config = SettingsConfigDict(extra="ignore")
+    jwt_secret: SecretStr = Field(default=SecretStr(""), alias="JWT_SECRET")
 
 
 class Settings(BaseSettings):
@@ -100,6 +107,7 @@ class Settings(BaseSettings):
     sources: SourceSettings = SourceSettings()
     sched: SchedulerSettings = SchedulerSettings()
     alert: AlertSettings = AlertSettings()
+    research_auth: ResearchAuthSettings = ResearchAuthSettings()
 
 
 @lru_cache(maxsize=1)

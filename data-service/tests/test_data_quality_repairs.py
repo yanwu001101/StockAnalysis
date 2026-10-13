@@ -23,17 +23,19 @@ def test_beijing_symbol_and_nonfinite_moneyflow():
     assert _f('0') == 0
 
 
-def test_sina_paginates_history_and_keeps_missing_main_flow(monkeypatch):
-    pages = []
+def test_sina_requests_depth_once_and_keeps_missing_main_flow(monkeypatch):
+    requests = []
     async def get(url, params, **kwargs):
-        pages.append(params['page1'])
+        requests.append(dict(params))
         dates = pd.bdate_range('2023-01-02', periods=180)[::-1]
-        start = (params['page1'] - 1) * 60
+        # Provider ignores page1. Only num controls history depth; fake the
+        # observed contract rather than an imaginary paginated endpoint.
         return [{'opendate': str(d.date()), 'r0_net': 1, 'r1_net': None if i == 0 else 2}
-                for i, d in enumerate(dates[start:start + 60])]
+                for i, d in enumerate(dates[:params['num']])]
     monkeypatch.setattr('sources.sina.http_client.get_json', get)
     result = asyncio.run(SinaSource().fetch_moneyflow('600519', days=130))
-    assert len(result) == 130 and pages == [1, 2, 3]
+    assert len(result) == 130 and len(requests) == 1
+    assert requests[0]['page1'] == 1 and requests[0]['num'] == 130
     assert result['trade_date'].is_monotonic_increasing
     assert result['main_net'].isna().any()
 

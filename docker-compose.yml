@@ -42,6 +42,9 @@ services:
       - DB_USER=root
       - DB_PASSWORD=${DB_PASSWORD:-Stock@2024}
       - DB_NAME=stock_screener
+      # Signed research-owner context; empty/default is rejected for /api/async.
+      # Must match backend JWT_SECRET. No insecure key fallback on this service.
+      - JWT_SECRET=${JWT_SECRET:-}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - EM_CONCURRENCY=8

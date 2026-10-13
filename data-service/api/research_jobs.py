@@ -17,10 +17,13 @@ kind 白名单（→ payload 入口）：
 from __future__ import annotations
 
 import importlib
+import json
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 import research_jobs
+from config import settings
+from core import research_auth
 
 bp = Blueprint("research_jobs", __name__, url_prefix="/api/async")
 
@@ -32,21 +35,54 @@ _KINDS = {
 }
 
 
+@bp.before_request
+def authenticated_owner():
+    """Unsigned local/internal requests do not get a compatibility bypass."""
+    secret = settings.research_auth.jwt_secret.get_secret_value()
+    try:
+        research_auth.validate_secret(secret)
+        research_auth.parse_headers(request.headers)
+        if request.content_length is not None and request.content_length > research_auth.MAX_BODY_BYTES:
+            return jsonify({"error": "研究任务请求体过大", "code": "RESEARCH_PAYLOAD_TOO_LARGE"}), 413
+        raw = request.stream.read(research_auth.MAX_BODY_BYTES + 1)
+        if len(raw) > research_auth.MAX_BODY_BYTES:
+            return jsonify({"error": "研究任务请求体过大", "code": "RESEARCH_PAYLOAD_TOO_LARGE"}), 413
+        g.research_owner = research_auth.verify_context(secret, request.headers, request.method, request.path, raw)
+        g.research_body = raw
+    except research_auth.AuthUnavailable as error:
+        return jsonify({"error": str(error), "code": "RESEARCH_AUTH_UNAVAILABLE"}), 503
+    except research_auth.InvalidContext as error:
+        return jsonify({"error": str(error), "code": "RESEARCH_AUTH_INVALID"}), 401
+
+
 @bp.route("/<kind>", methods=["POST"])
 def submit(kind: str):
     target = _KINDS.get(kind)
     if not target:
         return jsonify({"error": f"unknown kind: {kind}"}), 404
-    body = request.get_json(force=True, silent=True) or {}
+    try:
+        body = json.loads(g.research_body)
+    except (ValueError, UnicodeError, RecursionError):
+        body = None
+    if not isinstance(body, dict):
+        return jsonify({"error": "请求体必须是 JSON 对象", "code": "INVALID_PAYLOAD"}), 400
     module_name, fn_name = target
     fn = getattr(importlib.import_module(module_name), fn_name)
-    job_id = research_jobs.submit(kind, lambda: fn(body))
+    try:
+        job_id = research_jobs.submit(kind, lambda: fn(body), owner_id=g.research_owner)
+    except research_jobs.QueueFullError as exc:
+        response = jsonify({"error": str(exc), "code": "RESEARCH_QUEUE_FULL"})
+        response.headers["Retry-After"] = "5"
+        return response, 429
+    except RuntimeError:
+        return jsonify({"error": "研究任务服务暂不可用，请稍后重试",
+                        "code": "RESEARCH_UNAVAILABLE"}), 503
     return jsonify({"job_id": job_id, "status": "QUEUED"})
 
 
 @bp.route("/jobs/<job_id>", methods=["GET"])
 def job_status(job_id: str):
-    job = research_jobs.get_job(job_id)
+    job = research_jobs.get_job(job_id, owner_id=g.research_owner)
     if not job:
         return jsonify({"error": "任务不存在或已过期，请重新提交"}), 404
     return jsonify(job)

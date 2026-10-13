@@ -106,6 +106,31 @@ def upsert_weekly(code: str, df: pd.DataFrame) -> int:
     return _upsert(code, df, WEEKLY_TABLE)
 
 
+def upsert_with_basis_refresh(code: str, df: pd.DataFrame, klt: int = 101) -> int:
+    """Legacy synchronous writers: retry a rejected rebase with full history once.
+
+    Never relax the guard or scale the stored prefix. If the provider truncates
+    history, preserve the old series and its explicit BASIS_REFRESH_REQUIRED flag.
+    Async pipelines have their own source-aware retry and use upsert_daily directly.
+    """
+    if klt not in (101, 102):
+        raise ValueError("Only daily and weekly bars support basis refresh")
+    write = upsert_weekly if klt == 102 else upsert_daily
+    written = write(code, df)
+    required = BASIS_REFRESH_REQUIRED.get((_table(klt), code))
+    if written or not required:
+        return written
+    try:
+        full = eastmoney.fetch_kline(code, klt=klt, count=max(1000, required))
+        if full is not None and not full.empty:
+            written = write(code, full)
+    except Exception as exc:
+        log.warning("[kline:basis] %s full refresh failed: %s", code, exc)
+    if not written:
+        log.warning("[kline:basis] %s history incomplete; prior basis preserved", code)
+    return written
+
+
 def _upsert(code: str, df: pd.DataFrame, table: str) -> int:
     eng = db.get_engine()
     if eng is None or df is None or df.empty:
@@ -177,10 +202,9 @@ def get_daily(code: str, days: int = 250) -> pd.DataFrame:
         # eastmoney count = trading days, not calendar; use a generous count
         fresh = eastmoney.fetch_kline(code, klt=101, count=max(gap_days, days))
         if fresh is not None and not fresh.empty:
-            if last is not None:
-                fresh = fresh[fresh["日期"] > str(last)]
-            if not fresh.empty:
-                upsert_daily(code, fresh)
+            # Keep the overlap: the adjustment guard needs an unchanged price
+            # anchor. Dropping <= last makes every incremental update unverifiable.
+            upsert_with_basis_refresh(code, fresh)
 
     df = select_daily(code, days)
     if df.empty:
@@ -202,7 +226,7 @@ def get_weekly(code: str, weeks: int = 200) -> pd.DataFrame:
         count = max(weeks, 200)
         fresh = eastmoney.fetch_kline(code, klt=102, count=count)
         if fresh is not None and not fresh.empty:
-            upsert_weekly(code, fresh)
+            upsert_with_basis_refresh(code, fresh, klt=102)
 
     df = select_weekly(code, weeks)
     if df.empty:

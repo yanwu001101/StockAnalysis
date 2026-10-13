@@ -1,43 +1,43 @@
 <template>
   <div class="prediction-panel">
     <div class="panel-header">
-      <h4>涨跌概率分析</h4>
+      <h4>{{ presentation.title }}</h4>
       <el-tag size="small" type="info">{{ prediction.timeHorizon }}</el-tag>
     </div>
 
     <!-- Probability display -->
     <div class="prob-section">
-      <div class="cal-line" :class="calibrated ? 'cal-ok' : 'cal-warn'">
-        <template v-if="calibration">
-          ✅ 历史校准：相似信号 n={{ calibration.n }} · T+5 胜率
-          {{ ((calibration.win_rate ?? 0) * 100).toFixed(1) }}% · 平均
-          {{ ((calibration.avg_return ?? 0) >= 0 ? '+' : '') + ((calibration.avg_return ?? 0) * 100).toFixed(2) }}%
-          <span class="cal-date">（{{ calibration.cal_date }} 前 · 全市场 {{ calibration.universe }} 只回放）</span>
-        </template>
-        <template v-else>
-          ⚠ 下方百分比为模型评分（未校准），非历史胜率
-        </template>
-      </div>
-      <div class="prob-bar">
-        <div class="prob-fill prob-up" :style="{ width: prediction.probabilityUp + '%' }">
-          <span v-if="prediction.probabilityUp > 15">{{ prediction.probabilityUp }}%</span>
-        </div>
-        <div class="prob-fill prob-down" :style="{ width: prediction.probabilityDown + '%' }">
-          <span v-if="prediction.probabilityDown > 15">{{ prediction.probabilityDown }}%</span>
+      <div class="cal-line" :class="presentation.calibrated ? 'cal-ok' : 'cal-warn'" role="status">
+        {{ presentation.calibrationMessage }}
+        <div v-if="prediction.calibration">
+          相似信号 n={{ presentation.sampleText }}
+          <template v-if="presentation.calibrated"> · T+5 上涨频率 {{ presentation.upText }} · 平均收益 {{ presentation.averageReturn }}</template>
+          <span class="cal-date">（校准截至 {{ prediction.calibration.cal_date || '—' }} · 回放股票数 {{ prediction.calibration.universe ?? '—' }}）</span>
         </div>
       </div>
-      <div class="prob-labels">
-        <span class="prob-label-up"><el-icon><Top /></el-icon> 上涨</span>
-        <span class="prob-label-down">下跌 <el-icon><Bottom /></el-icon></span>
+      <template v-if="presentation.calibrated">
+        <div class="prob-bar" :aria-label="`历史 T+5 上涨频率 ${presentation.upText}`">
+          <div class="prob-fill prob-up" :style="{ width: presentation.up + '%' }">
+            <span>{{ presentation.upText }}</span>
+          </div>
+        </div>
+        <div class="prob-labels">
+          <span class="prob-label-up"><el-icon><Top /></el-icon> 历史上涨</span>
+          <span>其余样本含持平，不等同于下跌</span>
+        </div>
+      </template>
+      <div v-else class="trend-score">
+        <span>偏多趋势评分</span><strong class="num">{{ presentation.scoreText }}</strong>
+        <span class="score-note">高分表示模型偏多强度，不代表上涨概率</span>
       </div>
-
       <div class="signal-badge-row">
-        <div class="signal-badge" :class="'signal-' + prediction.signal">{{ prediction.signalLabel }}</div>
+        <div class="signal-badge" :class="'signal-' + presentation.signal">{{ presentation.signalLabel }}</div>
         <div class="confidence-badge">
-          <span class="conf-label">置信度</span>
-          <span class="conf-value num">{{ prediction.confidence }}%</span>
+          <span class="conf-label">模型证据评分</span>
+          <span class="conf-value num">{{ presentation.confidenceText }}</span>
         </div>
       </div>
+      <p class="score-note">证据评分由信号一致性、数据完整度和信号强度组成，不是统计置信区间；指标之间可能相关，不能视为独立证据。</p>
     </div>
 
     <!-- Dimension breakdown -->
@@ -90,15 +90,13 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Top, Bottom, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
+import { Top, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
 import type { PredictionResult } from '@/types'
+import { predictionPresentation } from '@/utils/predictionResult'
 
 // Skill §4：只有经过历史校准的概率才能称为概率
 const props = defineProps<{ prediction: PredictionResult }>()
-const calibration = computed(() =>
-  (props.prediction.calibration && !props.prediction.calibration.insufficient)
-    ? props.prediction.calibration : null)
-const calibrated = computed(() => !!calibration.value)
+const presentation = computed(() => predictionPresentation(props.prediction))
 </script>
 
 <style scoped>
@@ -112,6 +110,9 @@ h5 { margin: 0 0 8px; font-size: 13px; color: var(--text-2); font-weight: 600; d
 .cal-line.cal-ok { background: var(--color-green-soft); color: var(--color-green); }
 .cal-line.cal-warn { background: var(--warn-soft); color: var(--warn-text); }
 .cal-date { opacity: 0.75; }
+.trend-score { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.trend-score strong { font-size: 20px; }
+.score-note { color: var(--text-3); font-size: 11px; line-height: 1.6; }
 .prob-bar {
   display: flex;
   height: 32px;

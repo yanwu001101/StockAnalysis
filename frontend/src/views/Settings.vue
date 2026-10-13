@@ -25,11 +25,11 @@
         </template>
 
         <div class="status-row">
-          <div class="status-pill" :class="health.mysql.connected ? 'ok' : 'bad'">
-            MySQL · {{ health.mysql.connected ? '已连接' : '断开' }}
+          <div class="status-pill" :class="health.mysql.connected === true ? 'ok' : health.mysql.connected === false ? 'bad' : ''">
+            MySQL · {{ connectionLabel(health.mysql.connected) }}
           </div>
-          <div class="status-pill" :class="health.redis.connected ? 'ok' : 'bad'">
-            Redis · {{ health.redis.connected ? '已连接' : '断开' }}
+          <div class="status-pill" :class="health.redis.connected === true ? 'ok' : health.redis.connected === false ? 'bad' : ''">
+            Redis · {{ connectionLabel(health.redis.connected) }}
           </div>
           <div class="status-pill" :class="health.spot.present ? 'ok' : 'warn'">
             行情快照 · {{ spotLabel }}
@@ -71,14 +71,14 @@
       <AppCard v-if="userStore.isAdmin" title="数据管理">
         <div class="action-block">
           <div class="action-title">手动预热数据</div>
-          <div class="action-desc">触发一次后台数据采集任务,完成前页面可继续使用。</div>
+          <div class="action-desc">触发一次后台数据采集任务，完成前页面可继续使用。运行或提交中 {{ activeCount }} / 2。</div>
           <div class="action-row">
             <el-button
               v-for="job in JOBS"
               :key="job.id"
               size="small"
               :loading="warmupBusy[job.id]"
-              :disabled="anyWarmupBusy"
+              :disabled="!canStart(job.id)"
               @click="triggerWarmup(job.id)"
             >{{ job.label }}</el-button>
           </div>
@@ -92,13 +92,15 @@
           </div>
         </div>
 
-        <div class="action-block" v-if="recentRuns.length">
-          <div class="action-title">最近任务</div>
-          <StockTable :rows="recentRuns" :columns="runColumns" :stock="false" :clickable="false" dense row-key="id">
+        <div class="action-block">
+          <div class="action-title">最近任务 <el-button size="small" text :loading="loadingRuns" @click="refreshRuns">刷新任务状态</el-button></div>
+          <div v-if="runsError" class="action-desc" role="status">状态查询失败：{{ runsError }}。后台任务可能仍在运行；已知运行任务会自动重试查询，也可手动刷新。</div>
+          <StockTable v-if="recentRuns.length" :rows="recentRuns" :columns="runColumns" :stock="false" :clickable="false" dense row-key="id">
             <template #cell-status="{ row }">
               <span class="status-tag" :class="`s-${row.status}`">{{ runStatusLabel(row.status) }}</span>
             </template>
           </StockTable>
+          <div v-else-if="!loadingRuns && !runsError" class="action-desc">暂无任务记录。</div>
         </div>
       </AppCard>
 
@@ -163,7 +165,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/stores/user'
@@ -173,17 +175,16 @@ import { DEFAULT_API_BASE, getApiBase, setApiBase } from '@/api/request'
 import {
   getAdminHealth,
   clearAdminCache,
-  startWarmup,
-  getWarmupStatus,
   type AdminHealth,
-  type WarmupRun,
 } from '@/api/admin'
+import { useWarmupRuns } from '@/composables/useWarmupRuns'
 import type { SegmentOption, StockColumn } from '@/types/ui'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import AppCard from '@/components/ui/AppCard.vue'
 import SegmentTabs from '@/components/ui/SegmentTabs.vue'
 import StockTable from '@/components/stock/StockTable.vue'
 import UserAvatar from '@/components/ui/UserAvatar.vue'
+import { connectionLabel, runMessage, runStatusLabel } from '@/utils/adminRun'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -230,28 +231,39 @@ const runColumns: StockColumn[] = [
   { key: 'status', label: '状态', align: 'center', mobile: 'primary' },
   { key: 'started_at', label: '开始', mobile: 'secondary' },
   { key: 'duration_s', label: '耗时', format: r => (r.duration_s != null ? r.duration_s + ' 秒' : '—'), mobile: 'secondary' },
+  { key: 'rows', label: '报告写入行数', format: r => r.rows == null ? '—' : r.rows.toLocaleString(), mobile: 'secondary' },
   { key: 'error', label: '错误', mobile: 'secondary' },
 ]
 
 const emptyHealth: AdminHealth = {
   timestamp: '',
-  mysql: { connected: false },
-  redis: { connected: false },
-  spot: { present: false },
+  mysql: { connected: null },
+  redis: { connected: null },
+  spot: { present: null },
   circuits: {},
 }
 
 const health = ref<AdminHealth>(emptyHealth)
 const loadingHealth = ref(false)
-const warmupBusy = reactive<Record<string, boolean>>({})
 const clearing = ref(false)
-const recentRuns = ref<WarmupRun[]>([])
-let pollTimer: number | undefined
-
-const anyWarmupBusy = computed(() => Object.values(warmupBusy).some(v => v))
+let disposed = false
+let healthPromise: Promise<void> | null = null
+const {
+  recentRuns, busyByJob: warmupBusy, activeCount, canStart,
+  loading: loadingRuns, error: runsError, start: triggerWarmup, refresh: refreshRuns,
+} = useWarmupRuns({
+  onStarted: run => ElMessage.success(`已启动: ${run.job} (${run.id})`),
+  onRunsFinished: runs => {
+    runs.forEach(run => ElMessage(runMessage(run)))
+    if (runs.some(run => run.status === 'success' || run.status === 'partial')) void loadHealth()
+  },
+  onStartError: error => ElMessage.warning(error.message),
+  onPollError: () => ElMessage.warning('任务状态查询失败，后台任务可能仍在运行；将自动重试查询'),
+})
 
 const spotLabel = computed(() => {
   const s = health.value.spot
+  if (s.present == null) return '未确认'
   if (!s.present) return s.ttl_seconds === -2 ? '缺失' : '过期'
   if (s.ttl_seconds == null) return '正常'
   return `${s.ttl_seconds}s 剩余`
@@ -266,60 +278,23 @@ const circuitEntries = computed(() =>
   Object.entries(health.value.circuits || {}).map(([name, state]) => ({ name, state }))
 )
 
-async function loadHealth() {
+function loadHealth(): Promise<void> {
+  if (disposed) return Promise.resolve()
+  if (healthPromise) return healthPromise
   loadingHealth.value = true
-  try {
-    health.value = await getAdminHealth()
-  } catch (e) {
-    // 全局 interceptor 已经弹过错了
-  } finally {
-    loadingHealth.value = false
-  }
-}
-
-async function loadRecent() {
-  try {
-    const res: any = await getWarmupStatus()
-    recentRuns.value = (res && res.items) ? res.items : []
-  } catch (_) {}
-}
-
-async function triggerWarmup(job: 'postmarket' | 'weekend' | 'premarket' | 'intraday') {
-  warmupBusy[job] = true
-  try {
-    const run = await startWarmup(job)
-    ElMessage.success(`已启动: ${job} (${run.id})`)
-    await loadRecent()
-    pollUntilDone(run.id)
-  } catch (_) {
-    warmupBusy[job] = false
-  }
-}
-
-function pollUntilDone(id: string) {
-  const tick = async () => {
+  const task = (async () => {
     try {
-      const r: any = await getWarmupStatus(id)
-      const run = r as WarmupRun
-      const idx = recentRuns.value.findIndex(x => x.id === id)
-      if (idx >= 0) recentRuns.value[idx] = run
-      else await loadRecent()
-      if (run.status === 'running') {
-        pollTimer = window.setTimeout(tick, 2000)
-      } else {
-        warmupBusy[run.job] = false
-        if (run.status === 'success') {
-          ElMessage.success(`${run.job} 完成 (${run.duration_s}s)`)
-          loadHealth()
-        } else {
-          ElMessage.error(`${run.job} 失败: ${run.error || '未知错误'}`)
-        }
-      }
+      const next = await getAdminHealth()
+      if (!disposed) health.value = next
     } catch (_) {
-      // give up polling on error; user can refresh
+      // 全局 interceptor 已经弹过错了
     }
-  }
-  tick()
+  })().finally(() => {
+    if (healthPromise === task) healthPromise = null
+    if (!disposed) loadingHealth.value = false
+  })
+  healthPromise = task
+  return task
 }
 
 async function confirmClear() {
@@ -355,13 +330,6 @@ function formatBytes(n?: number) {
   return n + ' B'
 }
 
-function runStatusLabel(s: string) {
-  if (s === 'running') return '运行中'
-  if (s === 'success') return '成功'
-  if (s === 'failed') return '失败'
-  return s
-}
-
 function circuitLabel(state: string) {
   if (state === 'closed') return '正常'
   if (state === 'open') return '熔断'
@@ -369,14 +337,16 @@ function circuitLabel(state: string) {
   return state
 }
 
-onMounted(() => {
+function refreshAdminData() {
   if (userStore.isAdmin) {
-    loadHealth()
-    loadRecent()
+    void loadHealth()
+    void refreshRuns()
   }
-})
+}
+onMounted(refreshAdminData)
+onActivated(refreshAdminData)
 onUnmounted(() => {
-  if (pollTimer) window.clearTimeout(pollTimer)
+  disposed = true
 })
 </script>
 

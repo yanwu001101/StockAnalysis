@@ -659,6 +659,8 @@ def backtest_expr(expr: str, start: dt.date, end: dt.date,
         "rebalance": rebalance,
         "costs": cost,
         "metrics": metrics.as_dict(),
+        "win_rate_basis": metrics.win_rate_basis,
+        "win_rate_sample_size": metrics.win_rate_sample_size,
         "equity_curve": [
             {"date": dd.isoformat(), "value": round(v, 2)}
             for dd, v in zip(equity_dates, equity_vals)
@@ -669,12 +671,13 @@ def backtest_expr(expr: str, start: dt.date, end: dt.date,
         "universe_size": len(universe),
     }
     if bench is not None and len(bench) >= 2:
-        bench = bench.reindex(pd.to_datetime(equity_dates)).ffill()
+        bench = bench.reindex(pd.to_datetime(equity_dates))
         base = float(bench.iloc[0]) if pd.notna(bench.iloc[0]) else None
-        if base:
+        if base is not None and np.isfinite(base) and base > 0:
             out["benchmark_curve"] = [
-                {"date": dd.isoformat(), "value": round(float(v) / base * initial_capital, 2)}
-                for dd, v in bench.items() if pd.notna(v)
+                {"date": dd.isoformat(), "value": round(float(v) / base * initial_capital, 2)
+                 if pd.notna(v) and np.isfinite(v) and v > 0 else None}
+                for dd, v in bench.items()
             ]
     return out
 

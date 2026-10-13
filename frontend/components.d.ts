@@ -65,6 +65,7 @@ declare module 'vue' {
     LhbPanel: typeof import('./src/components/market/LhbPanel.vue')['default']
     MarketBreadthCard: typeof import('./src/components/dashboard/MarketBreadthCard.vue')['default']
     MarketRankCard: typeof import('./src/components/dashboard/MarketRankCard.vue')['default']
+    MetricsEvidence: typeof import('./src/components/screener/MetricsEvidence.vue')['default']
     MobileHeader: typeof import('./src/components/layout/MobileHeader.vue')['default']
     MobileShell: typeof import('./src/components/layout/MobileShell.vue')['default']
     MoneyFlowPanel: typeof import('./src/components/market/MoneyFlowPanel.vue')['default']

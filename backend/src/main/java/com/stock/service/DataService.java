@@ -7,11 +7,17 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -38,6 +44,9 @@ public class DataService {
 
     @Value("${data-service.url}")
     private String dataServiceUrl;
+
+    @Value("${jwt.secret:}")
+    private String researchSigningSecret;
 
     private final RestTemplate restTemplate;
     private final RedisTemplate<String, Object> redisTemplate;
@@ -231,8 +240,60 @@ public class DataService {
     // Research jobs（回测/因子检验后台任务：提交 + 轮询）
     // =====================================================================
 
-    public JSONObject submitResearchJob(String kindPath, JSONObject request) { return postObj(kindPath, request); }
-    public JSONObject getResearchJob(String jobId)           { return getObjNoCache("/api/async/jobs/" + jobId); }
+    public JSONObject submitResearchJob(String kindPath, JSONObject request, long ownerId) {
+        return signedResearchRequest(HttpMethod.POST, kindPath, request, ownerId);
+    }
+
+    public JSONObject getResearchJob(String jobId, long ownerId) {
+        return signedResearchRequest(HttpMethod.GET, "/api/async/jobs/" + jobId, null, ownerId);
+    }
+
+    private JSONObject signedResearchRequest(HttpMethod method, String path, JSONObject body, long ownerId) {
+        // Serialize once, sign those UTF-8 bytes, and send the exact same String.
+        // Signing a JSONObject and letting a converter serialize it again can
+        // change nulls/key ordering/Unicode and invalidate the context signature.
+        String raw = method == HttpMethod.GET ? null : JSON.toJSONString(body);
+        byte[] bytes = raw == null ? new byte[0] : raw.getBytes(StandardCharsets.UTF_8);
+        HttpHeaders headers = ResearchJobAuth.headers(researchSigningSecret, ownerId,
+                System.currentTimeMillis() / 1000, method.name(), path, bytes);
+        headers.setContentType(new MediaType("application", "json", StandardCharsets.UTF_8));
+        HttpEntity<String> entity = new HttpEntity<>(raw, headers);
+        return structuredJobRequest(() -> {
+            String response = restTemplate.exchange(dataServiceUrl + path, method, entity, String.class).getBody();
+            DataTimeHolder.recordOldest(System.currentTimeMillis());
+            return response == null ? null : JSON.parseObject(response);
+        });
+    }
+
+    /** Only research/admin job endpoints expose structured, caller-safe errors.
+     * Admission (409/429/503) and expired jobs (404) must not become generic
+     * gateway failures. A successful GET may legitimately contain a completed
+     * failed job with an error; only non-2xx responses enter this conversion.
+     * HTML/unstructured failures retain the global handler.
+     */
+    private JSONObject structuredJobRequest(Supplier<JSONObject> request) {
+        try {
+            return request.get();
+        } catch (HttpStatusCodeException e) {
+            String body = e.getResponseBodyAsString();
+            if (body != null && body.length() <= 16_384) {
+                try {
+                    JSONObject upstream = JSON.parseObject(body);
+                    if (upstream != null && upstream.get("error") instanceof String message
+                            && !message.isBlank()) {
+                        JSONObject error = new JSONObject();
+                        error.put("error", message.length() > 500 ? message.substring(0, 500) : message);
+                        error.put("code", upstream.get("code"));
+                        error.put("upstream_status", e.getStatusCode().value());
+                        return error;
+                    }
+                } catch (RuntimeException ignored) {
+                    // Not a trusted JSON error contract; do not forward raw HTML.
+                }
+            }
+            throw e;
+        }
+    }
 
     public JSONObject fmCreateJob(JSONObject request)      { return postObj("/api/factormine/mine", request); }
     public JSONObject fmJobStatus(String jobId)            { return getObjNoCache("/api/factormine/job/" + jobId); }
@@ -292,8 +353,12 @@ public class DataService {
 
     public JSONObject getAdminHealthDetail()          { return getObjNoCache("/api/admin/health-detail"); }
     public JSONObject adminCacheClear(String pattern) { return postObj("/api/admin/cache/clear" + qs("pattern", pattern), null); }
-    public JSONObject adminWarmupStart(String job)    { return postObj("/api/admin/warmup" + qs("job", job), null); }
-    public JSONObject getAdminWarmupStatus(String id) { return getObjNoCache("/api/admin/warmup/status" + qs("id", id)); }
+    public JSONObject adminWarmupStart(String job) {
+        return structuredJobRequest(() -> postObj("/api/admin/warmup" + qs("job", job), null));
+    }
+    public JSONObject getAdminWarmupStatus(String id) {
+        return structuredJobRequest(() -> getObjNoCache("/api/admin/warmup/status" + qs("id", id)));
+    }
     public JSONObject getAdminSchedulerJobs()         { return getObjNoCache("/api/admin/scheduler/jobs"); }
 
     // =====================================================================

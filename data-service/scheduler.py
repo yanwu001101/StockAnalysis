@@ -137,7 +137,13 @@ def _kline_fallback(codes: list[str], count: int) -> int:
         total = 0
         for code, df in res.items():
             if df is not None and not df.empty:
-                total += kline_repo.upsert_daily(code, _to_legacy(df))
+                written = kline_repo.upsert_daily(code, _to_legacy(df))
+                required = kline_repo.BASIS_REFRESH_REQUIRED.get((kline_repo.DAILY_TABLE, code))
+                if not written and required:
+                    full = await _first_nonempty([sina_src(), em_src()], code, max(1000, required))
+                    if full is not None and not full.empty:
+                        written = kline_repo.upsert_daily(code, _to_legacy(full))
+                total += written
         return total
 
     return asyncio.run(_run())
@@ -193,17 +199,20 @@ def warmup_klines(top_n: int = WARMUP_TOP_N, count: int = 250):
             daily_map = eastmoney.batch_klines(batch, klt=101, count=count)
             for code, df in daily_map.items():
                 if df is not None and not df.empty:
-                    total_daily += kline_repo.upsert_daily(code, df)
+                    total_daily += kline_repo.upsert_with_basis_refresh(code, df)
             # Weekly (every code, less frequent)
             weekly_map = eastmoney.batch_klines(batch, klt=102, count=max(count // 5, 60))
             for code, df in weekly_map.items():
                 if df is not None and not df.empty:
-                    total_weekly += kline_repo.upsert_weekly(code, df)
+                    total_weekly += kline_repo.upsert_with_basis_refresh(code, df, klt=102)
             # 兜底：主路漏掉的股票走第二条腿。legacy 内部已按 腾讯→新浪→同花顺
             # 依次尝试,整批失败通常是 aiohttp 通道被限——换 httpx 客户端的源再打一次。
             # 顺序按复权基准实测排：sources.sina 与库内逐 bar 完全一致(600 根 0 差),
             # 东财 httpx(fqt=1) 放最后,避免在腾讯口径序列上开新接缝。
-            missing = [c for c in batch if not daily_map.get(c) or daily_map[c].empty]
+            # DataFrame has no truth value: `not frame` aborts the entire warmup
+            # after its first batch, even when the fetch succeeded.
+            missing = [c for c in batch
+                       if daily_map.get(c) is None or daily_map[c].empty]
             if missing:
                 try:
                     n = _kline_fallback(missing, count)

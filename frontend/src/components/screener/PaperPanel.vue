@@ -2,12 +2,13 @@
   <div class="paper-panel" :class="{ mobile: isMobile }">
     <!-- 未启动 -->
     <EmptyState
-      v-if="loaded && !data"
+      v-if="loaded && !data && !loadError"
       title="模拟盘尚未启动"
       description="每个交易日 17:50 自动按综合评分（各策略默认权重加权）调仓并记录净值，与沪深300对比。也可在下方手动重置启动。"
     >
       <el-button type="primary" :loading="resetting" @click="doReset(1000000, 10)">以 100 万本金启动</el-button>
     </EmptyState>
+    <EmptyState v-if="loadError" variant="error" title="模拟盘数据加载失败" :description="loadError" @retry="load" />
 
     <template v-if="data?.account">
       <!-- 绩效 -->
@@ -29,6 +30,7 @@
           </el-popover>
         </template>
         <StatGrid :items="perfItems" :cols="isMobile ? 2 : 3" />
+        <MetricsEvidence :evidence="data.metrics" />
       </AppCard>
 
       <!-- 净值曲线 -->
@@ -90,9 +92,12 @@ import StatGrid from '@/components/ui/StatGrid.vue'
 import StockTable from '@/components/stock/StockTable.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import MetricsEvidence from '@/components/screener/MetricsEvidence.vue'
+import { backtestMetricItems } from '@/utils/backtestResult'
 import * as echarts from 'echarts'
 
 const { isMobile } = useDevice()
+const loadError = ref('')
 const tokens = useChartTokens()
 
 const loaded = ref(false)
@@ -174,15 +179,11 @@ const perfItems = computed<StatItem[]>(() => {
   const r = data.value
   if (!r) return []
   const m = r.metrics
-  const pct = (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`
-  return [
-    { label: '总收益', value: pct(m.total_return), cls: m.total_return >= 0 ? 'price-up' : 'price-down' },
-    { label: '年化收益', value: pct(m.annualized_return), cls: m.annualized_return >= 0 ? 'price-up' : 'price-down' },
-    { label: '最大回撤', value: `-${(Math.abs(m.max_drawdown) * 100).toFixed(2)}%`, cls: 'price-down' },
-    { label: '沪深300 同期', value: m.benchmark_return != null ? pct(m.benchmark_return) : '—' },
-    { label: '超额收益', value: m.excess_return != null ? pct(m.excess_return) : '—', cls: (m.excess_return ?? 0) >= 0 ? 'price-up' : 'price-down' },
-    { label: '累计交易成本', value: `${(r.total_costs / 10000).toFixed(2)} 万`, cls: 'warn-text' },
-  ]
+  const items = backtestMetricItems({ totalReturn: m.total_return, annualizedReturn: m.annualized_return,
+    maxDrawdown: m.max_drawdown, sharpeRatio: m.sharpe_ratio, winRate: m.win_rate ?? null,
+    tradeCount: m.trade_count, benchmarkReturn: m.benchmark_return, excessReturn: m.excess_return,
+    totalCosts: r.total_costs, metrics: m, equityCurve: [], trades: [] })
+  return [items[0], items[1], items[2], items[6], items[7], items[9]]
 })
 
 const positionColumns: StockColumn[] = [
@@ -260,11 +261,13 @@ const curveOption = computed<EChartsOption | null>(() => {
 })
 
 async function load() {
+  loadError.value = ''
   try {
     const r = await getPaper()
     data.value = (r as any).status === 'not-started' ? null : r
-  } catch {
+  } catch (e) {
     data.value = null
+    loadError.value = e instanceof Error ? e.message : '读取失败，请稍后重试；未改变模拟盘状态'
   } finally {
     loaded.value = true
   }

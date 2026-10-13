@@ -147,30 +147,48 @@ export interface BacktestRequest {
   topN: number
 }
 
+export interface MetricsEvidence {
+  status?: 'VALID' | 'INSUFFICIENT_DATA' | 'FAILED'
+  metric_status?: Record<string, string>
+  metric_reasons?: Record<string, string | null>
+  sample_info?: { equity_observations?: number; valid_equity_observations?: number; return_observations?: number; expected_return_observations?: number; start?: string | null; end?: string | null; periods_per_year?: number }
+  win_rate_basis?: string
+  win_rate_sample_size?: number
+  benchmark_info?: { status?: string; reason?: string | null; alignment?: string; observations?: number; expected_observations?: number; coverage_ratio?: number | null; start?: string | null; end?: string | null }
+}
+
 export interface BacktestResult {
-  totalReturn: number
-  annualizedReturn: number
-  maxDrawdown: number
-  sharpeRatio: number
-  winRate: number
-  tradeCount: number
-  equityCurve: { date: string; value: number }[]
+  totalReturn: number | null
+  annualizedReturn: number | null
+  maxDrawdown: number | null
+  sharpeRatio: number | null
+  winRate: number | null
+  tradeCount: number | null
+  equityCurve: { date: string; value: number | null }[]
   trades: TradeRecord[]
   /** P0: 基准对比与交易摩擦（后端有数据才返回） */
-  benchmarkReturn?: number
-  excessReturn?: number
-  turnoverRate?: number
-  totalCosts?: number
-  benchmarkCurve?: { date: string; value: number }[]
+  benchmarkReturn?: number | null
+  excessReturn?: number | null
+  turnoverRate?: number | null
+  totalCosts?: number | null
+  benchmarkCurve?: { date: string; value: number | null }[]
   costs?: Record<string, number>
+  execution_model?: string
+  execution_note?: string
+  win_rate_basis?: string
+  win_rate_sample_size?: number
+  metrics?: MetricsEvidence
+  final_cash?: number | null
+  open_position?: { code: string; shares: number; average_price: number; market_value: number; valuation_date: string } | null
+  unfilled_orders?: { signal_date: string; execution_date: string | null; side: string; reason: string }[]
 }
 
 export interface PaperOverview {
   status?: "not-started"
   account?: { initial_capital: number; top_n: number; rebalance: string; cash: number; start_date: string | null }
-  metrics: { total_return: number; annualized_return: number; max_drawdown: number; sharpe_ratio: number; benchmark_return: number; excess_return: number; trade_count: number }
-  total_costs: number
-  equity_curve: { date: string; equity: number; benchmark: number | null }[]
+  metrics: MetricsEvidence & { total_return: number | null; annualized_return: number | null; max_drawdown: number | null; sharpe_ratio: number | null; benchmark_return: number | null; excess_return: number | null; trade_count: number; win_rate?: number | null }
+  total_costs: number | null
+  equity_curve: { date: string; equity: number | null; benchmark: number | null }[]
   positions: { code: string; shares: number; avg_cost: number; last_close: number; market_value: number; weight: number; pnl_pct: number; buy_date: string }[]
   recent_trades: { trade_date: string; code: string; side: string; shares: number; price: number; amount: number; cost: number; reason: string }[]
 }
@@ -269,7 +287,7 @@ export interface SavedBacktestSummary {
   strategyId: string
   startDate: string
   endDate: string
-  totalReturn: number
+  totalReturn: number | null
   annualizedReturn: number
   maxDrawdown: number
   sharpeRatio: number
@@ -310,9 +328,10 @@ export interface PredictionResult {
   code: string
   name: string
   price: number
-  probabilityUp: number
-  probabilityDown: number
-  confidence: number
+  probabilityUp: number | null
+  probabilityDown: number | null
+  confidence: number | null
+  status?: 'VALID' | 'INSUFFICIENT_DATA' | 'FAILED'
   signal: 'bullish' | 'bearish' | 'neutral'
   signalLabel: string
   compositeDirection: number
@@ -322,12 +341,12 @@ export interface PredictionResult {
   timeHorizon: string
   calibration?: {
     insufficient: boolean
-    win_rate?: number
-    avg_return?: number
-    n?: number
+    win_rate?: number | null
+    avg_return?: number | null
+    n?: number | null
     bucket?: [number, number]
     cal_date?: string
     universe?: number
   } | null
-  rawScore100?: number
+  rawScore100?: number | null
 }

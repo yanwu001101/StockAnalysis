@@ -5,7 +5,7 @@
     </template>
     <template v-if="mode === 'prob'">
       <PredictionPanel v-if="prediction" :prediction="prediction" />
-      <el-empty v-else description="暂无涨跌概率数据" :image-size="72" />
+      <el-empty v-else description="暂无趋势分析数据" :image-size="72" />
     </template>
     <ProSignalPanel v-else :code="code" />
   </AppCard>
@@ -20,7 +20,7 @@ import SegmentTabs from '@/components/ui/SegmentTabs.vue'
 import PredictionPanel from '@/components/charts/PredictionPanel.vue'
 import ProSignalPanel from './ProSignalPanel.vue'
 
-// 涨跌概率（多策略）与专业预测（Leading 指标）在同一张卡片里切换。
+// 趋势与历史验证（多策略）与专业预测（Leading 指标）在同一张卡片里切换。
 type Mode = 'prob' | 'pro'
 const props = withDefaults(defineProps<{
   prediction: PredictionResult | null
@@ -30,7 +30,7 @@ const props = withDefaults(defineProps<{
 
 const mode = ref<Mode>(props.initialMode)
 const options: SegmentOption<Mode>[] = [
-  { label: '涨跌概率', value: 'prob' },
+  { label: '趋势与验证', value: 'prob' },
   { label: '专业预测', value: 'pro' },
 ]
 

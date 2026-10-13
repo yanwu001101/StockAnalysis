@@ -25,7 +25,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<?>> handleBusiness(BusinessException e) {
         // Already user-facing — pass message through, no stack trace in log
         HttpStatus status = HttpStatus.resolve(e.getCode());
-        if (status == null || !status.is4xxClientError()) status = HttpStatus.BAD_REQUEST;
+        // The bounded background runners can explicitly reject admission while
+        // unavailable. Preserve that actionable 503 without allowing arbitrary
+        // business exception codes to opt into every 5xx transport status.
+        if (status == null || (!status.is4xxClientError() && status != HttpStatus.SERVICE_UNAVAILABLE)) {
+            status = HttpStatus.BAD_REQUEST;
+        }
         return ResponseEntity.status(status)
                 .body(ApiResponse.error(e.getCode(), e.getMessage()));
     }

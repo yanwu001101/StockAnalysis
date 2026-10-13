@@ -77,6 +77,18 @@ def _commission(amount: float, costs: dict) -> float:
     return max(amount * costs["commission_rate"], costs["commission_min"])
 
 
+def _affordable_buy_shares(cash: float, price: float, costs: dict) -> int:
+    """Maximum whole-lot purchase whose notional AND commission fit cash."""
+    if cash <= 0 or price <= 0:
+        return 0
+    # amount + max(amount * rate, minimum) <= cash must satisfy both bounds.
+    budget = min(cash / (1 + costs["commission_rate"]), cash - costs["commission_min"])
+    shares = max(int(budget / price / LOT_SIZE), 0) * LOT_SIZE
+    if shares and shares * price + _commission(shares * price, costs) > cash:
+        shares -= LOT_SIZE   # guard floating-point rounding at the boundary
+    return shares
+
+
 def _round_price(x: float) -> float:
     """交易所价格按 0.01 四舍五入。"""
     return np.floor(x * 100.0 + 0.5) / 100.0
@@ -293,8 +305,22 @@ def _industry_of(code: str) -> str:
     return _INDUSTRY_MAP.get(str(code).zfill(6), "")
 
 
-def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.date) -> float:
-    """Re-score one code using ONLY data <= as_of. Returns 0 on hard failure;
+def _validated_score(result) -> tuple[float | None, str]:
+    """Separate real zero from strategy placeholders and failed calculations."""
+    if result is None:
+        return None, "FAILED"
+    details = getattr(result, "details", {}) or {}
+    if any(details.get(key) for key in ("no_data", "insufficient_data", "no_lhb", "no_rank")):
+        return None, "INSUFFICIENT_DATA"
+    try:
+        value = float(result.score)
+    except (TypeError, ValueError, AttributeError):
+        return None, "FAILED"
+    return (value, "VALID") if np.isfinite(value) else (None, "FAILED")
+
+
+def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.date) -> float | None:
+    """Re-score one code using ONLY data <= as_of. Returns None when unavailable;
     we let the strategy itself decide whether it has enough fields — basic
     quality / piotroski strategies only need fundamentals, not 30 K-line bars.
     """
@@ -336,21 +362,23 @@ def _score_at(strat, panel_one: dict[str, pd.DataFrame], code: str, as_of: dt.da
         ctx.moneyflow_df = mf_full[mf_full["trade_date"] <= as_of].tail(30)
     try:
         res = strat.score(ctx)
-        return float(res.score) if res and res.score > 0 else 0.0
-    except Exception:
-        return 0.0
+        value, _ = _validated_score(res)
+        return value
+    except Exception as exc:
+        logger.warning("[backtest.score] %s %s unavailable: %s", code, as_of, exc)
+        return None
 
 
 # As-of 评分缓存：研究链路（factorlab/回测）反复重跑时，同一
 # (strategy_id, code, as_of) 直接复用。TTL 10 分钟——盘后任务更新 K 线后
 # 自动失效。评分只依赖 <= as_of 的数据，与加载窗口无关，跨请求缓存安全。
-_SCORE_CACHE: dict[tuple, tuple[float, float]] = {}
+_SCORE_CACHE: dict[tuple, tuple[float, float | None]] = {}
 _SCORE_TTL_S = 600.0
 _SCORE_CACHE_MAX = 300_000
 
 
 def _score_at_cached(strat, panel_one: dict[str, pd.DataFrame], code: str,
-                     as_of: dt.date) -> float:
+                     as_of: dt.date) -> float | None:
     key = (strat.id, code, as_of)
     now = time.time()
     hit = _SCORE_CACHE.get(key)
@@ -524,10 +552,9 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
                             amount = add_sh * exec_px
                             fee = _commission(amount, cost)
                             if amount + fee > cash:
-                                afford_lots = int((cash / exec_px) // LOT_SIZE)
-                                if afford_lots <= 0:
+                                add_sh = _affordable_buy_shares(cash, exec_px, cost)
+                                if add_sh <= 0:
                                     continue
-                                add_sh = afford_lots * LOT_SIZE
                                 amount = add_sh * exec_px
                                 fee = _commission(amount, cost)
                             cash -= amount + fee
@@ -576,7 +603,7 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
                 scores_today: dict[str, float] = {}
                 for c in codes:
                     s = _score_at_cached(strat, panel[c], c, d)
-                    if s > 0:
+                    if s is not None and np.isfinite(s) and s > 0:
                         scores_today[c] = s
                 if scores_today:
                     ranked = sorted(scores_today.items(), key=lambda kv: kv[1], reverse=True)
@@ -609,6 +636,8 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
         "rebalance": rebalance,
         "costs": cost,
         "metrics": metrics.as_dict(),
+        "win_rate_basis": metrics.win_rate_basis,
+        "win_rate_sample_size": metrics.win_rate_sample_size,
         "equity_curve": [
             {"date": d.isoformat(), "value": round(v, 2)}
             for d, v in zip(equity_dates, equity_vals)
@@ -617,12 +646,13 @@ def run(strategy_id: str, start: dt.date, end: dt.date,
         "picks": last_picks,
     }
     if bench is not None and len(bench) >= 2:
-        bench = bench.reindex(pd.to_datetime(equity_dates)).ffill()
+        bench = bench.reindex(pd.to_datetime(equity_dates))
         base = float(bench.iloc[0]) if pd.notna(bench.iloc[0]) else None
-        if base:
+        if base is not None and np.isfinite(base) and base > 0:
             out["benchmark_curve"] = [
-                {"date": d.isoformat(), "value": round(float(v) / base * initial_capital, 2)}
-                for d, v in bench.items() if pd.notna(v)
+                {"date": d.isoformat(), "value": round(float(v) / base * initial_capital, 2)
+                 if pd.notna(v) and np.isfinite(v) and v > 0 else None}
+                for d, v in bench.items()
             ]
     return out
 
@@ -668,10 +698,10 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
                initial_capital: float = 1_000_000, costs: dict | None = None) -> dict:
     """Run a long-only timing backtest for ONE stock.
 
-    Rule: on each trading day the strategy outputs a `signal`
-      - `bullish` and flat → buy the day's close (if not sealed limit-up)
-      - `bearish` and holding → sell at the day's close (if not sealed limit-down)
-      - `neutral` → hold
+    A signal from the t close is executable ONLY at the next market trading
+    day's open. An untradeable/missing opening bar expires that order; a later
+    close can produce a new one. No same-close fills or synthetic end-window
+    liquidation: remaining shares stay marked to their last valid close.
 
     Fills carry slippage and trading costs (commission + stamp tax). The
     strategy context is rebuilt each day with data sliced "as of t" (no
@@ -695,6 +725,7 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
     # Filter to backtest window (warmup needs prior bars too — keep full
     # history available; only iterate within the window).
     full_dk["trade_date"] = pd.to_datetime(full_dk["trade_date"]).dt.date
+    full_dk = full_dk.sort_values("trade_date")
     if "report_date" in full_fund.columns:
         full_fund["report_date"] = pd.to_datetime(full_fund["report_date"]).dt.date
         if "ann_date" in full_fund.columns:
@@ -704,20 +735,31 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
         full_nb["trade_date"] = pd.to_datetime(full_nb["trade_date"]).dt.date
     if "trade_date" in full_lhb.columns:
         full_lhb["trade_date"] = pd.to_datetime(full_lhb["trade_date"]).dt.date
+    if "trade_date" in full_mf.columns:
+        full_mf["trade_date"] = pd.to_datetime(full_mf["trade_date"]).dt.date
 
     in_window = full_dk[(full_dk["trade_date"] >= start) & (full_dk["trade_date"] <= end)]
     if in_window.empty:
         return {"error": f"no bars in [{start}, {end}] for {code}"}
+    # The market calendar, not the next available stock bar, defines t+1.
+    # Missing/suspended dates still contribute a cash/last-price equity point.
+    calendar = _trading_days(start, end)
+    if not calendar:
+        return {"error": "no trading days in range"}
+    in_window = in_window.set_index("trade_date").reindex(calendar).rename_axis("trade_date").reset_index()
 
     limit_ratio = _limit_ratio(code)
     cash = float(initial_capital)
     shares = 0.0
     last_buy_price: float | None = None
+    last_buy_fee = 0.0
     equity_dates: list[dt.date] = []
     equity_vals: list[float] = []
     trades: list[dict] = []
     signal_log: list[dict] = []
+    unfilled_orders: list[dict] = []
     total_cost_paid = 0.0
+    pending: tuple[dt.date, str] | None = None
 
     # Adaptive signal threshold — strategies were calibrated for the
     # cross-sectional top-10% (score >= 60), which a single stock's time series
@@ -730,34 +772,94 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
     Q_BEAR = 0.30         # current score <= 30th percentile → bearish
     recent_scores: list[float] = []
 
+    def positive_number(value) -> float | None:
+        try:
+            number = float(value)
+            return number if np.isfinite(number) and number > 0 else None
+        except (TypeError, ValueError):
+            return None
+
     prev_close: float | None = None
+    valuation_date: dt.date | None = None
+    for _, prior in full_dk[full_dk["trade_date"] < start].iterrows():
+        value = positive_number(prior["close"])
+        if value is not None:
+            prev_close, valuation_date = value, prior["trade_date"]
+
     for _, row in in_window.iterrows():
         d = row["trade_date"]
-        price = float(row["close"]) if pd.notna(row["close"]) else None
-        vol = float(row["volume"]) if pd.notna(row["volume"]) else 0.0
-        if price is None or price <= 0 or vol <= 0:
-            # 停牌：不可交易，持仓按最后收盘估值
-            if shares > 0 and prev_close:
-                equity_vals.append(cash + shares * prev_close)
-                equity_dates.append(d)
-            prev_close = price if price else prev_close
-            continue
+        price = positive_number(row["close"])
+        opening = positive_number(row.get("open"))
+        vol = positive_number(row["volume"])
 
-        # 涨跌停（以前收盘为基准）
+        # ---- 1) Execute yesterday's signal before observing today's close. ----
         if prev_close:
             limit_up = _round_price(prev_close * (1 + limit_ratio))
             limit_down = _round_price(prev_close * (1 - limit_ratio))
-            sealed_up = price >= limit_up
-            sealed_down = price <= limit_down
+            sealed_up = opening is not None and opening >= limit_up
+            sealed_down = opening is not None and opening <= limit_down
         else:
             sealed_up = sealed_down = False
 
-        # As-of slice
+        if pending is not None:
+            signal_date, side = pending
+            pending = None
+            reason = None
+            if opening is None or vol is None:
+                reason = "untradeable"
+            elif side == "buy" and sealed_up:
+                reason = "limit_up"
+            elif side == "sell" and sealed_down:
+                reason = "limit_down"
+            elif side == "buy" and shares == 0:
+                exec_px = opening * (1 + cost["slippage"])
+                sh = _affordable_buy_shares(cash, exec_px, cost)
+                if sh <= 0:
+                    reason = "insufficient_cash"
+                else:
+                    amount = sh * exec_px
+                    fee = _commission(amount, cost)
+                    shares, last_buy_price, last_buy_fee = sh, exec_px, fee
+                    cash -= amount + fee
+                    total_cost_paid += fee
+                    trades.append({
+                        "date": d.isoformat(), "signal_date": signal_date.isoformat(),
+                        "code": code, "side": "buy", "shares": sh,
+                        "price": round(exec_px, 6), "amount": round(amount, 6),
+                        "commission": round(fee, 6), "stamp_tax": 0.0, "pnl": None,
+                    })
+            elif side == "sell" and shares > 0:
+                exec_px = opening * (1 - cost["slippage"])
+                gross = shares * exec_px
+                fee = _commission(gross, cost)
+                tax = gross * cost["stamp_tax"]
+                gross_pnl = (exec_px - last_buy_price) * shares
+                trades.append({
+                    "date": d.isoformat(), "signal_date": signal_date.isoformat(),
+                    "code": code, "side": "sell", "shares": shares,
+                    "price": round(exec_px, 6), "amount": round(gross, 6),
+                    "commission": round(fee, 6), "stamp_tax": round(tax, 6),
+                    "gross_pnl": round(gross_pnl, 2),
+                    "pnl": round(gross_pnl - last_buy_fee - fee - tax, 2),
+                })
+                cash += gross - fee - tax
+                total_cost_paid += fee + tax
+                shares, last_buy_price, last_buy_fee = 0.0, None, 0.0
+            if reason:
+                unfilled_orders.append({"signal_date": signal_date.isoformat(),
+                                        "execution_date": d.isoformat(), "side": side,
+                                        "reason": reason})
+
+        if price is not None and vol is not None:
+            prev_close, valuation_date = price, d
+        equity_vals.append(cash + shares * (prev_close or 0.0))
+        equity_dates.append(d)
+        if price is None or vol is None:
+            continue
+
+        # ---- 2) Observe the t close and queue an actionable t+1 order. ----
         hist = full_dk[full_dk["trade_date"] <= d].tail(260)
         if len(hist) < 30:
-            equity_vals.append(cash + shares * price)
-            equity_dates.append(d)
-            prev_close = price
             continue
         ctx_dk = hist.rename(columns={
             "trade_date": "日期", "open": "开盘", "close": "收盘",
@@ -783,10 +885,16 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
 
         try:
             res = strat.score(ctx)
-            raw_score = float(getattr(res, "score", 0) or 0)
-        except Exception:
-            res = None
-            raw_score = 0.0
+            raw_score, score_status = _validated_score(res)
+        except Exception as exc:
+            # Failed calculations are not a bearish score of zero and must
+            # not poison the adaptive quantile history or liquidate holdings.
+            logger.warning("[backtest.single] score failed for %s on %s: %s", code, d, exc)
+            raw_score, score_status = None, "FAILED"
+        if raw_score is None:
+            signal_log.append({"date": d.isoformat(), "signal": "neutral",
+                               "score": None, "status": score_status})
+            continue
 
         # Override the strategy's own bullish/bearish call with one derived
         # from THIS stock's recent score distribution.
@@ -813,71 +921,24 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
             # don't trade blindly before we have a distribution.
             sig = getattr(res, "signal", "neutral") if res is not None else "neutral"
 
-        signal_log.append({"date": d.isoformat(), "signal": sig, "score": raw_score})
+        signal_log.append({"date": d.isoformat(), "signal": sig,
+                           "score": raw_score, "status": "VALID"})
+        if sig == "bullish" and shares == 0:
+            pending = (d, "buy")
+        elif sig == "bearish" and shares > 0:
+            pending = (d, "sell")
 
-        # Trade execution at today's close (+ slippage / costs / price limits)
-        if sig == "bullish" and shares == 0 and cash > 0 and not sealed_up:
-            exec_px = price * (1 + cost["slippage"])
-            lots = int((cash * 0.999) / exec_px / LOT_SIZE)   # 预留现金付佣金
-            if lots <= 0:
-                lots = 1 if cash > exec_px * LOT_SIZE else 0
-            if lots > 0:
-                sh = lots * LOT_SIZE
-                amount = sh * exec_px
-                fee = _commission(amount, cost)
-                if amount + fee <= cash:
-                    shares = sh
-                    last_buy_price = exec_px
-                    trades.append({
-                        "date": d.isoformat(), "code": code, "side": "buy",
-                        "shares": round(sh, 2), "price": round(exec_px, 3), "pnl": None,
-                    })
-                    cash -= amount + fee
-                    total_cost_paid += fee
-        elif sig == "bearish" and shares > 0 and not sealed_down:
-            exec_px = price * (1 - cost["slippage"])
-            gross = shares * exec_px
-            fee = _commission(gross, cost)
-            tax = gross * cost["stamp_tax"]
-            pnl = (exec_px - (last_buy_price or exec_px)) * shares
-            trades.append({
-                "date": d.isoformat(), "code": code, "side": "sell",
-                "shares": round(shares, 2), "price": round(exec_px, 3), "pnl": round(pnl, 2),
-            })
-            cash += gross - fee - tax
-            total_cost_paid += fee + tax
-            shares = 0.0
-            last_buy_price = None
-
-        equity_vals.append(cash + shares * price)
-        equity_dates.append(d)
-        prev_close = price
-
-    # End-of-window: force-close any remaining position at the last close so
-    # the trade ledger shows a proper buy↔sell pairing for the user. Without
-    # this the UI rendered a stray `mark_to_market` row that looked like the
-    # strategy "forgot" to sell.
-    if shares > 0 and equity_vals:
-        last_price = float(in_window.iloc[-1]["close"])
-        exec_px = last_price * (1 - cost["slippage"])
-        gross = shares * exec_px
-        fee = _commission(gross, cost)
-        tax = gross * cost["stamp_tax"]
-        pnl = (exec_px - (last_buy_price or exec_px)) * shares
-        trades.append({
-            "date": in_window.iloc[-1]["trade_date"].isoformat(),
-            "code": code, "side": "sell",
-            "shares": round(shares, 2), "price": round(exec_px, 3),
-            "pnl": round(pnl, 2),
-            "reason": "end_of_window",
-        })
-        cash += gross - fee - tax
-        total_cost_paid += fee + tax
-        shares = 0.0
+    if pending is not None:
+        unfilled_orders.append({"signal_date": pending[0].isoformat(),
+                                "execution_date": None, "side": pending[1],
+                                "reason": "no_execution_bar"})
 
     eq_series = pd.Series(equity_vals, index=pd.to_datetime(equity_dates))
     bench = _benchmark_close(start, end)
-    metrics = compute(eq_series, trades=trades, benchmark=bench, total_costs=total_cost_paid)
+    metrics = compute(eq_series, trades=trades, benchmark=bench, total_costs=total_cost_paid,
+                      win_rate_basis="CLOSED_TRADES")
+    metrics_out = metrics.as_dict()
+    closed_trade_count = sum(t["side"] == "sell" for t in trades)
     return {
         "mode": "single",
         "strategy_id": strategy_id,
@@ -886,7 +947,20 @@ def run_single(strategy_id: str, code: str, start: dt.date, end: dt.date,
         "end": end.isoformat(),
         "initial_capital": initial_capital,
         "costs": cost,
-        "metrics": metrics.as_dict(),
+        "execution_model": "SIGNAL_CLOSE_NEXT_TRADING_DAY_OPEN",
+        "execution_note": "收盘信号在下一交易日开盘执行；不可成交则取消该单。期末持仓按最后有效收盘估值，不强制平仓。",
+        "pnl_basis": "NET_OF_BUY_SELL_COMMISSION_AND_STAMP_TAX",
+        "win_rate_basis": metrics.win_rate_basis,
+        "win_rate_sample_size": metrics.win_rate_sample_size,
+        "closed_trade_count": closed_trade_count,
+        "final_cash": round(cash, 6),
+        "open_position": ({"code": code, "shares": shares,
+                           "average_price": round(last_buy_price, 6),
+                           "market_value": round(shares * prev_close, 2),
+                           "valuation_date": valuation_date.isoformat()}
+                          if shares > 0 else None),
+        "unfilled_orders": unfilled_orders,
+        "metrics": metrics_out,
         "equity_curve": [
             {"date": d.isoformat(), "value": round(v, 2)}
             for d, v in zip(equity_dates, equity_vals)

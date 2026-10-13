@@ -9,11 +9,18 @@ export interface SchedulerJob {
 export interface JobRun {
   id: string
   job: string
-  status: 'running' | 'success' | 'failed'
+  status: 'running' | 'success' | 'partial' | 'failed' | 'skipped' | 'unknown'
   started_at: string
   finished_at?: string | null
   duration_s?: number | null
   error?: string | null
+  reason?: string | null
+  outcome_version?: number
+  rows?: number | null
+  universe_size?: number | null
+  steps?: unknown
+  row_semantics?: string
+  outcome?: Record<string, unknown>
 }
 
 export function listSchedulerJobs(): Promise<{ jobs: SchedulerJob[]; running: boolean; valid_runs?: string[] }> {

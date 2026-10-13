@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 
 from config import settings
+from core.job_outcome import JobOutcome, failed_outcome
 from core.trace import logger
+from core.universe import select_codes
 from pipelines import concept as concept_pipe
 from pipelines import dividend as div_pipe
 from pipelines import fundamental as fund_pipe
@@ -19,38 +21,28 @@ from pipelines import shareholder as sh_pipe
 from pipelines import spot as spot_pipe
 
 
-async def run_async() -> None:
-    df = await spot_pipe.run()
-    if df is None or df.empty:
-        logger.warning("[job:weekend] empty spot; aborting")
-        return
-    sort_col = "market_cap_yi" if "market_cap_yi" in df.columns else "market_cap"
-    codes = (
-        df.sort_values(sort_col, ascending=False, na_position="last")
-          .head(settings.sched.warmup_top_n)["code"].astype(str).str.zfill(6).tolist()
-    )
-
+async def run_async() -> dict:
     try:
-        await fund_pipe.run_batch(codes, periods=8)
-    except Exception as e:
-        logger.warning("[job:weekend] fundamentals failed: %s", e)
-    try:
-        await sh_pipe.run_batch(codes)
-    except Exception as e:
-        logger.warning("[job:weekend] shareholder failed: %s", e)
-    try:
-        await div_pipe.run_batch(codes)
-    except Exception as e:
-        logger.warning("[job:weekend] dividend failed: %s", e)
-    try:
-        await concept_pipe.run()
-    except Exception as e:
-        logger.warning("[job:weekend] concept failed: %s", e)
-    logger.info("[job:weekend] done")
+        df = await spot_pipe.run()
+        codes = select_codes(df, settings.sched.warmup_top_n)
+    except Exception as error:
+        return failed_outcome("weekend", "universe", error)
+    if not codes:
+        logger.warning("[job:weekend] empty universe; aborting")
+        return failed_outcome("weekend", "universe", "行情股票池为空，未启动数据采集")
+    outcome = JobOutcome("weekend", universe_size=len(codes))
+    await outcome.run_step("fundamentals", lambda: fund_pipe.run_batch(codes, periods=8))
+    await outcome.run_step("shareholder", lambda: sh_pipe.run_batch(codes))
+    await outcome.run_step("dividend", lambda: div_pipe.run_batch(codes))
+    await outcome.run_step("concept", concept_pipe.run)
+    result = outcome.finish()
+    logger.info("[job:weekend] %s: %d reported upsert rows", result["status"], result["rows"])
+    return result
 
 
-def run() -> None:
+def run() -> dict:
     try:
-        asyncio.run(run_async())
+        return asyncio.run(run_async())
     except Exception as e:
         logger.exception("[job:weekend] failed: %s", e)
+        return failed_outcome("weekend", "runner", e)

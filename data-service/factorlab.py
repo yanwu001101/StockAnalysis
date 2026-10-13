@@ -43,7 +43,7 @@ from quant_stats import (finite_pairs, ic_summary, chronological_validation,
 
 BENCHMARK_CODE = "000300"
 DEFAULT_HORIZONS = (1, 5, 10, 20)
-ENGINE_VERSION = "factorlab-2026-10-11-v3"
+ENGINE_VERSION = "factorlab-2026-10-12-v4"
 
 # 交易成本假设：一个完整换手（买+卖）的摩擦，口径与回测引擎一致
 COST_PER_TURNOVER = 2 * (0.00025 + 0.001) + 0.0005   # ≈ 0.35% / 100% 换手

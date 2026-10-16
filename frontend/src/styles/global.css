@@ -1,0 +1,155 @@
+/* AlphaForge design tokens — 专业量化终端（Bloomberg/TradingView 式暗黑金融风）。
+   扁平、无渐变、无发光、无玻璃拟态；数字一律等宽字体。 */
+
+:root {
+  /* surfaces */
+  --bg-app: #0a0e14;        /* 全局背景 */
+  --bg-panel: #0e1116;      /* 面板背景 */
+  --bg-elevated: #12161d;   /* 卡片/悬浮层 */
+  --bg-hover: #171d26;
+  --border-subtle: #1e242c; /* 面板边框 */
+  --border-strong: #2a3340;
+
+  /* text */
+  --text-primary: #e6edf3;
+  --text-secondary: #93a1b1;
+  --text-muted: #5d6b7a;
+
+  /* market semantics (A-share convention: red = up, green = down) */
+  --color-up: #f85149;
+  --color-down: #3fb950;
+  --color-flat: #8b949e;
+
+  /* verdict semantics (green = safe, red = dangerous) */
+  --verdict-green: #3fb950;
+  --verdict-yellow: #d29922;
+  --verdict-red: #f85149;
+
+  /* accent */
+  --accent: #2f81f7;
+  --accent-soft: rgba(47, 129, 247, 0.14);
+
+  /* typography */
+  --font-sans: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Roboto Mono', 'SFMono-Regular', Consolas, monospace;
+
+  /* rhythm */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* shell metrics */
+  --rail-width: 56px;
+  --topbar-height: 44px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.up {
+  color: var(--color-up);
+}
+
+.down {
+  color: var(--color-down);
+}
+
+.flat {
+  color: var(--color-flat);
+}
+
+.text-green {
+  color: var(--verdict-green);
+}
+
+.text-yellow {
+  color: var(--verdict-yellow);
+}
+
+.text-red {
+  color: var(--verdict-red);
+}
+
+/* 涨跌着色工具类：正数红、负数绿、零灰（A 股口径） */
+.pnl-pos {
+  color: var(--color-up);
+}
+
+.pnl-neg {
+  color: var(--color-down);
+}
+
+.pnl-zero {
+  color: var(--color-flat);
+}
+
+::selection {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 顶栏信息流滚动动画 */
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* 呼吸灯（智能体进行中） */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}

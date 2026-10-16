@@ -1,0 +1,25 @@
+# 统一行尾：仓库内一律 LF，避免 Windows 检出 CRLF 后在 Linux 容器/CI 中踩坑
+* text=auto eol=lf
+
+# 二进制资源不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.xlsx binary
+
+# 各语言在 GitHub 上正确计数
+*.py   text diff=python
+*.ts   text
+*.vue  text
+*.css  text
+*.json text
+*.yml  text
+*.yaml text
+
+# 锁文件不参与 diff 折叠噪音控制
+package-lock.json -diff linguist-generated
